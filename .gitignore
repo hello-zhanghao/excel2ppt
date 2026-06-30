@@ -1,0 +1,29 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+*.spec.bak
+
+# Office临时文件
+~$*.xlsx
+~$*.pptx
+~$*.xls
+~$*.ppt
+~$*.doc
+~$*.docx
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 输出目录中的临时文件
+output_*/~$*
+
+# 系统文件
+Thumbs.db
+.DS_Store
