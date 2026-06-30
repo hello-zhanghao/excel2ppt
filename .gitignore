@@ -1,0 +1,33 @@
+# Build / Packaging
+dist/
+build/
+*.spec
+__pycache__/
+*.pyc
+*.pyo
+
+# Output
+output_*/
+output/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+*.egg-info/
+.eggs/
+venv/
+.env
+
+# Temp files
+~$*.xlsx
+~$*.pptx
+_excel2ppt.*

@@ -1,0 +1,922 @@
+import os
+from datetime import datetime
+from time import strftime
+from pptx import Presentation
+from pptx.util import Inches, Pt, Emu
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.chart.data import CategoryChartData, XyChartData
+from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION, XL_LABEL_POSITION
+from pptx.oxml.ns import qn, nsmap
+from lxml import etree
+
+HW_RED = "#C8102E"
+HW_DARK = "#182B49"
+HW_GRAY = "#8C8C8C"
+FONT_NAME = "Microsoft YaHei"
+
+HUAWEI_PALETTE = [
+    "#C8102E", "#182B49", "#5B9BD5", "#ED7D31",
+    "#70AD47", "#A5A5A5", "#FFC000", "#9B59B6",
+]
+
+LAYOUT_POSITIONS = {
+    "1图": [
+        (Inches(1.2), Inches(1.3), Inches(10.9), Inches(5.6)),
+    ],
+    "2图上下": [
+        (Inches(1.2), Inches(1.0), Inches(10.9), Inches(2.8)),
+        (Inches(1.2), Inches(4.2), Inches(10.9), Inches(2.8)),
+    ],
+    "2图左右": [
+        (Inches(0.6), Inches(1.3), Inches(5.8), Inches(5.5)),
+        (Inches(6.9), Inches(1.3), Inches(5.8), Inches(5.5)),
+    ],
+    "4图": [
+        (Inches(0.6), Inches(1.15), Inches(5.8), Inches(2.75)),
+        (Inches(6.9), Inches(1.15), Inches(5.8), Inches(2.75)),
+        (Inches(0.6), Inches(4.2), Inches(5.8), Inches(2.75)),
+        (Inches(6.9), Inches(4.2), Inches(5.8), Inches(2.75)),
+    ],
+    "左图右文": [
+        (Inches(0.6), Inches(1.3), Inches(6.3), Inches(5.5)),
+    ],
+    "上文下图": [
+        (Inches(1.2), Inches(2.9), Inches(10.9), Inches(4.1)),
+    ],
+}
+
+
+def build_ppt(config, chart_map, output_path):
+    """根据页面定义逐页生成PPT（使用PPT原生图表）"""
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+
+    pages = config.get("pages", [])
+    colors = config.get("colors", {})
+
+    if not pages:
+        pages = _generate_auto_pages(config, chart_map)
+
+    for page_def in pages:
+        page_type = str(page_def.get("页面类型", "content")).strip().lower()
+
+        if page_type == "cover" or page_type == "封面":
+            title = str(page_def.get("页面标题", ""))
+            subtitle = ""
+            if "|" in title:
+                parts = title.split("|", 1)
+                title = parts[0].strip()
+                subtitle = parts[1].strip()
+            _add_cover_slide(prs, title, subtitle, colors)
+        else:
+            _add_content_slide_from_def(prs, page_def, chart_map, colors)
+
+    prs.save(output_path)
+    return output_path
+
+
+def _generate_auto_pages(config, chart_map):
+    """没有「PPT页面」Sheet时，自动按每页图表数分页（兼容旧模式）"""
+    general = config.get("general", {})
+    charts_per_slide = int(general.get("charts_per_slide", 4))
+    chart_list = list(chart_map.values())
+    pages = []
+    for i in range(0, len(chart_list), charts_per_slide):
+        page_charts = chart_list[i:i + charts_per_slide]
+        page = {"页面类型": "content", "布局": f"{min(charts_per_slide, len(page_charts))}图"}
+        for j, ch in enumerate(page_charts):
+            page[f"图表{j + 1}"] = ch.get("图表标题", "")
+        pages.append(page)
+    return pages
+
+
+def _set_slide_bg(slide, hex_color):
+    background = slide.background
+    fill = background.fill
+    fill.solid()
+    fill.fore_color.rgb = _hex_to_rgb(hex_color)
+
+
+def _set_font_name(paragraph, font_name):
+    for run in paragraph.runs:
+        run.font.name = font_name
+    try:
+        pPr = paragraph._pPr
+        if pPr is None:
+            pPr = paragraph._p.get_or_add_pPr()
+        defRPr = pPr.find(qn('a:defRPr'))
+        if defRPr is None:
+            defRPr = pPr.makeelement(qn('a:defRPr'), {})
+            pPr.insert(0, defRPr)
+        defRPr.set('latin', font_name)
+        defRPr.set('ea', font_name)
+    except Exception:
+        pass
+
+
+def _add_cover_slide(prs, title, subtitle, colors):
+    slide_layout = prs.slide_layouts[6]
+    slide = prs.slides.add_slide(slide_layout)
+
+    _set_slide_bg(slide, "FFFFFF")
+
+    from pptx.enum.shapes import MSO_SHAPE
+
+    top_bar = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), prs.slide_width, Inches(0.06)
+    )
+    top_bar.fill.solid()
+    top_bar.fill.fore_color.rgb = _hex_to_rgb(HW_RED)
+    top_bar.line.fill.background()
+
+    left_accent = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, Inches(1.3), Inches(2.5), Inches(0.06), Inches(0.8)
+    )
+    left_accent.fill.solid()
+    left_accent.fill.fore_color.rgb = _hex_to_rgb(HW_RED)
+    left_accent.line.fill.background()
+
+    txBox = slide.shapes.add_textbox(
+        Inches(1.7), Inches(2.5), Inches(10), Inches(1.2)
+    )
+    tf = txBox.text_frame
+    tf.word_wrap = True
+    p = tf.paragraphs[0]
+    p.text = title
+    p.font.size = Pt(42)
+    p.font.bold = True
+    p.font.color.rgb = _hex_to_rgb(HW_DARK)
+    p.alignment = PP_ALIGN.LEFT
+    _set_font_name(p, FONT_NAME)
+
+    if subtitle:
+        txBox2 = slide.shapes.add_textbox(
+            Inches(1.7), Inches(3.8), Inches(10), Inches(0.8)
+        )
+        tf2 = txBox2.text_frame
+        p2 = tf2.paragraphs[0]
+        p2.text = subtitle
+        p2.font.size = Pt(18)
+        p2.font.color.rgb = _hex_to_rgb(HW_GRAY)
+        p2.alignment = PP_ALIGN.LEFT
+        _set_font_name(p2, FONT_NAME)
+
+    bottom_line = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, Inches(1.3), Inches(5.8),
+        Inches(10.7), Inches(0.01)
+    )
+    bottom_line.fill.solid()
+    bottom_line.fill.fore_color.rgb = _hex_to_rgb("#D0D0D0")
+    bottom_line.line.fill.background()
+
+    date_str = strftime("%Y.%m.%d")
+    date_box = slide.shapes.add_textbox(
+        Inches(1.3), Inches(5.9), Inches(5), Inches(0.4)
+    )
+    dtf = date_box.text_frame
+    dp = dtf.paragraphs[0]
+    dp.text = date_str
+    dp.font.size = Pt(10)
+    dp.font.color.rgb = _hex_to_rgb(HW_GRAY)
+    dp.alignment = PP_ALIGN.LEFT
+    _set_font_name(dp, FONT_NAME)
+
+
+def _add_content_slide_from_def(prs, page_def, chart_map, colors):
+    slide_layout = prs.slide_layouts[6]
+    slide = prs.slides.add_slide(slide_layout)
+
+    _set_slide_bg(slide, "FFFFFF")
+
+    layout = str(page_def.get("布局", "4图")).strip()
+    title = str(page_def.get("页面标题", ""))
+
+    if title:
+        _add_page_title(slide, title, colors)
+
+    positions = LAYOUT_POSITIONS.get(layout, LAYOUT_POSITIONS["4图"])
+
+    active_charts = []
+    if "charts" in page_def and page_def["charts"]:
+        active_charts = page_def["charts"]
+    else:
+        for i in range(1, 5):
+            chart_def = None
+            inline_title = page_def.get(f"图表{i}标题", "")
+            if inline_title and str(inline_title).strip():
+                chart_def = {
+                    "图表标题": str(inline_title).strip(),
+                    "图表类型": str(page_def.get(f"图表{i}类型", "column")).strip(),
+                    "数据Sheet": str(page_def.get(f"图表{i}Sheet", "Sheet1")).strip(),
+                    "X轴范围": str(page_def.get(f"图表{i}X范围", "")).strip(),
+                    "Y轴范围": str(page_def.get(f"图表{i}Y范围", "")).strip(),
+                    "颜色": str(page_def.get(f"图表{i}颜色", "")).strip(),
+                    "_categories": page_def.get(f"_图表{i}_categories"),
+                    "_values": page_def.get(f"_图表{i}_values"),
+                }
+            else:
+                chart_name = page_def.get(f"图表{i}", "")
+                if chart_name and str(chart_name).strip():
+                    chart_def = chart_map.get(str(chart_name).strip())
+            if chart_def:
+                active_charts.append(chart_def)
+
+    for idx, chart_def in enumerate(active_charts):
+        if idx >= len(positions):
+            break
+        left, top, width, height = positions[idx]
+        _add_native_chart(slide, chart_def, colors, left, top, width, height)
+
+
+def _add_page_title(slide, title, colors):
+    left = Inches(0.6)
+    top = Inches(0.2)
+    width = Inches(12.1)
+    height = Inches(0.55)
+    txBox = slide.shapes.add_textbox(left, top, width, height)
+    tf = txBox.text_frame
+    tf.word_wrap = True
+    p = tf.paragraphs[0]
+    p.text = title
+    p.font.size = Pt(24)
+    p.font.bold = True
+    p.font.color.rgb = _hex_to_rgb(HW_DARK)
+    p.alignment = PP_ALIGN.LEFT
+    _set_font_name(p, FONT_NAME)
+
+    from pptx.enum.shapes import MSO_SHAPE
+    line_left = Inches(0.6)
+    line_top = Inches(0.78)
+    line_width = Inches(1.6)
+    line_height = Inches(0.04)
+    shape = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, line_left, line_top, line_width, line_height
+    )
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = _hex_to_rgb(HW_RED)
+    shape.line.fill.background()
+
+
+def _add_right_text(slide, text, colors):
+    left = Inches(7.2)
+    top = Inches(1.2)
+    width = Inches(5.6)
+    height = Inches(5.5)
+    txBox = slide.shapes.add_textbox(left, top, width, height)
+    tf = txBox.text_frame
+    tf.word_wrap = True
+    tf.vertical_anchor = MSO_ANCHOR.TOP
+
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if i == 0:
+            p = tf.paragraphs[0]
+        else:
+            p = tf.add_paragraph()
+        p.text = line
+        p.font.size = Pt(14)
+        p.font.color.rgb = _hex_to_rgb("#333333")
+        p.space_after = Pt(8)
+
+
+def _add_top_text(slide, text, colors):
+    left = Inches(1.0)
+    top = Inches(0.9)
+    width = Inches(11.3)
+    height = Inches(1.8)
+    txBox = slide.shapes.add_textbox(left, top, width, height)
+    tf = txBox.text_frame
+    tf.word_wrap = True
+
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if i == 0:
+            p = tf.paragraphs[0]
+        else:
+            p = tf.add_paragraph()
+        p.text = line
+        p.font.size = Pt(13)
+        p.font.color.rgb = _hex_to_rgb("#333333")
+        p.space_after = Pt(4)
+
+
+def _add_native_chart(slide, chart_info, colors, left, top, width, height):
+    chart_type = str(chart_info.get("图表类型", "column")).strip().lower()
+    title = str(chart_info.get("图表标题", ""))
+    categories = chart_info.get("_categories", [])
+    values = chart_info.get("_values", [])
+    color = str(chart_info.get("颜色", "")).strip()
+    hierarchical = chart_info.get("_hierarchical")
+
+    if chart_info.get("_is_map"):
+        _add_map_slide(slide, chart_info, left, top, width, height)
+        return
+
+    if not color:
+        color = HW_RED
+    if not categories:
+        return
+
+    if _is_combo_chart_type(chart_type):
+        _add_combo_chart(slide, chart_info, chart_type, title, categories, values, color, colors, left, top, width, height)
+        return
+
+    is_scatter = chart_type == "scatter"
+    xl_type = _get_chart_type(chart_type)
+
+    if hierarchical is not None and isinstance(values, dict):
+        _add_hierarchical_chart(slide, chart_type, title, categories, values, color, colors, xl_type, chart_info, left, top, width, height)
+        return
+
+    series_list = []
+    if isinstance(values, dict):
+        for s_name, s_vals in values.items():
+            series_list.append((s_name, s_vals))
+    elif isinstance(values, list):
+        series_list.append((title or "数据", values))
+
+    if not series_list:
+        return
+
+    if is_scatter:
+        chart_data = XyChartData()
+        for s_name, s_vals in series_list:
+            series = chart_data.add_series(s_name)
+            for i in range(min(len(categories), len(s_vals))):
+                try:
+                    x_val = float(i + 1)
+                    y_val = float(s_vals[i])
+                    series.add_data_point(x_val, y_val)
+                except (ValueError, TypeError):
+                    continue
+    else:
+        chart_data = CategoryChartData()
+        chart_data.categories = [str(c) for c in categories]
+        for s_name, s_vals in series_list:
+            chart_data.add_series(s_name, s_vals)
+
+    chart_shape = slide.shapes.add_chart(
+        xl_type, left, top, width, height, chart_data
+    )
+    chart = chart_shape.chart
+
+    chart.has_title = bool(title)
+    if title:
+        chart.chart_title.text_frame.text = title
+        for p in chart.chart_title.text_frame.paragraphs:
+            for run in p.runs:
+                run.font.size = Pt(13)
+                run.font.bold = True
+                run.font.color.rgb = _hex_to_rgb(HW_DARK)
+
+    _apply_series_color(chart, color, chart_type, colors)
+    _style_chart(chart, chart_type)
+    _render_conclusion(slide, chart_info, left, top - Inches(0.35), width)
+
+
+def _is_combo_chart_type(chart_type):
+    return "," in chart_type or chart_type == "combo"
+
+
+def _parse_combo_types(chart_type):
+    parts = [t.strip() for t in chart_type.split(",") if t.strip()]
+    return [t for t in parts if t in ("column", "line", "bar")] or ["column", "line"]
+
+
+def _add_combo_chart(slide, chart_info, chart_type, title, categories, values, color, colors, left, top, width, height):
+    series_list = []
+    if isinstance(values, dict):
+        for s_name, s_vals in values.items():
+            series_list.append((s_name, s_vals))
+    elif isinstance(values, list):
+        series_list.append((title or "数据", values))
+
+    if not series_list:
+        return
+
+    type_map = _parse_combo_types(chart_type)
+    while len(type_map) < len(series_list):
+        type_map.append("column")
+
+    chart_data = CategoryChartData()
+    chart_data.categories = [str(c) for c in categories]
+    for s_name, s_vals in series_list:
+        chart_data.add_series(s_name, s_vals)
+
+    chart_shape = slide.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED, left, top, width, height, chart_data
+    )
+    chart = chart_shape.chart
+
+    _restructure_as_combo_chart(chart, type_map)
+
+    chart.has_title = bool(title)
+    if title:
+        chart.chart_title.text_frame.text = title
+        for p in chart.chart_title.text_frame.paragraphs:
+            for run in p.runs:
+                run.font.size = Pt(13)
+                run.font.bold = True
+                run.font.color.rgb = _hex_to_rgb(HW_DARK)
+
+    _apply_combo_series_color(chart, chart_type, colors, type_map)
+    _style_chart(chart, chart_type)
+
+    _render_conclusion(slide, chart_info, left, top - Inches(0.35), width)
+
+
+def _restructure_as_combo_chart(chart, type_map):
+    chart_cs = chart._chartSpace
+    chart_el = chart_cs.find(qn('c:chart'))
+    if chart_el is None:
+        return
+    plot_area = chart_el.find(qn('c:plotArea'))
+    if plot_area is None:
+        return
+    bar_chart = plot_area.find(qn('c:barChart'))
+    if bar_chart is None:
+        return
+
+    sers = bar_chart.findall(qn('c:ser'))
+    if not sers:
+        return
+
+    line_sers = []
+    bar_sers = []
+    for i, ser in enumerate(sers):
+        if i < len(type_map) and type_map[i] == "line":
+            line_sers.append(ser)
+        else:
+            bar_sers.append(ser)
+
+    if not line_sers:
+        return
+
+    for ser in line_sers:
+        bar_chart.remove(ser)
+
+    if not bar_sers:
+        axid_elements = bar_chart.findall(qn('c:axId'))
+        for axid in axid_elements:
+            bar_chart.remove(axid)
+
+    # 清除所有旧的 axId，重新分配
+    for axid in bar_chart.findall(qn('c:axId')):
+        bar_chart.remove(axid)
+
+    cat_ax = plot_area.find(qn('c:catAx'))
+    left_val_ax = plot_area.find(qn('c:valAx'))
+    cat_axid = cat_ax.find(qn('c:axId')).get('val') if cat_ax is not None else None
+    left_val_axid = left_val_ax.find(qn('c:axId')).get('val') if left_val_ax is not None else None
+
+    bar_axids = bar_chart.findall(qn('c:axId'))
+    bar_refs_right = any(a.get('val') == (str(int(left_val_axid) + 1) if left_val_axid else None) for a in bar_axids)
+
+    line_chart = etree.SubElement(plot_area, qn('c:lineChart'))
+    grouping = etree.SubElement(line_chart, qn('c:grouping'))
+    grouping.set('val', 'standard')
+    for ser in line_sers:
+        line_chart.append(ser)
+
+    if cat_axid and left_val_axid and left_val_ax is not None and not bar_refs_right:
+        new_val_axid = str(int(left_val_axid) + 1)
+        axid_cat = etree.SubElement(line_chart, qn('c:axId'))
+        axid_cat.set('val', cat_axid)
+        axid_val = etree.SubElement(line_chart, qn('c:axId'))
+        axid_val.set('val', new_val_axid)
+
+        right_val_ax = etree.SubElement(plot_area, qn('c:valAx'))
+        etree.SubElement(right_val_ax, qn('c:axId')).set('val', new_val_axid)
+        scaling = etree.SubElement(right_val_ax, qn('c:scaling'))
+        etree.SubElement(scaling, qn('c:orientation')).set('val', 'minMax')
+        etree.SubElement(right_val_ax, qn('c:delete')).set('val', '0')
+        etree.SubElement(right_val_ax, qn('c:axPos')).set('val', 'r')
+        etree.SubElement(right_val_ax, qn('c:majorTickMark')).set('val', 'out')
+        etree.SubElement(right_val_ax, qn('c:minorTickMark')).set('val', 'none')
+        etree.SubElement(right_val_ax, qn('c:tickLblPos')).set('val', 'nextTo')
+        etree.SubElement(right_val_ax, qn('c:crossAx')).set('val', cat_axid)
+        etree.SubElement(right_val_ax, qn('c:crosses')).set('val', 'max')
+        etree.SubElement(right_val_ax, qn('c:auto')).set('val', '1')
+
+        baxid_cat = etree.SubElement(bar_chart, qn('c:axId'))
+        baxid_cat.set('val', cat_axid)
+        baxid_val = etree.SubElement(bar_chart, qn('c:axId'))
+        baxid_val.set('val', left_val_axid)
+    elif bar_sers:
+        for axid in bar_axids:
+            new_axid = etree.SubElement(line_chart, qn('c:axId'))
+            new_axid.set('val', axid.get('val'))
+
+
+def _apply_combo_series_color(chart, chart_type, colors, type_map):
+    palette = _get_pie_color_list(colors)
+    try:
+        chart_cs = chart._chartSpace
+        chart_el = chart_cs.find(qn('c:chart'))
+        if chart_el is None:
+            return
+        plot_area = chart_el.find(qn('c:plotArea'))
+        if plot_area is None:
+            return
+
+        bar_chart = plot_area.find(qn('c:barChart'))
+        line_chart = plot_area.find(qn('c:lineChart'))
+
+        sers = []
+        if bar_chart is not None:
+            sers.extend(bar_chart.findall(qn('c:ser')))
+        if line_chart is not None:
+            sers.extend(line_chart.findall(qn('c:ser')))
+
+        for idx, ser in enumerate(sers):
+            c = _hex_to_rgb(palette[idx % len(palette)])
+            is_line = idx < len(type_map) and type_map[idx] == "line"
+
+            if is_line:
+                spPr = ser.find(qn('c:spPr'))
+                if spPr is None:
+                    spPr = etree.SubElement(ser, qn('c:spPr'))
+                ln = spPr.find(qn('a:ln'))
+                if ln is None:
+                    ln = etree.SubElement(spPr, qn('a:ln'))
+                ln.set('w', '25400')
+                solidFill = ln.find(qn('a:solidFill'))
+                if solidFill is None:
+                    solidFill = etree.SubElement(ln, qn('a:solidFill'))
+                srgb = solidFill.find(qn('a:srgbClr'))
+                if srgb is None:
+                    for child in list(solidFill):
+                        solidFill.remove(child)
+                    srgb = etree.SubElement(solidFill, qn('a:srgbClr'))
+                srgb.set('val', '{:02X}{:02X}{:02X}'.format(c[0], c[1], c[2]))
+
+                marker = ser.find(qn('c:marker'))
+                if marker is None:
+                    marker = etree.SubElement(ser, qn('c:marker'))
+                symbol = marker.find(qn('c:symbol'))
+                if symbol is None:
+                    symbol = etree.SubElement(marker, qn('c:symbol'))
+                symbol.set('val', 'circle')
+            else:
+                spPr = ser.find(qn('c:spPr'))
+                if spPr is None:
+                    spPr = etree.SubElement(ser, qn('c:spPr'))
+                solidFill = spPr.find(qn('a:solidFill'))
+                if solidFill is None:
+                    solidFill = etree.SubElement(spPr, qn('a:solidFill'))
+                srgb = solidFill.find(qn('a:srgbClr'))
+                if srgb is None:
+                    for child in list(solidFill):
+                        solidFill.remove(child)
+                    srgb = etree.SubElement(solidFill, qn('a:srgbClr'))
+                srgb.set('val', '{:02X}{:02X}{:02X}'.format(c[0], c[1], c[2]))
+                ln = spPr.find(qn('a:ln'))
+                if ln is not None:
+                    try:
+                        spPr.remove(ln)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+
+import tempfile
+
+def _add_map_slide(slide, chart_info, left, top, width, height):
+    from src.map_builder import build_scatter_map, build_heatmap, save_map_image
+
+    geo_df = chart_info.get("_geo_df")
+    if geo_df is None or geo_df.empty:
+        return
+
+    chart_type = str(chart_info.get("图表类型", "map")).strip().lower()
+    title = str(chart_info.get("图表标题", ""))
+    x_range = str(chart_info.get("X轴范围", "")).strip()
+    y_range = str(chart_info.get("Y轴范围", "")).strip()
+    color_hex = str(chart_info.get("颜色", "")).strip() or None
+
+    x_cols = [c.strip() for c in x_range.split(",") if c.strip()] if x_range else []
+    y_cols = [c.strip() for c in y_range.split(",") if c.strip()] if y_range else []
+
+    default_lat = [c for c in ["纬度", "lat", "latitude", "Lat"] if c in geo_df.columns]
+    default_lon = [c for c in ["经度", "lon", "longitude", "lng", "Lon"] if c in geo_df.columns]
+
+    lon_col = x_cols[0] if x_cols and x_cols[0] in geo_df.columns else (default_lon[0] if default_lon else None)
+    lat_col = y_cols[0] if y_cols and y_cols[0] in geo_df.columns else (default_lat[0] if default_lat else None)
+
+    metric_col = y_cols[-1] if len(y_cols) >= 2 and y_cols[-1] in geo_df.columns else None
+    if not metric_col:
+        num_cols = geo_df.select_dtypes(include=["number"]).columns.tolist()
+        exclude = {lat_col, lon_col, "site_id", "cell_id", "站点ID", "小区ID"}
+        metric_cols = [c for c in num_cols if c not in exclude and c not in default_lat and c not in default_lon]
+        if metric_cols:
+            metric_col = metric_cols[0]
+
+    if not lat_col or not lon_col or not metric_col:
+        return
+
+    if chart_type == "heatmap":
+        fig = build_heatmap(geo_df, lat_col, lon_col, metric_col, title)
+    else:
+        fig = build_scatter_map(geo_df, lat_col, lon_col, metric_col, title, color_hex)
+
+    if fig is None:
+        return
+
+    png_buf = save_map_image(fig)
+    tmp_path = os.path.join(tempfile.gettempdir(), f"_ppt_map_{id(chart_info)}.png")
+    with open(tmp_path, "wb") as f:
+        f.write(png_buf.read())
+
+    slide.shapes.add_picture(tmp_path, left, top, width, height)
+
+
+def _get_chart_type(chart_type):
+    type_map = {
+        "bar": XL_CHART_TYPE.COLUMN_CLUSTERED,
+        "column": XL_CHART_TYPE.COLUMN_CLUSTERED,
+        "line": XL_CHART_TYPE.LINE,
+        "pie": XL_CHART_TYPE.PIE,
+        "scatter": XL_CHART_TYPE.XY_SCATTER,
+        "area": XL_CHART_TYPE.AREA,
+        "doughnut": XL_CHART_TYPE.DOUGHNUT,
+    }
+    return type_map.get(chart_type, XL_CHART_TYPE.COLUMN_CLUSTERED)
+
+
+def _add_hierarchical_chart(slide, chart_type, title, categories, values, color, colors, xl_type, chart_info, left, top, width, height):
+    chart_data = CategoryChartData()
+    cats = chart_data.categories
+
+    for parent, children in categories:
+        cat = cats.add_category(str(parent))
+        for child_label, _child_data in children:
+            cat.add_sub_category(str(child_label))
+
+    if isinstance(values, dict):
+        for series_name, series_vals in values.items():
+            clean = [v if v is not None else 0 for v in series_vals]
+            chart_data.add_series(str(series_name), clean)
+    else:
+        chart_data.add_series(title or "数据", values)
+
+    chart_shape = slide.shapes.add_chart(
+        xl_type, left, top, width, height, chart_data
+    )
+    chart = chart_shape.chart
+
+    chart.has_title = bool(title)
+    if title:
+        chart.chart_title.text_frame.text = title
+        for p in chart.chart_title.text_frame.paragraphs:
+            for run in p.runs:
+                run.font.size = Pt(13)
+                run.font.bold = True
+                run.font.color.rgb = _hex_to_rgb(HW_DARK)
+
+    _apply_series_color(chart, color, chart_type, colors)
+    _style_chart(chart, chart_type)
+    _render_conclusion(slide, chart_info, left, top - Inches(0.35), width)
+
+
+def _apply_series_color(chart, color_hex, chart_type, colors):
+    rgb = _hex_to_rgb(color_hex)
+    num_series = len(chart.series)
+
+    if chart_type == "pie":
+        pie_colors = _get_pie_color_list(colors)
+        plot = chart.plots[0]
+        series = plot.series[0]
+        for idx, point in enumerate(series.points):
+            point_color = pie_colors[idx % len(pie_colors)]
+            point.format.fill.solid()
+            point.format.fill.fore_color.rgb = _hex_to_rgb(point_color)
+        plot.has_data_labels = True
+        data_labels = plot.data_labels
+        data_labels.show_percentage = True
+        data_labels.show_category_name = True
+        data_labels.show_value = False
+        data_labels.font.size = Pt(8)
+        data_labels.font.color.rgb = _hex_to_rgb(HW_DARK)
+    else:
+        palette = _get_pie_color_list(colors)
+        for idx, series in enumerate(chart.series):
+            s_color = _hex_to_rgb(palette[idx % len(palette)]) if num_series > 1 else rgb
+            if chart_type == "line":
+                series.format.line.color.rgb = s_color
+                series.format.line.width = Pt(2)
+                series.marker.style = 8
+                series.marker.size = 6
+                series.marker.format.fill.solid()
+                series.marker.format.fill.fore_color.rgb = s_color
+                series.marker.format.line.color.rgb = s_color
+            else:
+                series.format.fill.solid()
+                series.format.fill.fore_color.rgb = s_color
+
+
+def _get_pie_color_list(colors):
+    accent_keys = sorted([k for k in colors if k.startswith("accent")])
+    palette = []
+    for k in accent_keys:
+        palette.append(colors[k])
+    palette += HUAWEI_PALETTE
+    return palette
+
+
+def _style_chart(chart, chart_type):
+    try:
+        num_series = len(chart.series)
+        chart.has_legend = (chart_type == "pie" or num_series > 1)
+        if chart.has_legend:
+            chart.legend.position = XL_LEGEND_POSITION.BOTTOM
+            chart.legend.include_in_layout = False
+            chart.legend.font.size = Pt(9)
+            chart.legend.font.color.rgb = _hex_to_rgb(HW_DARK)
+    except Exception:
+        pass
+
+    try:
+        chart_cs = chart._chartSpace
+        chart_el = chart_cs.find(qn('c:chart'))
+        if chart_el is not None:
+            plot_area = chart_el.find(qn('c:plotArea'))
+            if plot_area is not None:
+                for ax_tag in ['c:valAx', 'c:catAx']:
+                    for axis in plot_area.findall(qn(ax_tag)):
+                        major_grid = axis.find(qn('c:majorGridlines'))
+                        if major_grid is None:
+                            major_grid = etree.SubElement(axis, qn('c:majorGridlines'))
+                        spPr = major_grid.find(qn('c:spPr'))
+                        if spPr is None:
+                            spPr = etree.SubElement(major_grid, qn('c:spPr'))
+                        ln = spPr.find(qn('a:ln'))
+                        if ln is None:
+                            ln = etree.SubElement(spPr, qn('a:ln'))
+                        sf = ln.find(qn('a:solidFill'))
+                        if sf is None:
+                            for child in list(ln):
+                                ln.remove(child)
+                            sf = etree.SubElement(ln, qn('a:solidFill'))
+                        sc = sf.find(qn('a:srgbClr'))
+                        if sc is None:
+                            for child in list(sf):
+                                sf.remove(child)
+                            sc = etree.SubElement(sf, qn('a:srgbClr'))
+                        sc.set('val', 'D9D9D9')
+                        ln.set('w', '9525')
+    except Exception:
+        pass
+
+    try:
+        if chart_type != "pie":
+            value_axis = chart.value_axis
+            value_axis.tick_labels.font.size = Pt(9)
+            value_axis.tick_labels.font.color.rgb = _hex_to_rgb(HW_GRAY)
+            value_axis.has_major_gridlines = True
+            if chart.has_legend:
+                value_axis.visible = True
+            cat_axis = chart.category_axis
+            cat_axis.tick_labels.font.size = Pt(9)
+            cat_axis.tick_labels.font.color.rgb = _hex_to_rgb(HW_DARK)
+            _force_axis_text_horizontal(cat_axis)
+    except Exception:
+        pass
+
+    try:
+        plot = chart.plots[0]
+        plot.has_data_labels = True
+        data_labels = plot.data_labels
+        data_labels.font.size = Pt(9)
+        data_labels.font.color.rgb = _hex_to_rgb(HW_DARK)
+        try:
+            data_labels.show_legend_key = False
+            if chart_type in ("pie", "doughnut"):
+                data_labels.number_format = '0.0%'
+            else:
+                data_labels.show_value = True
+                data_labels.number_format = '0'
+                data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _force_axis_text_horizontal(axis):
+    try:
+        txPr = axis.tick_labels._txPr
+        bodyPr = txPr.find(qn('a:bodyPr'))
+        if bodyPr is None:
+            bodyPr = txPr.makeelement(qn('a:bodyPr'), {})
+            txPr.append(bodyPr)
+        bodyPr.set('rot', '0')
+        if 'vert' in bodyPr.attrib:
+            del bodyPr.attrib['vert']
+    except Exception:
+        pass
+
+
+def _hex_to_rgb(hex_color):
+    hex_color = str(hex_color).lstrip("#")
+    if len(hex_color) == 6:
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        return RGBColor(r, g, b)
+    return RGBColor(0x18, 0x2B, 0x49)
+
+
+def _render_conclusion(slide, chart_info, left, top, width):
+    tmpl = str(chart_info.get("结论模板", "")).strip()
+    if not tmpl:
+        return
+    categories = chart_info.get("_categories", [])
+    values = chart_info.get("_values", {})
+
+    flat_cats, flat_vals = _flatten_chart_data(categories, values)
+    if not flat_vals:
+        return
+
+    ctx = _compute_stats(flat_cats, flat_vals)
+
+    if isinstance(values, dict) and len(values) > 1:
+        for s_name in values:
+            svals = [v for v in values[s_name] if v is not None]
+            if svals:
+                ctx[f"max_{s_name}"] = max(svals)
+                ctx[f"min_{s_name}"] = min(svals)
+                ctx[f"avg_{s_name}"] = round(sum(svals) / len(svals), 1)
+                ctx[f"total_{s_name}"] = sum(svals)
+
+    try:
+        text = tmpl
+        for key, val in ctx.items():
+            text = text.replace("{" + key + "}", str(val))
+    except Exception:
+        text = tmpl
+
+    if text == tmpl:
+        return
+
+    tb = slide.shapes.add_textbox(
+        left, top, width, Inches(0.35)
+    )
+    tf = tb.text_frame
+    tf.word_wrap = True
+    p = tf.paragraphs[0]
+    p.text = "✦ " + text
+    p.font.size = Pt(11)
+    p.font.bold = True
+    p.font.color.rgb = _hex_to_rgb(HW_DARK)
+    p.alignment = PP_ALIGN.CENTER
+    p.space_before = Pt(2)
+    _set_font_name(p, FONT_NAME)
+
+
+def _flatten_chart_data(categories, values):
+    flat_cats = []
+    flat_vals = []
+    if isinstance(categories, list) and categories and isinstance(categories[0], (tuple, list)):
+        for parent, children in categories:
+            for child_label, _child_data in children:
+                flat_cats.append(str(child_label))
+        if isinstance(values, dict):
+            first_key = next(iter(values.keys()), "")
+            if first_key:
+                flat_vals = [v for v in values[first_key] if v is not None]
+    else:
+        flat_cats = [str(c) for c in categories]
+        if isinstance(values, dict):
+            first_key = next(iter(values.keys()), "")
+            if first_key:
+                flat_vals = [v for v in values[first_key] if v is not None]
+        elif isinstance(values, list):
+            flat_vals = [v for v in values if v is not None]
+    return flat_cats, flat_vals
+
+
+def _compute_stats(categories, values):
+    if not values:
+        return {}
+    pairs = list(zip(categories, values))
+    pairs.sort(key=lambda x: x[1], reverse=True)
+    total = sum(values)
+    avg = round(total / len(values), 1)
+    ctx = {
+        "max_val": pairs[0][1],
+        "max_cat": pairs[0][0],
+        "min_val": pairs[-1][1],
+        "min_cat": pairs[-1][0],
+        "avg": avg,
+        "total": total,
+        "count": len(values),
+    }
+    if len(pairs) >= 3:
+        ctx["top3_cats"] = ", ".join(p[0] for p in pairs[:3])
+        ctx["top3_vals"] = ", ".join(str(p[1]) for p in pairs[:3])
+        ctx["bottom3_cats"] = ", ".join(p[0] for p in pairs[-3:])
+        ctx["bottom3_vals"] = ", ".join(str(p[1]) for p in pairs[-3:])
+    return ctx
