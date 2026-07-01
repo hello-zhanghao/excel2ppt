@@ -49,10 +49,10 @@ def read_pivot_config(config_path, sheet_name=None):
         task["序号"] = item.get("序号", "")
         task["数据源"] = str(item.get("数据源", "")).strip() if item.get("数据源") else ""
         task["sheet"] = str(item.get("Sheet", item.get("sheet", ""))).strip() if (item.get("Sheet") or item.get("sheet")) else "Sheet1"
-        task["行维度"] = str(item.get("行维度", "")).strip() if item.get("行维度") else ""
-        task["列维度"] = str(item.get("列维度", "")).strip() if item.get("列维度") else ""
-        task["值字段"] = str(item.get("值字段", "")).strip() if item.get("值字段") else ""
-        task["聚合方式"] = str(item.get("聚合方式", "sum")).strip() if item.get("聚合方式") else "sum"
+        task["行维度"] = str(item.get("行维度", "")).strip().replace("，", ",") if item.get("行维度") else ""
+        task["列维度"] = str(item.get("列维度", "")).strip().replace("，", ",") if item.get("列维度") else ""
+        task["值字段"] = str(item.get("值字段", "")).strip().replace("，", ",") if item.get("值字段") else ""
+        task["聚合方式"] = str(item.get("聚合方式", "sum")).strip().replace("，", ",") if item.get("聚合方式") else "sum"
         task["结果Sheet"] = str(item.get("结果Sheet", "")).strip() if item.get("结果Sheet") else f"结果{task.get('序号','')}"
         task["备注"] = str(item.get("备注", "")).strip() if item.get("备注") else ""
         task["行映射"] = str(item.get("行映射", "")).strip() if item.get("行映射") else (str(item.get("行维度映射", "")).strip() if item.get("行维度映射") else str(item.get("映射表", "")).strip() if item.get("映射表") else "")
@@ -621,17 +621,23 @@ def validate_pivot_config(tasks, config_dir):
                                 "column": "数据源"
                             })
         
-        # 6. 值映射数量检查
+        # 6. 值映射数量检查（对比实际输出列数，考虑单字段多聚合）
         val_map_str = task.get("值映射", "")
         val_maps = [m.strip() for m in val_map_str.split(",") if m.strip()]
         value_cols = [v.strip() for v in 值字段_str.split(",") if v.strip()]
-        if val_maps and len(val_maps) != len(value_cols):
-            results.append({
-                "task_seq": seq,
-                "level": "warning",
-                "message": f"值映射数量({len(val_maps)})与值字段数量({len(value_cols)})不一致",
-                "column": "值映射"
-            })
+        if val_maps:
+            agg_funcs_val = [a.strip() for a in 聚合方式_str.split(",") if a.strip()] if 聚合方式_str else []
+            if len(value_cols) == 1 and len(agg_funcs_val) > 1:
+                expected_cols = len(agg_funcs_val)
+            else:
+                expected_cols = len(value_cols)
+            if len(val_maps) != expected_cols:
+                results.append({
+                    "task_seq": seq,
+                    "level": "warning",
+                    "message": f"值映射数量({len(val_maps)})与输出列数({expected_cols}, 来自{len(value_cols)}个值字段+{len(agg_funcs_val) if agg_funcs_val else 'sum'}聚合)不一致",
+                    "column": "值映射"
+                })
     
     return results
 
