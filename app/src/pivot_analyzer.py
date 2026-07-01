@@ -981,27 +981,24 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
     else:
         grouped.columns = [_flatten_col(col) for col in grouped.columns.values]
 
-    # 处理重复列名（仅在没有值映射时添加聚合后缀区分）
-    if not has_val_map:
-        seen = {}
-        for i, name in enumerate(grouped.columns):
-            if name in seen and name not in group_cols:
-                prev = seen[name]
-                # 使用原始 tuple 中的聚合信息来区分
-                curr_tuple = orig_tuples[i]
-                prev_tuple = orig_tuples[prev]
-                # 如果 tuple 包含聚合信息，使用它
-                if isinstance(curr_tuple, tuple) and len(curr_tuple) >= 2:
-                    agg_part = str(curr_tuple[1]).strip()
-                    if agg_part:
-                        grouped.columns.values[i] = f"{name}_{agg_part}"
-                        continue
-                if isinstance(prev_tuple, tuple) and len(prev_tuple) >= 2:
-                    agg_part = str(prev_tuple[1]).strip()
-                    if agg_part:
-                        grouped.columns.values[prev] = f"{name}_{agg_part}"
-            else:
-                seen[name] = i
+    # 处理重复列名
+    seen = {}
+    for i, name in enumerate(grouped.columns):
+        if name in seen and name not in group_cols:
+            prev = seen[name]
+            curr_tuple = orig_tuples[i] if i < len(orig_tuples) else None
+            prev_tuple = orig_tuples[prev] if prev < len(orig_tuples) else None
+            if isinstance(curr_tuple, tuple) and len(curr_tuple) >= 2:
+                agg_part = str(curr_tuple[1]).strip()
+                if agg_part:
+                    grouped.columns.values[i] = f"{name}_{agg_part}"
+                    continue
+            if isinstance(prev_tuple, tuple) and len(prev_tuple) >= 2:
+                agg_part = str(prev_tuple[1]).strip()
+                if agg_part:
+                    grouped.columns.values[prev] = f"{name}_{agg_part}"
+        else:
+            seen[name] = i
 
     grouped = grouped.sort_values(group_cols)
 
