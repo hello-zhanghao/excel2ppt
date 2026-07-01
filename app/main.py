@@ -15,6 +15,10 @@ import argparse
 import glob
 from datetime import datetime
 
+# 版本信息
+__VERSION__ = "2.1.0"
+__UPDATE_DATE__ = "2026-07-01"
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -398,9 +402,17 @@ def _select_folder():
         main_frame = ttk.Frame(root, padding="16 12 16 12")
         main_frame.pack(fill="both", expand=True)
 
-        # 标题
-        ttk.Label(main_frame, text="Excel 统一分析工具", style="Header.TLabel").pack(anchor="w", pady=(0, 2))
-        ttk.Label(main_frame, text="PPT 报告生成 + 透视分析", style="Info.TLabel").pack(anchor="w", pady=(0, 12))
+        # 标题行
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(anchor="w", fill="x", pady=(0, 2))
+        ttk.Label(title_frame, text="Excel 统一分析工具", style="Header.TLabel").pack(side="left")
+        ttk.Label(title_frame, text=f"v{__VERSION__}", style="Info.TLabel").pack(side="left", padx=(8, 0), pady=(4, 0))
+        
+        # 副标题和版本信息
+        sub_frame = ttk.Frame(main_frame)
+        sub_frame.pack(anchor="w", fill="x", pady=(0, 12))
+        ttk.Label(sub_frame, text="PPT 报告生成 + 透视分析", style="Info.TLabel").pack(side="left")
+        ttk.Label(sub_frame, text=f"| 更新日期: {__UPDATE_DATE__}", style="Info.TLabel").pack(side="left", padx=(12, 0))
 
         # 路径选择行
         path_frame = ttk.Frame(main_frame)
