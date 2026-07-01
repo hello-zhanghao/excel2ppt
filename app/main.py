@@ -31,16 +31,12 @@ def find_config_file(folder):
 
 
 def _auto_find_data_file(config_dir, config_path):
-    config_name = os.path.basename(config_path).lower()
-    xlsx_files = glob.glob(os.path.join(config_dir, "*.xlsx"))
-    candidates = []
-    for f in xlsx_files:
-        name = os.path.basename(f)
-        if name.startswith("~$") or name.lower() == config_name:
-            continue
-        if "配置" in name or "config" in name.lower():
-            continue
-        candidates.append(f)
+    """
+    自动查找数据文件，支持 Excel 和 CSV。
+    优先查找与配置同目录下的非配置数据文件。
+    """
+    from src.excel_reader import get_candidate_data_files
+    candidates = get_candidate_data_files(config_dir)
     return candidates[0] if candidates else None
 
 
@@ -100,7 +96,9 @@ def _detect_mode(config_path):
 
 
 def _run_ppt_mode(config_path, output_path=None):
-    from src.excel_reader import read_config, read_data, read_geo_data
+    from src.excel_reader import (
+        read_config, read_data, read_geo_data, find_data_file, get_data_file_info
+    )
     from src.ppt_builder import build_ppt
 
     config_dir = os.path.dirname(config_path)
@@ -111,20 +109,16 @@ def _run_ppt_mode(config_path, output_path=None):
     colors = config.get("colors", {})
     print(f"    → PPT页面: {len(pages)} 页")
 
-    data_excel_path = general.get("数据文件", general.get("excel_path", ""))
-    if not data_excel_path:
-        data_excel_path = _auto_find_data_file(config_dir, config_path)
-        if data_excel_path:
-            print(f"    → 自动找到数据文件: {os.path.basename(data_excel_path)}")
-    elif not os.path.isabs(str(data_excel_path)):
-        data_excel_path = os.path.join(config_dir, str(data_excel_path))
+    # 全局数据文件路径
+    default_data_file = general.get("数据文件", general.get("excel_path", ""))
+    if not default_data_file:
+        default_data_file = _auto_find_data_file(config_dir, config_path)
+        if default_data_file:
+            print(f"    → 自动找到数据文件: {os.path.basename(default_data_file)}")
+    elif not os.path.isabs(str(default_data_file)):
+        default_data_file = os.path.join(config_dir, str(default_data_file))
 
-    if not data_excel_path or not os.path.exists(str(data_excel_path)):
-        print(f"[错误] 找不到数据文件: {data_excel_path}")
-        sys.exit(1)
-
-    data_excel_path = str(data_excel_path)
-    print(f"    → 数据文件: {os.path.basename(data_excel_path)}")
+    print(f"    → 数据文件: {os.path.basename(default_data_file) if default_data_file else '无'}")
 
     print(f"[PPT/2] 读取图表数据...")
     total_charts = 0
@@ -136,13 +130,29 @@ def _run_ppt_mode(config_path, output_path=None):
             chart_title = chart_def.get("图表标题", "")
             chart_type = str(chart_def.get("图表类型", "")).strip().lower()
             data_sheet = chart_def.get("数据Sheet", "Sheet1")
+            data_source = chart_def.get("数据源", "")
             x_range = chart_def.get("X轴范围", "")
             y_range = chart_def.get("Y轴范围", "")
             block_name = chart_def.get("区块名", "")
 
+            # 查找数据文件：根据图表指定的数据源或全局默认
+            if data_source:
+                file_path = find_data_file(data_source, config_dir)
+                if file_path:
+                    print(f"    [信息] [{page_title}] {chart_title} 使用数据源: {os.path.basename(file_path)}")
+                else:
+                    print(f"    ! [{page_title}] {chart_title} 数据源 '{data_source}' 未找到")
+                    continue
+            else:
+                file_path = default_data_file
+            
+            if not file_path or not os.path.exists(str(file_path)):
+                print(f"    ! [{page_title}] {chart_title} 数据文件不存在: {file_path}")
+                continue
+
             try:
                 if chart_type in ("map", "heatmap"):
-                    geo_df = read_geo_data(data_excel_path, data_sheet, x_range, y_range)
+                    geo_df = read_geo_data(file_path, data_sheet, x_range, y_range)
                     if geo_df is not None and len(geo_df) > 0:
                         chart_def["_geo_df"] = geo_df
                         chart_def["_is_map"] = True
@@ -153,7 +163,7 @@ def _run_ppt_mode(config_path, output_path=None):
                         print(f"    - [{page_title}] {chart_title} (无地理数据)")
                     continue
 
-                x_values, y_values = read_data(data_excel_path, data_sheet, x_range, y_range, block_name)
+                x_values, y_values = read_data(file_path, data_sheet, x_range, y_range, block_name)
                 if x_values and y_values:
                     chart_def["_categories"] = x_values
                     chart_def["_values"] = y_values

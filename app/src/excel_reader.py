@@ -1,6 +1,223 @@
 import os
 import openpyxl
 import pandas as pd
+import glob
+
+
+# ==================== 通用数据文件读取 ====================
+
+SUPPORTED_DATA_EXTS = (".xlsx", ".xls", ".csv")
+
+
+def find_data_file(data_source, config_dir):
+    """
+    根据数据源名称查找数据文件，支持 Excel 和 CSV。
+    
+    匹配逻辑（按优先级）：
+    1. 精确匹配文件名（带扩展名）
+    2. 在配置目录中查找匹配的文件（计算匹配度）
+    
+    Args:
+        data_source: 数据源名称（如 "网络指标数据"、"数据.csv"）
+        config_dir: 配置所在目录
+        
+    Returns:
+        找到的文件路径，未找到返回 None
+    """
+    if not data_source:
+        return None
+        
+    data_source = str(data_source).strip()
+    
+    # 如果是绝对路径
+    if os.path.isabs(data_source):
+        if os.path.exists(data_source):
+            return data_source
+        # 尝试添加常见扩展名
+        for ext in SUPPORTED_DATA_EXTS:
+            path = data_source + ext
+            if os.path.exists(path):
+                return path
+        return None
+    
+    # 在配置目录中查找
+    search_dir = config_dir if config_dir else os.path.dirname(data_source)
+    
+    # 1. 精确匹配（带扩展名）
+    exact_path = os.path.join(search_dir, data_source)
+    if os.path.exists(exact_path):
+        return exact_path
+    
+    # 2. 尝试添加扩展名
+    for ext in SUPPORTED_DATA_EXTS:
+        path = os.path.join(search_dir, data_source + ext)
+        if os.path.exists(path):
+            return path
+    
+    # 3. 模糊匹配 - 找匹配度最高的文件
+    all_files = get_candidate_data_files(search_dir)
+    if not all_files:
+        return None
+    
+    best_match = None
+    best_score = 0
+    
+    # 移除扩展名的名称用于匹配
+    name_without_ext = data_source
+    for ext in SUPPORTED_DATA_EXTS:
+        if data_source.lower().endswith(ext):
+            name_without_ext = data_source[:-len(ext)]
+            break
+    
+    for f in all_files:
+        basename = os.path.basename(f)
+        # 移除扩展名
+        for ext in SUPPORTED_DATA_EXTS:
+            if basename.lower().endswith(ext):
+                basename = basename[:-len(ext)]
+                break
+        
+        score = _calculate_match_score(name_without_ext, basename)
+        if score > best_score and score >= 0.5:  # 至少50%匹配度
+            best_score = score
+            best_match = f
+    
+    return best_match
+
+
+def _calculate_match_score(query, candidate):
+    """
+    计算两个字符串的匹配度分数。
+    考虑：包含关系、编辑距离、关键词匹配
+    """
+    query_lower = query.lower()
+    candidate_lower = candidate.lower()
+    
+    # 完全相等
+    if query_lower == candidate_lower:
+        return 1.0
+    
+    # 包含关系
+    if query_lower in candidate_lower:
+        return 0.8 + 0.1 * (len(query_lower) / max(len(candidate_lower), 1))
+    if candidate_lower in query_lower:
+        return 0.7
+    
+    # 关键词匹配（中文分词效果较差，用简单包含判断）
+    query_parts = _split_identifier(query_lower)
+    candidate_parts = _split_identifier(candidate_lower)
+    
+    matched = sum(1 for qp in query_parts if any(qp in cp or cp in qp for cp in candidate_parts))
+    if query_parts:
+        return 0.5 * (matched / len(query_parts))
+    
+    return 0.0
+
+
+def _split_identifier(s):
+    """拆分标识符为关键词部分"""
+    import re
+    # 按中文字符、下划线、大写字母分割
+    parts = re.split(r'[\u4e00-\u9fff_]', s)
+    # 进一步按大写字母分割（驼峰命名）
+    result = []
+    for p in parts:
+        if p:
+            sub_parts = re.findall(r'[a-z]+|[A-Z][a-z]*|[A-Z]+', p)
+            result.extend([sp.lower() for sp in sub_parts if len(sp) > 1])
+    return [p for p in result if p]
+
+
+def get_candidate_data_files(config_dir):
+    """获取配置目录中所有候选数据文件（Excel和CSV）"""
+    if not config_dir or not os.path.exists(config_dir):
+        return []
+    
+    files = []
+    for ext in SUPPORTED_DATA_EXTS:
+        pattern = os.path.join(config_dir, f"*{ext}")
+        files.extend(glob.glob(pattern))
+    
+    # 过滤临时文件和配置类文件
+    result = []
+    for f in files:
+        basename = os.path.basename(f)
+        if basename.startswith("~$"):
+            continue
+        if "配置" in basename or "config" in basename.lower():
+            continue
+        if "template" in basename.lower() or "模板" in basename:
+            continue
+        result.append(f)
+    
+    return result
+
+
+def read_data_file(file_path, sheet_name=None):
+    """
+    通用数据文件读取函数，自动根据扩展名选择读取方式。
+    
+    Args:
+        file_path: 文件路径（.xlsx, .xls, .csv）
+        sheet_name: Sheet名称（仅对Excel有效）
+        
+    Returns:
+        pandas.DataFrame
+    """
+    if not file_path or not os.path.exists(file_path):
+        raise FileNotFoundError(f"数据文件不存在: {file_path}")
+    
+    ext = os.path.splitext(file_path)[1].lower()
+    
+    if ext == ".csv":
+        return pd.read_csv(file_path, encoding="utf-8-sig")
+    else:
+        # Excel 文件
+        if sheet_name:
+            return pd.read_excel(file_path, sheet_name=sheet_name)
+        else:
+            return pd.read_excel(file_path)
+
+
+def get_data_file_sheets(file_path):
+    """获取Excel文件的所有Sheet名称，CSV文件返回None"""
+    ext = os.path.splitext(file_path)[1].lower()
+    
+    if ext == ".csv":
+        return None
+    
+    try:
+        wb = openpyxl.load_workbook(file_path, read_only=True)
+        sheets = wb.sheetnames
+        wb.close()
+        return sheets
+    except Exception:
+        return None
+
+
+def get_data_file_info(file_path):
+    """获取数据文件的基本信息"""
+    if not file_path or not os.path.exists(file_path):
+        return None
+    
+    ext = os.path.splitext(file_path)[1].lower()
+    basename = os.path.basename(file_path)
+    
+    info = {
+        "path": file_path,
+        "name": basename,
+        "type": "csv" if ext == ".csv" else "excel",
+        "size": os.path.getsize(file_path),
+        "sheets": None
+    }
+    
+    if ext != ".csv":
+        info["sheets"] = get_data_file_sheets(file_path)
+    
+    return info
+
+
+# ==================== 原有配置读取函数 ====================
 
 
 def read_config(config_path, sheet_name=None):
@@ -68,6 +285,7 @@ def _group_rows_to_pages(raw_rows):
     current_page = None
     current_page_num = None
     last_sheet = None
+    last_data_source = None
 
     for row in raw_rows:
         page_num = row.get("页码")
@@ -76,6 +294,7 @@ def _group_rows_to_pages(raw_rows):
             if current_page is not None:
                 pages.append(current_page)
             last_sheet = None
+            last_data_source = None
             page_title = str(row.get("页面标题", "")).strip() if row.get("页面标题") else ""
             sub_title = str(row.get("副标题", "")).strip() if row.get("副标题") else ""
             if sub_title:
@@ -101,10 +320,19 @@ def _group_rows_to_pages(raw_rows):
                 sheet_val = last_sheet
             else:
                 sheet_val = "Sheet1"
+            
+            # 数据源：支持 Excel 或 CSV 文件
+            data_source = str(row.get("数据源", "")).strip() if row.get("数据源") else ""
+            if data_source:
+                last_data_source = data_source
+            elif last_data_source:
+                data_source = last_data_source
+            
             chart_def = {
                 "图表标题": chart_title,
                 "图表类型": str(row.get("图表类型", "column")).strip() if row.get("图表类型") else "column",
                 "数据Sheet": sheet_val,
+                "数据源": data_source,
                 "X轴范围": str(row.get("X轴范围", row.get("X轴", ""))).strip() if (row.get("X轴范围") or row.get("X轴")) else "",
                 "Y轴范围": str(row.get("Y轴范围", row.get("Y轴", ""))).strip() if (row.get("Y轴范围") or row.get("Y轴")) else "",
                 "颜色": str(row.get("颜色", "")).strip() if row.get("颜色") else "",
@@ -119,18 +347,97 @@ def _group_rows_to_pages(raw_rows):
     return pages
 
 
-def read_data(excel_path, sheet_name, x_range, y_range, block_name=None):
+def read_data(file_path, sheet_name, x_range, y_range, block_name=None):
+    """
+    读取数据用于图表生成，支持 Excel 和 CSV 文件。
+    
+    Args:
+        file_path: 数据文件路径（.xlsx, .xls, .csv）
+        sheet_name: Sheet名称（CSV文件忽略此参数）
+        x_range: X轴列名
+        y_range: Y轴列名
+        block_name: 数据区块名称
+    """
     x_col_names = [cn.strip() for cn in str(x_range).split(",") if cn.strip()] if x_range else []
     y_col_names = [cn.strip() for cn in str(y_range).split(",") if cn.strip()] if y_range else []
-
+    
+    # 判断文件类型
+    ext = os.path.splitext(str(file_path))[1].lower()
+    is_csv = ext == ".csv"
+    
+    # CSV 文件不支持区块名读取，需要特殊处理
+    if is_csv:
+        if block_name and str(block_name).strip():
+            # CSV 文件忽略区块名，直接读取全部数据
+            pass
+        return _read_dataframe_columns(file_path, sheet_name, x_range, y_range)
+    
+    # Excel 文件使用原有逻辑
     if block_name and str(block_name).strip():
-        return _read_with_block_name(excel_path, sheet_name, str(block_name).strip(), x_range, y_range)
+        return _read_with_block_name(file_path, sheet_name, str(block_name).strip(), x_range, y_range)
 
     if len(x_col_names) >= 2:
-        return _read_hierarchical_multi_y(excel_path, sheet_name, x_col_names, y_col_names)
+        return _read_hierarchical_multi_y(file_path, sheet_name, x_col_names, y_col_names)
 
-    x_values = _read_axis(excel_path, sheet_name, x_range, is_x=True)
-    y_values = _read_axis(excel_path, sheet_name, y_range, is_x=False)
+    x_values = _read_axis(file_path, sheet_name, x_range, is_x=True)
+    y_values = _read_axis(file_path, sheet_name, y_range, is_x=False)
+    return x_values, y_values
+
+
+def _read_dataframe_columns(file_path, sheet_name, x_range, y_range):
+    """
+    使用 pandas 读取 CSV/Excel 数据列，适用于 CSV 和简单的 Excel 读取。
+    """
+    df = read_data_file(file_path, sheet_name)
+    
+    x_col_names = [cn.strip() for cn in str(x_range).split(",") if cn.strip()] if x_range else []
+    y_col_names = [cn.strip() for cn in str(y_range).split(",") if cn.strip()] if y_range else []
+    
+    # 查找匹配的列
+    x_cols = [c for c in df.columns if any(xn in c or c in xn for xn in x_col_names)] if x_col_names else []
+    y_cols = [c for c in df.columns if any(yn in c or c in yn for yn in y_col_names)] if y_col_names else []
+    
+    # 如果没有匹配，尝试直接使用列名
+    if not x_cols:
+        x_cols = [c for c in df.columns if c in x_col_names] if x_col_names else []
+    if not y_cols:
+        y_cols = [c for c in df.columns if c in y_col_names] if y_col_names else []
+    
+    if not x_cols:
+        # 尝试使用第一个文本列作为 X 轴
+        text_cols = [c for c in df.columns if df[c].dtype == 'object']
+        if text_cols:
+            x_cols = [text_cols[0]]
+    
+    if not x_cols:
+        return [], {}
+    
+    # 构建 X 轴值和 Y 轴值
+    x_values = []
+    y_values = {}
+    
+    for yc in y_cols:
+        y_values[yc] = []
+    
+    for idx, row in df.iterrows():
+        x_parts = []
+        for xc in x_cols:
+            val = row.get(xc)
+            if pd.notna(val):
+                x_parts.append(str(val))
+        if x_parts:
+            x_values.append(" - ".join(x_parts))
+        else:
+            x_values.append(str(idx))
+        
+        for yc in y_cols:
+            val = row.get(yc)
+            y_values[yc].append(val if pd.notna(val) else None)
+    
+    # 如果只有一个 Y 轴列，返回简化格式
+    if len(y_cols) == 1:
+        return x_values, y_values[y_cols[0]]
+    
     return x_values, y_values
 
 
@@ -564,8 +871,12 @@ def _col_letter_to_index(cell_ref):
     return idx - 1
 
 
-def read_data_as_dataframe(excel_path, sheet_name):
-    return pd.read_excel(excel_path, sheet_name=sheet_name)
+def read_data_as_dataframe(file_path, sheet_name=None):
+    """
+    读取数据文件为 DataFrame，支持 Excel 和 CSV。
+    CSV 文件忽略 sheet_name 参数。
+    """
+    return read_data_file(file_path, sheet_name)
 
 
 def read_geo_data(excel_path, sheet_name, x_range, y_range):

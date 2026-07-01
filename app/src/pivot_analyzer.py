@@ -186,13 +186,20 @@ def _tokenize_join(data_source):
 
 
 def _load_joined_dataframe(config_dir, data_source, sheet_name):
+    """加载数据，支持 Excel 和 CSV 文件"""
+    from src.excel_reader import find_data_file, read_data_file
+    
     join_parts = _parse_join_spec(data_source)
 
     if not join_parts:
+        # 非 JOIN 情况：直接查找文件
         file_path = _resolve_data_path(data_source, config_dir)
         if not file_path or not os.path.exists(file_path):
+            # 尝试模糊查找
+            file_path = find_data_file(data_source, config_dir)
+        if not file_path or not os.path.exists(file_path):
             return None
-        return pd.read_excel(file_path, sheet_name=sheet_name)
+        return read_data_file(file_path, sheet_name)
 
     candidate_files = _collect_candidate_xlsx(config_dir)
 
@@ -202,21 +209,24 @@ def _load_joined_dataframe(config_dir, data_source, sheet_name):
     if first_sheet is None:
         first_sheet = join_parts[0].get("left_sheet") or sheet_name
 
-    df = pd.read_excel(first_file, sheet_name=first_sheet)
+    df = read_data_file(first_file, first_sheet)
 
     for jp in join_parts:
         right_file, right_sheet = _resolve_join_table(jp["right"], config_dir, candidate_files)
         if right_file is None:
             right_file = first_file
             right_sheet = jp["right"]
-            if right_sheet.lower().endswith(".xlsx"):
-                right_sheet = right_sheet[:-5]
+            # 移除扩展名
+            for ext in (".xlsx", ".csv"):
+                if right_sheet.lower().endswith(ext):
+                    right_sheet = right_sheet[:-len(ext)]
+                    break
             if not _sheet_exists(right_file, right_sheet):
                 continue
         if right_sheet is None:
-            right_sheet = jp.get("right_sheet") or "Sheet1"
+            right_sheet = jp.get("right_sheet")
 
-        df_right = pd.read_excel(right_file, sheet_name=right_sheet)
+        df_right = read_data_file(right_file, right_sheet)
 
         left_on = jp["left_key"]
         right_on = jp["right_key"]
@@ -235,24 +245,28 @@ def _load_joined_dataframe(config_dir, data_source, sheet_name):
 
 
 def _resolve_join_table(table_name, config_dir, candidate_files):
-    clean = table_name
-    if clean.lower().endswith(".xlsx"):
-        clean = clean[:-5]
-
-    for f in candidate_files:
-        if not f or not os.path.exists(f):
-            continue
-        for test_name in (table_name, clean):
-            if _sheet_exists(f, test_name):
-                return f, test_name
-
-    file_path = _resolve_data_path(table_name, config_dir)
-    if os.path.exists(file_path):
+    """解析 JOIN 表名，支持 Excel 和 CSV 文件"""
+    from src.excel_reader import find_data_file, get_data_file_sheets
+    
+    # 先尝试直接查找
+    file_path = find_data_file(table_name, config_dir)
+    if file_path:
+        # 确定 sheet 名称
+        sheets = get_data_file_sheets(file_path)
+        if sheets:
+            # 尝试匹配 sheet
+            clean_name = table_name
+            for ext in (".xlsx", ".csv"):
+                if clean_name.lower().endswith(ext):
+                    clean_name = clean_name[:-len(ext)]
+                    break
+            # 匹配最相似的 sheet
+            for s in sheets:
+                if clean_name.lower() in s.lower() or s.lower() in clean_name.lower():
+                    return file_path, s
+            return file_path, sheets[0]  # 默认第一个 sheet
         return file_path, None
-    file_path = _resolve_data_path(table_name + ".xlsx", config_dir)
-    if os.path.exists(file_path):
-        return file_path, None
-
+    
     return None, None
 
 
@@ -267,13 +281,9 @@ def _sheet_exists(file_path, sheet_name):
 
 
 def _collect_candidate_xlsx(config_dir):
-    import glob
-    return [
-        f for f in glob.glob(os.path.join(config_dir, "*.xlsx"))
-        if not os.path.basename(f).startswith("~$")
-        and "配置" not in os.path.basename(f)
-        and "config" not in os.path.basename(f).lower()
-    ]
+    """保留原有函数名，但改为收集所有数据文件（Excel + CSV）"""
+    from src.excel_reader import get_candidate_data_files
+    return get_candidate_data_files(config_dir)
 
 
 def run_analysis(task, config_dir):
