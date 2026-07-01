@@ -222,10 +222,20 @@ def _run_pivot_mode(config_path, output_path=None):
     print(f"[Pivot/2] 执行透视分析...")
     results = []
     errors = []
+    skipped = 0
 
     for task in tasks:
         seq = task.get("序号", "?")
         sheet_name = task.get("结果Sheet", f"结果{seq}")
+        
+        # 检查是否计算
+        should_calc = str(task.get("是否计算", "是")).strip()
+        if should_calc.lower() in ("否", "no", "false", "0", "不计算", "跳过", "skip"):
+            print(f"    [SKIP] [任务{seq}] 已设置为不计算，跳过")
+            results.append(None)
+            skipped += 1
+            continue
+        
         try:
             result, error = run_analysis(task, config_dir)
             if error:
@@ -265,7 +275,7 @@ def _run_pivot_mode(config_path, output_path=None):
     write_results(valid_tasks, valid_results, errors, output_path)
 
     print(f"\n[OK] 完成！分析结果已保存至: {output_path}")
-    print(f"   共 {len(valid_tasks)} 个任务成功" + (f", {len(errors)} 个失败" if errors else ""))
+    print(f"   共 {len(tasks)} 个任务: {len(valid_tasks)} 个成功" + (f", {skipped} 个跳过" if skipped else "") + (f", {len(errors)} 个失败" if errors else ""))
     if errors:
         print(f"   失败详情见「错误信息」Sheet")
 
