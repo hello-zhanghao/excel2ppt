@@ -266,70 +266,259 @@ def _run_pivot_mode(config_path, output_path=None):
         print(f"   失败详情见「错误信息」Sheet")
 
 
+class _GuiLogRedirector:
+    """重定向 stdout 到 GUI Text 控件"""
+    def __init__(self, text_widget, tag=""):
+        self.text_widget = text_widget
+        self.tag = tag
+        self._lock = False
+
+    def write(self, s):
+        if self._lock or not s:
+            return
+        self._lock = True
+        try:
+            self.text_widget.after(0, lambda: self._append(s))
+        finally:
+            self._lock = False
+
+    def _append(self, s):
+        self.text_widget.insert("end", s, self.tag)
+        self.text_widget.see("end")
+
+    def flush(self):
+        pass
+
+
+def _scan_files(folder):
+    """扫描文件夹，返回检测到的配置和数据文件信息"""
+    if not folder or not os.path.isdir(folder):
+        return []
+
+    xlsx_files = glob.glob(os.path.join(folder, "*.xlsx"))
+    csv_files = glob.glob(os.path.join(folder, "*.csv"))
+    all_data_files = [f for f in (xlsx_files + csv_files)
+                      if not os.path.basename(f).startswith("~$")]
+
+    results = []
+
+    # 查找配置文件
+    config_candidates = []
+    for f in all_data_files:
+        name = os.path.basename(f)
+        if "配置" in name or "config" in name.lower():
+            config_candidates.append(f)
+
+    if not config_candidates and xlsx_files:
+        config_candidates = [f for f in xlsx_files if not os.path.basename(f).startswith("~$")]
+
+    import openpyxl
+    ppt_keywords = {"页码", "页面类型", "页面标题", "图表类型"}
+    pivot_keywords = {"数据源", "行维度", "列维度", "值字段", "聚合方式"}
+
+    for cfg in config_candidates:
+        name = os.path.basename(cfg)
+        try:
+            wb = openpyxl.load_workbook(cfg, read_only=True)
+            ppt_found = False
+            pivot_found = False
+            sheet_names = wb.sheetnames
+            for sn in sheet_names:
+                ws = wb[sn]
+                try:
+                    row = [str(c.value).strip() if c.value else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
+                except StopIteration:
+                    continue
+                row_set = set(row)
+                if len(ppt_keywords & row_set) >= 2:
+                    ppt_found = True
+                if len(pivot_keywords & row_set) >= 2:
+                    pivot_found = True
+            wb.close()
+
+            if ppt_found and pivot_found:
+                mode = "综合配置 (PPT + 透视)"
+            elif pivot_found:
+                mode = "透视分析配置"
+            elif ppt_found:
+                mode = "PPT报告配置"
+            else:
+                continue
+
+            results.append({"type": "config", "name": name, "mode": mode, "path": cfg})
+        except Exception:
+            continue
+
+    # 查找数据文件
+    data_candidates = []
+    for f in all_data_files:
+        name = os.path.basename(f)
+        if name.startswith("~$"):
+            continue
+        is_config = any("配置" in r["name"] or "config" in r["name"].lower() for r in results)
+        if results and any(name == r["name"] for r in results):
+            continue
+        if "配置" in name or "config" in name.lower():
+            continue
+        data_candidates.append(f)
+
+    for df in data_candidates:
+        name = os.path.basename(df)
+        ftype = "CSV" if name.lower().endswith(".csv") else "Excel"
+        results.append({"type": "data", "name": name, "mode": f"数据文件 ({ftype})", "path": df})
+
+    return results
+
+
 def _select_folder():
     try:
         import tkinter as tk
-        from tkinter import filedialog, ttk
-        import subprocess
+        from tkinter import filedialog, ttk, scrolledtext
+        import threading
 
         root = tk.Tk()
         root.title("Excel 统一分析工具")
-        root.geometry("520x240")
-        root.resizable(False, False)
-        root.attributes("-topmost", True)
-        root.configure(bg="#f0f2f5")
+        root.geometry("720x680")
+        root.minsize(600, 500)
+        root.configure(bg="#f7f8fa")
 
+        # 样式
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("TFrame", background="#f0f2f5")
-        style.configure("Header.TLabel", font=("Microsoft YaHei", 14, "bold"), foreground="#182B49", background="#f0f2f5")
-        style.configure("Info.TLabel", font=("Microsoft YaHei", 9), foreground="#666666", background="#f0f2f5")
-        style.configure("Path.TLabel", font=("Microsoft YaHei", 10), foreground="#333333", background="#ffffff")
+        style.configure("TFrame", background="#f7f8fa")
+        style.configure("Header.TLabel", font=("Microsoft YaHei", 16, "bold"), foreground="#182B49", background="#f7f8fa")
+        style.configure("Sub.TLabel", font=("Microsoft YaHei", 11, "bold"), foreground="#182B49", background="#f7f8fa")
+        style.configure("Info.TLabel", font=("Microsoft YaHei", 9), foreground="#666666", background="#f7f8fa")
         style.configure("Guide.TButton", font=("Microsoft YaHei", 10), padding=6)
         style.configure("Run.TButton", font=("Microsoft YaHei", 11, "bold"), padding=8)
         style.configure("Pick.TButton", font=("Microsoft YaHei", 10), padding=6)
+        style.configure("Scan.TButton", font=("Microsoft YaHei", 10), padding=6)
 
-        main_frame = ttk.Frame(root, padding=20)
+        # 主容器
+        main_frame = ttk.Frame(root, padding="16 12 16 12")
         main_frame.pack(fill="both", expand=True)
 
-        ttk.Label(main_frame, text="Excel 统一分析工具", style="Header.TLabel").pack(anchor="w", pady=(0, 4))
-        ttk.Label(main_frame, text="PPT 报告生成 + 透视分析 · 选择配置文件夹即可一键执行", style="Info.TLabel").pack(anchor="w", pady=(0, 16))
+        # 标题
+        ttk.Label(main_frame, text="Excel 统一分析工具", style="Header.TLabel").pack(anchor="w", pady=(0, 2))
+        ttk.Label(main_frame, text="PPT 报告生成 + 透视分析", style="Info.TLabel").pack(anchor="w", pady=(0, 12))
 
+        # 路径选择行
         path_frame = ttk.Frame(main_frame)
-        path_frame.pack(fill="x", pady=(0, 12))
+        path_frame.pack(fill="x", pady=(0, 8))
 
         path_var = tk.StringVar(value="")
         path_entry = ttk.Entry(path_frame, textvariable=path_var, font=("Microsoft YaHei", 10), state="readonly")
         path_entry.pack(side="left", fill="x", expand=True, ipady=2)
 
         ttk.Button(path_frame, text="选择文件夹", style="Pick.TButton",
-                   command=lambda: _browse_folder(path_var, root)).pack(side="left", padx=(8, 0))
+                   command=lambda: _browse_folder(path_var, file_list_text, root)).pack(side="left", padx=(8, 0))
+        ttk.Button(path_frame, text="扫描文件", style="Scan.TButton",
+                   command=lambda: _scan_and_display(path_var.get(), file_list_text)).pack(side="left", padx=(6, 0))
 
-        btn_row = ttk.Frame(main_frame)
-        btn_row.pack(fill="x", pady=(4, 12))
+        # 检测到的文件区域
+        file_frame = ttk.Frame(main_frame)
+        file_frame.pack(fill="x", pady=(4, 8))
+        ttk.Label(file_frame, text="检测到的文件", style="Sub.TLabel").pack(anchor="w", pady=(0, 4))
 
-        ttk.Button(btn_row, text="操作指南", style="Guide.TButton",
+        file_list_text = tk.Text(file_frame, height=6, wrap="word", font=("Microsoft YaHei", 10),
+                                  bg="#ffffff", fg="#333333", relief="solid", borderwidth=1)
+        file_list_text.pack(fill="x", expand=True)
+
+        # 日志区域
+        log_frame = ttk.Frame(main_frame)
+        log_frame.pack(fill="both", expand=True, pady=(4, 8))
+        ttk.Label(log_frame, text="运行日志", style="Sub.TLabel").pack(anchor="w", pady=(0, 4))
+
+        log_text = scrolledtext.ScrolledText(log_frame, wrap="word", font=("Consolas", 10),
+                                              bg="#1d2b3a", fg="#c9d1d9", insertbackground="#fff",
+                                              relief="solid", borderwidth=1)
+        log_text.pack(fill="both", expand=True)
+
+        # 按钮行
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x", pady=(4, 0))
+
+        run_state = {"running": False}
+
+        def do_run():
+            folder = path_var.get()
+            if not folder:
+                log_text.insert("end", "[错误] 请先选择文件夹\n")
+                log_text.see("end")
+                return
+            if run_state["running"]:
+                log_text.insert("end", "[警告] 分析正在运行中，请等待完成\n")
+                log_text.see("end")
+                return
+            run_state["running"] = True
+            run_btn.config(state="disabled", text="运行中...")
+            log_text.delete("1.0", "end")
+            threading.Thread(target=_run_analysis_thread,
+                             args=(folder, log_text, run_btn, run_state),
+                             daemon=True).start()
+
+        ttk.Button(btn_frame, text="操作指南", style="Guide.TButton",
                    command=_open_guide).pack(side="left")
 
-        run_btn = ttk.Button(btn_row, text="开始分析", style="Run.TButton",
-                             command=lambda: _launch_analysis(path_var.get(), root))
+        run_btn = ttk.Button(btn_frame, text="开始分析", style="Run.TButton", command=do_run)
         run_btn.pack(side="left", fill="x", expand=True, padx=(8, 0))
 
-        ttk.Label(main_frame,
-                  text="提示：也可以直接拖拽文件夹到此处，或命令行 python main.py 文件夹路径",
-                  style="Info.TLabel").pack(anchor="w")
+        ttk.Label(main_frame, text="提示：选择文件夹后点击「扫描文件」检测合规文件，再点击「开始分析」",
+                  style="Info.TLabel").pack(anchor="w", pady=(8, 0))
+
+        # 尝试绑定拖拽（需要 tkinterdnd2，非必需）
+        try:
+            root.drop_target_register("DND_Files")
+            root.dnd_bind("<<Drop>>", lambda e: _on_drop(e, path_var, file_list_text, root))
+        except Exception:
+            pass
 
         root.mainloop()
-    except Exception:
+    except Exception as e:
+        print(f"GUI 启动失败: {e}")
+        import traceback
+        traceback.print_exc()
         return None
     return None
 
 
-def _browse_folder(path_var, root):
+def _browse_folder(path_var, file_list_text, root):
     from tkinter import filedialog
     folder = filedialog.askdirectory(title="选择包含配置 Excel 和数据文件的文件夹", parent=root)
     if folder:
         path_var.set(folder)
+        _scan_and_display(folder, file_list_text)
+
+
+def _scan_and_display(folder, file_list_text):
+    file_list_text.delete("1.0", "end")
+    if not folder:
+        file_list_text.insert("end", "请先选择文件夹\n")
+        return
+    results = _scan_files(folder)
+    if not results:
+        file_list_text.insert("end", f"在 {folder} 中未检测到合规的配置或数据文件\n")
+        file_list_text.insert("end", "提示：配置文件需要包含「页码」「数据源」等列头\n")
+        return
+
+    config_count = sum(1 for r in results if r["type"] == "config")
+    data_count = sum(1 for r in results if r["type"] == "data")
+    file_list_text.insert("end", f"检测到 {config_count} 个配置文件, {data_count} 个数据文件\n\n")
+    for r in results:
+        icon = "[配置]" if r["type"] == "config" else "[数据]"
+        file_list_text.insert("end", f"{icon} {r['name']}  —  {r['mode']}\n")
+
+
+def _on_drop(event, path_var, file_list_text, root):
+    """处理拖拽事件"""
+    data = event.data
+    if not data:
+        return
+    # 拖拽可能包含引号，去掉
+    folder = data.strip().strip('"').strip("'")
+    if os.path.isdir(folder):
+        path_var.set(folder)
+        _scan_and_display(folder, file_list_text)
 
 
 def _open_guide():
@@ -338,22 +527,64 @@ def _open_guide():
     webbrowser.open(f"file:///{guide_path.replace(os.sep, '/')}")
 
 
-def _launch_analysis(folder, root):
-    if not folder:
+def _run_analysis_thread(folder, log_text, run_btn, run_state):
+    """在子线程中运行分析，不阻塞 GUI"""
+    import threading
+    redirector = _GuiLogRedirector(log_text)
+    old_stdout = sys.stdout
+    sys.stdout = redirector
+
+    try:
+        raw_args = [folder]
+        _dispatch_from_gui(raw_args)
+    except SystemExit:
+        pass
+    except Exception as e:
+        print(f"\n[错误] 分析过程异常: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        sys.stdout = old_stdout
+        run_state["running"] = False
+        log_text.after(0, lambda: run_btn.config(state="normal", text="开始分析"))
+        log_text.after(0, lambda: log_text.insert("end", "\n[完成] 分析结束，可选择其他文件夹再次运行\n"))
+        log_text.after(0, lambda: log_text.see("end"))
+
+
+def _dispatch_from_gui(raw_args):
+    """从 GUI 调用的分析入口"""
+    mode = "auto"
+    legacy = argparse.ArgumentParser(add_help=False)
+    legacy.add_argument("folder_or_config", nargs="?", default=None)
+    legacy.add_argument("-c", "--config", default=None)
+    legacy.add_argument("-o", "--output", default=None)
+    args = legacy.parse_args(raw_args)
+    config_path = _resolve_config_path(args)
+    detected = _detect_mode(config_path)
+    if detected == "all":
+        print("[信息] 检测到综合配置（PPT + 透视分析），执行全部模式")
+        config_dir = os.path.dirname(config_path)
+        out_dir = _ensure_output_dir(config_dir)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = os.path.basename(config_path).rsplit(".", 1)[0]
+        ppt_out = os.path.join(out_dir, f"{base}_报告_{ts}.pptx")
+        pivot_out = os.path.join(out_dir, f"{base}_分析_{ts}.xlsx")
+        _run_ppt_mode(config_path, ppt_out)
+        print()
+        _run_pivot_mode(config_path, pivot_out)
         return
-    root.destroy()
-    import subprocess
-    me = os.path.abspath(__file__)
-    subprocess.run([sys.executable, me, folder])
+    print(f"[信息] 自动检测配置类型: {detected}")
+    if detected == "pivot":
+        _run_pivot_mode(config_path, args.output)
+    else:
+        _run_ppt_mode(config_path, args.output)
 
 
 def main():
     if len(sys.argv) == 1:
-        folder = _select_folder()
-        if not folder:
-            print("取消选择，退出。")
-            sys.exit(0)
-        sys.argv.append(folder)
+        # 无参数：启动 GUI 模式
+        _select_folder()
+        return
 
     raw_args = sys.argv[1:]
     mode = None
