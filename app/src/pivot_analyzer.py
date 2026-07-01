@@ -613,6 +613,12 @@ def validate_pivot_config(tasks, config_dir):
                                         "message": f"值字段列不存在: {missing_val}",
                                         "column": "值字段"
                                     })
+                                else:
+                                    # 检查聚合方式与列数据类型是否兼容
+                                    _check_agg_dtype_compat(
+                                        results, seq, df, value_cols,
+                                        [a.strip() for a in 聚合方式_str.split(",") if a.strip()]
+                                    )
                         except Exception as e:
                             results.append({
                                 "task_seq": seq,
@@ -640,6 +646,27 @@ def validate_pivot_config(tasks, config_dir):
                 })
     
     return results
+
+
+NUMERIC_AGGS = {"sum", "mean", "avg", "max", "min", "pct"}
+
+
+def _check_agg_dtype_compat(results, task_seq, df, value_cols, agg_funcs):
+    """检查聚合方式与列数据类型是否兼容。"""
+    if not value_cols:
+        return
+    for vcol in value_cols:
+        if vcol not in df.columns:
+            continue
+        af = _get_agg_for_col(vcol, agg_funcs, value_cols)
+        af_mapped = AGG_MAP.get(af, af)
+        if af_mapped in NUMERIC_AGGS and not pd.api.types.is_numeric_dtype(df[vcol]):
+            results.append({
+                "task_seq": task_seq,
+                "level": "error",
+                "message": f"列「{vcol}」不是数值类型，不能使用 {af} 聚合（可用 count / nunique / count_pct）",
+                "column": "聚合方式"
+            })
 
 
 def print_validation_results(results):
@@ -892,7 +919,7 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
                 tmp_col = f"__pct_{tmp_col_counter}__"
                 tmp_col_counter += 1
                 pct_tmp_cols[tmp_col] = vcol
-                field_funcs[tmp_col] = ["sum"] if pd.api.types.is_numeric_dtype(df[vcol]) else ["count"]
+                field_funcs[tmp_col] = ["sum"]
                 has_sum_pct = True
             elif a_mapped == "count_pct":
                 tmp_col = f"__cntpct_{tmp_col_counter}__"
