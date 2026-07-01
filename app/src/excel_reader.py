@@ -835,15 +835,18 @@ def _read_range_by_columns(excel_path, sheet_name, col_names_str, combine_multi_
     if not available:
         return []
 
-    if len(available) == 1 or not combine_multi_col:
+    if len(available) == 1:
+        return df[available[0]].dropna().tolist()
+
+    if not combine_multi_col:
         series_cols = []
         for cn in col_names:
             matched = _fuzzy_match_column(cn, df.columns)
-            if matched:
+            if matched and matched not in series_cols:
                 series_cols.append(matched)
-        if not combine_multi_col and len(series_cols) == 1:
+        if len(series_cols) == 1:
             return df[series_cols[0]].dropna().tolist()
-        if not combine_multi_col and len(series_cols) > 1:
+        if len(series_cols) > 1:
             result = {}
             for cn in series_cols:
                 result[cn] = df[cn].dropna().tolist()
@@ -855,8 +858,6 @@ def _read_range_by_columns(excel_path, sheet_name, col_names_str, combine_multi_
         all_none = True
         for cn in col_names:
             matched = _fuzzy_match_column(cn, df.columns)
-            if matched:
-                    break
             if matched:
                 val = row[matched]
                 if pd.notna(val):
