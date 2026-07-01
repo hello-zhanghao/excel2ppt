@@ -61,6 +61,7 @@ def read_pivot_config(config_path, sheet_name=None):
         task["分箱"] = str(item.get("分箱", "")).strip() if item.get("分箱") else ""
         task["值计算"] = str(item.get("值计算", "")).strip() if item.get("值计算") else ""
         task["是否计算"] = str(item.get("是否计算", "是")).strip() if item.get("是否计算") else "是"
+        task["过滤条件"] = str(item.get("过滤条件", "")).strip() if item.get("过滤条件") else ""
 
         if not task["行维度"] and not task["值字段"]:
             continue
@@ -289,6 +290,377 @@ def _collect_candidate_xlsx(config_dir):
     return get_candidate_data_files(config_dir)
 
 
+def _apply_filter(df, filter_expr):
+    """
+    应用过滤条件到 DataFrame。
+    
+    支持的语法：
+    - 简单比较: 列名=值, 列名>值, 列名<值, 列名>=值, 列名<=值, 列名!=值
+    - 包含匹配: 列名包含'值', 列名 in ('a','b')
+    - 多条件: 用 AND/OR 连接，支持括号
+    
+    示例:
+        频段='n78' AND 上行PRB利用率>60
+        地区 in ('北京','上海') OR 频段='n41'
+        (频段='n78' AND 上行PRB利用率>60) OR 地区='北京'
+    """
+    if not filter_expr or not filter_expr.strip():
+        return df
+    
+    expr = filter_expr.strip()
+    
+    # 将中文引号替换为英文引号
+    expr = expr.replace("'", "'").replace("'", "'")
+    
+    # 使用 pandas 的 query 方法，但先做一些安全处理
+    # 我们用 eval 方式更灵活，但需要注意安全
+    # 为了安全，我们使用 pandas query
+    try:
+        result = df.query(expr)
+        return result
+    except Exception:
+        # 如果 query 失败，尝试更简单的解析
+        pass
+    
+    # 简单的自定义解析：处理 AND/OR 连接的简单条件
+    return _simple_filter(df, expr)
+
+
+def _simple_filter(df, expr):
+    """简单过滤：支持 AND/OR 连接的简单比较条件"""
+    # 按 AND 拆分（优先级：先 AND 后 OR）
+    # 简化处理：先按 OR 拆分，每部分内按 AND 处理
+    
+    # 用正则处理带括号的情况太复杂，这里简化为只处理顶层 OR
+    # 更完善的方案后续可以用 AST
+    
+    or_parts = _split_by_keyword(expr, "OR")
+    
+    if len(or_parts) > 1:
+        # OR 条件：合并各部分结果
+        result = None
+        for part in or_parts:
+            part = part.strip().strip("()")
+            sub = _simple_filter(df, part)
+            if result is None:
+                result = sub
+            else:
+                result = pd.concat([result, sub]).drop_duplicates()
+        return result if result is not None else df
+    
+    # 按 AND 拆分
+    and_parts = _split_by_keyword(expr, "AND")
+    if len(and_parts) > 1:
+        result = df
+        for part in and_parts:
+            part = part.strip().strip("()")
+            result = _simple_filter(result, part)
+        return result
+    
+    # 单个条件
+    return _parse_single_condition(df, expr)
+
+
+def _split_by_keyword(expr, keyword):
+    """按关键字拆分表达式，忽略引号内的内容"""
+    parts = []
+    current = []
+    in_quote = False
+    quote_char = None
+    i = 0
+    kw_len = len(keyword)
+    
+    while i < len(expr):
+        c = expr[i]
+        if c in ("'", '"') and not in_quote:
+            in_quote = True
+            quote_char = c
+            current.append(c)
+        elif c == quote_char and in_quote:
+            in_quote = False
+            quote_char = None
+            current.append(c)
+        elif not in_quote and expr[i:i+kw_len].upper() == keyword.upper():
+            # 检查前后是否是边界（空格或括号）
+            before_ok = (i == 0 or expr[i-1] in (' ', '(', ')'))
+            after_ok = (i + kw_len >= len(expr) or expr[i+kw_len] in (' ', '(', ')'))
+            if before_ok and after_ok:
+                parts.append("".join(current))
+                current = []
+                i += kw_len
+                continue
+            else:
+                current.append(c)
+        else:
+            current.append(c)
+        i += 1
+    
+    if current:
+        parts.append("".join(current))
+    
+    return parts if len(parts) > 1 else [expr]
+
+
+def _parse_single_condition(df, condition):
+    """解析单个条件"""
+    condition = condition.strip()
+    
+    # 支持的运算符
+    operators = [">=", "<=", "!=", "=", ">", "<"]
+    
+    for op in operators:
+        if op in condition:
+            idx = condition.index(op)
+            col = condition[:idx].strip()
+            val = condition[idx+len(op):].strip()
+            
+            # 去除引号
+            if (val.startswith("'") and val.endswith("'")) or (val.startswith('"') and val.endswith('"')):
+                val = val[1:-1]
+            
+            if col not in df.columns:
+                raise ValueError(f"过滤条件列不存在: {col}")
+            
+            if op == "=":
+                return df[df[col].astype(str) == str(val)]
+            elif op == "!=":
+                return df[df[col].astype(str) != str(val)]
+            elif op == ">":
+                return df[pd.to_numeric(df[col], errors="coerce") > float(val)]
+            elif op == "<":
+                return df[pd.to_numeric(df[col], errors="coerce") < float(val)]
+            elif op == ">=":
+                return df[pd.to_numeric(df[col], errors="coerce") >= float(val)]
+            elif op == "<=":
+                return df[pd.to_numeric(df[col], errors="coerce") <= float(val)]
+    
+    # 包含关系: col in ('a','b') 或 列名包含'值'
+    if " in (" in condition.lower():
+        idx = condition.lower().index(" in (")
+        col = condition[:idx].strip()
+        vals_str = condition[idx+4:].strip().strip("()")
+        vals = [v.strip().strip("'").strip('"') for v in vals_str.split(",")]
+        if col not in df.columns:
+            raise ValueError(f"过滤条件列不存在: {col}")
+        return df[df[col].astype(str).isin(vals)]
+    
+    if "包含" in condition:
+        idx = condition.index("包含")
+        col = condition[:idx].strip()
+        val = condition[idx+2:].strip().strip("'").strip('"')
+        if col not in df.columns:
+            raise ValueError(f"过滤条件列不存在: {col}")
+        return df[df[col].astype(str).str.contains(val, na=False)]
+    
+    raise ValueError(f"无法解析过滤条件: {condition}")
+
+
+def validate_pivot_config(tasks, config_dir):
+    """
+    校验透视分析配置，返回校验结果列表。
+    
+    Returns:
+        list of dict: 每个元素是一个校验项，包含:
+            - task_seq: 任务序号
+            - level: error/warning/info
+            - message: 校验信息
+            - column: 问题所在列（可选）
+    """
+    results = []
+    
+    if not tasks:
+        results.append({
+            "task_seq": "-",
+            "level": "error",
+            "message": "没有有效的透视分析配置为空",
+            "column": ""
+        })
+        return results
+    
+    for task in tasks:
+        seq = task.get("序号", "?")
+        data_source = task.get("数据源", "")
+        sheet_name = task.get("sheet", "Sheet1")
+        行维度_str = task.get("行维度", "")
+        列维度_str = task.get("列维度", "")
+        值字段_str = task.get("值字段", "")
+        聚合方式_str = task.get("聚合方式", "sum")
+        是否计算 = task.get("是否计算", "是")
+        
+        # 跳过不计算的任务
+        should_calc = str(是否计算).strip().lower()
+        if should_calc in ("否", "no", "false", "0", "不计算", "跳过", "skip"):
+            results.append({
+                "task_seq": seq,
+                "level": "info",
+                "message": "已设置为不计算，将跳过",
+                "column": "是否计算"
+            })
+            continue
+        
+        # 1. 检查必填项
+        if not 值字段_str:
+            results.append({
+                "task_seq": seq,
+                "level": "error",
+                "message": "值字段不能为空",
+                "column": "值字段"
+            })
+        
+        if not 行维度_str and not 列维度_str:
+            results.append({
+                "task_seq": seq,
+                "level": "warning",
+                "message": "行维度和列维度都为空，将生成单行汇总",
+                "column": "行维度/列维度"
+            })
+        
+        # 2. 检查聚合方式
+        agg_funcs = [a.strip() for a in 聚合方式_str.split(",") if a.strip()]
+        invalid_aggs = []
+        for a in agg_funcs:
+            mapped = AGG_MAP.get(a, a)
+            valid_aggs = {"sum", "mean", "count", "max", "min", "nunique", "pct", "count_pct"}
+            if mapped not in valid_aggs:
+                invalid_aggs.append(a)
+        if invalid_aggs:
+            results.append({
+                "task_seq": seq,
+                "level": "error",
+                "message": f"不支持的聚合方式: {invalid_aggs}",
+                "column": "聚合方式"
+            })
+        
+        # 3. 检查数据源文件是否存在
+        if not data_source:
+            results.append({
+                "task_seq": seq,
+                "level": "error",
+                "message": "数据源不能为空",
+                "column": "数据源"
+            })
+        else:
+            # 检查是否是透视结果引用
+            ds_lower = str(data_source).strip().lower()
+            is_pivot_ref = ds_lower in ("{pivot}", "pivot", "透视结果")
+            if not is_pivot_ref:
+                file_path = _resolve_data_path(data_source, config_dir)
+                if not file_path or not os.path.exists(file_path):
+                    from src.excel_reader import find_data_file
+                    file_path = find_data_file(data_source, config_dir)
+                if not file_path or not os.path.exists(file_path):
+                    results.append({
+                        "task_seq": seq,
+                        "level": "error",
+                        "message": f"数据源文件不存在: {data_source}",
+                        "column": "数据源"
+                    })
+                else:
+                    # 4. 检查 Sheet 是否存在
+                    from src.excel_reader import get_data_file_sheets
+                    sheets = get_data_file_sheets(file_path)
+                    if sheets and sheet_name not in sheets:
+                        results.append({
+                            "task_seq": seq,
+                            "level": "error",
+                            "message": f"Sheet '{sheet_name}' 不存在。可用Sheet: {sheets}",
+                            "column": "Sheet"
+                        })
+                    else:
+                        # 5. 检查列名是否存在
+                        from src.excel_reader import read_data_file
+                        try:
+                            df = read_data_file(file_path, sheet_name)
+                            if df is not None and not df.empty:
+                                all_cols = list(df.columns)
+                                
+                                # 检查行维度
+                                row_dims = [d.strip() for d in 行维度_str.split(",") if d.strip()]
+                                missing_row = [d for d in row_dims if d not in all_cols]
+                                if missing_row:
+                                    results.append({
+                                        "task_seq": seq,
+                                        "level": "error",
+                                        "message": f"行维度列不存在: {missing_row}",
+                                        "column": "行维度"
+                                    })
+                                
+                                # 检查列维度
+                                col_dims = [d.strip() for d in 列维度_str.split(",") if d.strip()]
+                                missing_col = [d for d in col_dims if d not in all_cols]
+                                if missing_col:
+                                    results.append({
+                                        "task_seq": seq,
+                                        "level": "error",
+                                        "message": f"列维度列不存在: {missing_col}",
+                                        "column": "列维度"
+                                    })
+                                
+                                # 检查值字段
+                                value_cols = [v.strip() for v in 值字段_str.split(",") if v.strip()]
+                                missing_val = [v for v in value_cols if v not in all_cols]
+                                if missing_val:
+                                    results.append({
+                                        "task_seq": seq,
+                                        "level": "error",
+                                        "message": f"值字段列不存在: {missing_val}",
+                                        "column": "值字段"
+                                    })
+                        except Exception as e:
+                            results.append({
+                                "task_seq": seq,
+                                "level": "warning",
+                                "message": f"读取数据失败: {str(e)}",
+                                "column": "数据源"
+                            })
+        
+        # 6. 值映射数量检查
+        val_map_str = task.get("值映射", "")
+        val_maps = [m.strip() for m in val_map_str.split(",") if m.strip()]
+        value_cols = [v.strip() for v in 值字段_str.split(",") if v.strip()]
+        if val_maps and len(val_maps) != len(value_cols):
+            results.append({
+                "task_seq": seq,
+                "level": "warning",
+                "message": f"值映射数量({len(val_maps)})与值字段数量({len(value_cols)})不一致",
+                "column": "值映射"
+            })
+    
+    return results
+
+
+def print_validation_results(results):
+    """格式化打印校验结果"""
+    if not results:
+        print("[校验] 全部通过 ✓")
+        return True
+    
+    error_count = sum(1 for r in results if r["level"] == "error")
+    warning_count = sum(1 for r in results if r["level"] == "warning")
+    info_count = sum(1 for r in results if r["level"] == "info")
+    
+    print(f"\n{'='*60}")
+    print(f"  配置校验结果")
+    print(f"{'='*60}")
+    print(f"  错误: {error_count}  |  警告: {warning_count}  |  提示: {info_count}")
+    print(f"{'='*60}")
+    
+    for r in results:
+        icon = {"error": "✗", "warning": "⚠", "info": "ℹ"}.get(r["level"], " ")
+        col_info = f" [{r['column']}]" if r.get("column") else ""
+        print(f"  {icon} [任务{r['task_seq']}{col_info}: {r['message']}")
+    
+    print(f"{'='*60}")
+    
+    if error_count > 0:
+        print(f"  ❌ 发现 {error_count} 个错误，请修正后再执行")
+    elif warning_count > 0:
+        print(f"  ⚠  发现 {warning_count} 个警告，可继续执行但可能影响结果")
+    print()
+    
+    return error_count == 0
+
+
 def run_analysis(task, config_dir):
     序号 = task.get("序号", "?")
     data_source = task.get("数据源", "")
@@ -315,6 +687,16 @@ def run_analysis(task, config_dir):
     df = _load_joined_dataframe(config_dir, data_source, sheet_name)
     if df is None or df.empty:
         return None, f"[任务{序号}] 数据为空或文件不存在: {data_source}"
+
+    # 应用过滤条件
+    filter_expr = task.get("过滤条件", "")
+    if filter_expr:
+        try:
+            df = _apply_filter(df, filter_expr)
+            if df.empty:
+                return None, f"[任务{序号}] 过滤后数据为空，过滤条件: {filter_expr}"
+        except Exception as e:
+            return None, f"[任务{序号}] 过滤条件执行失败: {str(e)}"
 
     mapping_str = task.get("映射表", "")
     row_map_str = task.get("行映射", "")

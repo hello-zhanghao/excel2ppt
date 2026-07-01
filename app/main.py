@@ -16,7 +16,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.4.0"
+__VERSION__ = "2.5.0"
 __UPDATE_DATE__ = "2026-07-01"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -219,8 +219,11 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None):
     print(f"   提示: 双击PPT中的图表可查看和编辑数据")
 
 
-def _run_pivot_mode(config_path, output_path=None):
-    from src.pivot_analyzer import read_pivot_config, run_analysis, _auto_find_data_files
+def _run_pivot_mode(config_path, output_path=None, validate_only=False):
+    from src.pivot_analyzer import (
+        read_pivot_config, run_analysis, _auto_find_data_files,
+        validate_pivot_config, print_validation_results
+    )
     from src.excel_writer import write_results
 
     config_dir = os.path.dirname(config_path)
@@ -235,6 +238,19 @@ def _run_pivot_mode(config_path, output_path=None):
     data_files = _auto_find_data_files(config_dir, config_path)
     if data_files:
         print(f"    → 找到数据文件: {[os.path.basename(f) for f in data_files]}")
+
+    # 配置校验
+    print(f"[Pivot/校验] 检查配置...")
+    val_results = validate_pivot_config(tasks, config_dir)
+    all_ok = print_validation_results(val_results)
+    
+    if validate_only:
+        print("[校验] 仅校验模式，不执行分析")
+        return None
+    
+    if not all_ok:
+        print("[错误] 配置校验未通过，请修正后再执行")
+        sys.exit(1)
 
     print(f"[Pivot/2] 执行透视分析...")
     results = []
@@ -643,10 +659,12 @@ def main():
         ppt_p.add_argument("folder_or_config", nargs="?", default=None)
         ppt_p.add_argument("-c", "--config", default=None)
         ppt_p.add_argument("-o", "--output", default=None)
+        ppt_p.add_argument("--check", action="store_true", help="仅校验配置，不执行")
         pivot_p = sub.add_parser("pivot", help="透视分析")
         pivot_p.add_argument("folder_or_config", nargs="?", default=None)
         pivot_p.add_argument("-c", "--config", default=None)
         pivot_p.add_argument("-o", "--output", default=None)
+        pivot_p.add_argument("--check", action="store_true", help="仅校验配置，不执行")
         parser.parse_args()
         return
 
@@ -654,6 +672,7 @@ def main():
     legacy.add_argument("folder_or_config", nargs="?", default=None, help="文件夹路径或配置文件")
     legacy.add_argument("-c", "--config", default=None, help="配置文件路径")
     legacy.add_argument("-o", "--output", default=None, help="输出路径")
+    legacy.add_argument("--check", action="store_true", help="仅校验配置，不执行")
 
     if mode == "auto":
         args = legacy.parse_args(raw_args)
@@ -672,9 +691,10 @@ def main():
                 os.makedirs(out_dir, exist_ok=True)
                 ppt_out = args.output
                 pivot_out = args.output.replace(".pptx", ".xlsx").replace("_报告_", "_分析_")
-            _run_pivot_mode(config_path, pivot_out)
-            print()
-            _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out)
+            _run_pivot_mode(config_path, pivot_out, validate_only=getattr(args, 'check', False))
+            if not getattr(args, 'check', False):
+                print()
+                _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out)
             return
         print(f"[信息] 自动检测配置类型: {detected}")
         mode = detected
@@ -683,10 +703,13 @@ def main():
 
     config_path = _resolve_config_path(args)
     output_path = args.output
+    validate_only = getattr(args, 'check', False)
 
     if mode == "pivot":
-        _run_pivot_mode(config_path, output_path)
+        _run_pivot_mode(config_path, output_path, validate_only=validate_only)
     else:
+        if validate_only:
+            print("[信息] PPT模式校验功能暂未实现，将直接执行")
         _run_ppt_mode(config_path, output_path)
 
 

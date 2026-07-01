@@ -79,7 +79,7 @@
 <div class="sidebar" id="sidebar">
 <div class="sidebar-header">
 <h3>&#x1F4CA; 统一分析工具</h3>
-<div class="ver">操作指南 v2.2.0</div>
+<div class="ver">操作指南 v2.5.0</div>
 </div>
 <nav class="sidebar-nav">
 <div class="nav-section-title">入门</div>
@@ -101,6 +101,8 @@
 <a class="nav-link sub" href="#pivot-binning">分箱</a>
 <a class="nav-link sub" href="#pivot-calc">值后处理</a>
 <a class="nav-link sub" href="#pivot-join">多表关联</a>
+<a class="nav-link sub" href="#pivot-filter">过滤条件</a>
+<a class="nav-link sub" href="#pivot-validate">配置校验</a>
 
 <div class="nav-section-title">其他</div>
 <a class="nav-link" href="#cli">命令行用法</a>
@@ -311,11 +313,11 @@ Y轴范围: 基站数</pre>
 
 <h2 id="pivot-config" style="color:var(--accent2);border-bottom-color:var(--accent2);">四、透视分析配置列说明</h2>
 <div class="card">
-<p>Sheet 名 <code>透视分析</code>，标题行首列为 <code>序号</code>，系统自动识别。共 <b>13 列</b>：</p>
+<p>Sheet 名 <code>透视分析</code>，标题行首列为 <code>序号</code>，系统自动识别。共 <b>15 列</b>：</p>
 <table>
 <tr><th style="width:10%">列名</th><th style="width:12%">必填</th><th>说明</th></tr>
 <tr><td><b>序号</b></td><td>&mdash;</td><td>任务序号，相同序号+同结果Sheet可合并</td></tr>
-<tr><td><b>数据源</b></td><td>&#x2714;</td><td>文件名（Excel 或 CSV），或 JOIN 表达式</td></tr>
+<tr><td><b>数据源</b></td><td>&#x2714;</td><td>文件名（Excel 或 CSV），或 JOIN 表达式，或 <code>{pivot}</code> 引用透视结果</td></tr>
 <tr><td><b>Sheet</b></td><td>&#x2714;</td><td>数据所在的 Sheet 名称（CSV 文件可填任意值）</td></tr>
 <tr><td><b>行维度</b></td><td>&#x2714;</td><td>逗号分隔，如 <code>频段,带宽</code></td></tr>
 <tr><td><b>列维度</b></td><td>&mdash;</td><td>交叉透视的列维度（二维交叉表）</td></tr>
@@ -328,6 +330,7 @@ Y轴范围: 基站数</pre>
 <tr><td><b>分箱</b></td><td>&mdash;</td><td>见「分箱」</td></tr>
 <tr><td><b>值计算</b></td><td>&mdash;</td><td>见「值后处理」</td></tr>
 <tr><td><b>是否计算</b></td><td>&mdash;</td><td>控制该行是否执行计算。填 <code>否</code>/<code>0</code>/<code>跳过</code>/<code>skip</code> 则跳过；填 <code>是</code> 或留空则计算（默认）</td></tr>
+<tr><td><b>过滤条件</b></td><td>&mdash;</td><td>数据过滤表达式，见「过滤条件」</td></tr>
 </table>
 <div class="callout callout-info">
 <strong>数据源支持：</strong>透视分析支持 Excel(.xlsx) 和 CSV 文件作为数据源。系统会自动识别文件类型：
@@ -390,21 +393,24 @@ Y轴范围: 基站数</pre>
 </div>
 </div>
 
-<h3 id="pivot-pct">4.3 占比（pct）</h3>
+<h3 id="pivot-pct">4.3 占比（pct / count_pct）</h3>
 <div class="card">
-<p>聚合方式填 <code>占比</code> 或 <code>pct</code>，自动归一化（合计=100%）。</p>
+<p>聚合方式支持两种占比计算：</p>
 <div class="grid-2" style="margin-top:12px">
 <div>
-<div class="card-header">无列维度</div>
-<table><tr><th>行维度</th><th>值</th><th>聚合</th></tr><tr><td>频段</td><td>基站数</td><td>占比</td></tr></table>
-<p style="margin-top:8px;font-size:13px">&rarr; n78=43.36%，n79=14.80%...</p>
+<div class="card-header"><span class="tag tag-green">数值占比</span> <code>占比</code> / <code>pct</code></div>
+<p style="font-size:13px">= sum(值) / sum(所有值)</p>
+<table><tr><th>行维度</th><th>值</th><th>聚合</th></tr><tr><td>频段</td><td>上行PRB利用率</td><td>占比</td></tr></table>
+<p style="margin-top:8px;font-size:13px">&rarr; 各频段利用率之和占总体利用率的百分比</p>
 </div>
 <div>
-<div class="card-header">有列维度（交叉表）</div>
-<table><tr><th>行</th><th>列</th><th>值</th><th>聚合</th></tr><tr><td>频段</td><td>带宽</td><td>用户数</td><td>占比</td></tr></table>
-<p style="margin-top:8px;font-size:13px">&rarr; 每单元格 = 该组合占全部总量的比例</p>
+<div class="card-header"><span class="tag tag-blue">计数占比</span> <code>计数占比</code> / <code>count_pct</code></div>
+<p style="font-size:13px">= count(行) / count(所有行)</p>
+<table><tr><th>行维度</th><th>值</th><th>聚合</th></tr><tr><td>频段</td><td>上行PRB利用率</td><td>计数占比</td></tr></table>
+<p style="margin-top:8px;font-size:13px">&rarr; 各频段数据行数占总行数的百分比</p>
 </div>
 </div>
+<div class="callout callout-info" style="margin-top:12px"><b>提示：</b>两种占比也可以与 <code>过滤条件</code> 配合使用，先筛选再计算占比。例如只统计 n78 频段各地区的数据行数占比。</div>
 </div>
 
 <h3 id="pivot-binning">4.4 分箱（连续值离散化）</h3>
@@ -463,6 +469,86 @@ Y轴范围: 基站数</pre>
 <p style="margin-top:8px;font-size:13px">关联后的数据按你配置的行/列/值维度做透视，和普通单表完全一致。</p>
 </div>
 
+<h3 id="pivot-filter">4.7 过滤条件</h3>
+<div class="card">
+<p>在 <b>「过滤条件」</b>列填写表达式，在透视聚合<b>之前</b>对原始数据进行筛选。系统优先使用 pandas <code>query()</code> 语法，若失败则使用内置解析器。</p>
+
+<div class="card-header" style="margin-top:14px">支持的运算符</div>
+<table>
+<tr><th style="width:18%">运算符</th><th>说明</th><th>示例</th></tr>
+<tr><td><code>=</code></td><td>等于</td><td><code>频段='n78'</code></td></tr>
+<tr><td><code>!=</code></td><td>不等于</td><td><code>频段!='n41'</code></td></tr>
+<tr><td><code>&gt;</code> / <code>&gt;=</code></td><td>大于 / 大于等于</td><td><code>上行PRB利用率>60</code></td></tr>
+<tr><td><code>&lt;</code> / <code>&lt;=</code></td><td>小于 / 小于等于</td><td><code>下行速率<=100</code></td></tr>
+<tr><td><code>in ()</code></td><td>属于集合</td><td><code>地区 in ('北京','上海','广州')</code></td></tr>
+<tr><td><code>包含</code></td><td>字符串包含</td><td><code>小区名称包含'城区'</code></td></tr>
+</table>
+
+<div class="card-header" style="margin-top:14px">多条件组合</div>
+<table>
+<tr><th style="width:22%">连接词</th><th>说明</th><th>示例</th></tr>
+<tr><td><code>AND</code></td><td>同时满足</td><td><code>频段='n78' AND 上行PRB利用率>60</code></td></tr>
+<tr><td><code>OR</code></td><td>满足其一</td><td><code>地区 in ('北京','上海') OR 频段='n41'</code></td></tr>
+<tr><td><code>()</code></td><td>括号分组</td><td><code>(频段='n78' AND 上行PRB利用率>60) OR 地区='北京'</code></td></tr>
+</table>
+
+<div class="card-header" style="margin-top:14px">完整示例</div>
+<pre># 只分析 n78 频段中利用率超过 60% 的数据
+频段='n78' AND 上行PRB利用率>60
+
+# 分析北京或上海，或 n41 频段的数据
+地区 in ('北京','上海') OR 频段='n41'
+
+# 名称包含"城区"且下行速率低于 100 的记录
+小区名称包含'城区' AND 下行速率<100</pre>
+
+<div class="callout callout-info" style="margin-top:12px">
+<b>提示：</b>
+<ul style="margin-top:6px;">
+<li>字符串值需要用英文单引号或双引号包裹：<code>频段='n78'</code></li>
+<li>中文引号（<code>''</code>）会自动转换为英文引号</li>
+<li>数值比较不需要引号：<code>上行PRB利用率>60</code></li>
+<li>过滤在聚合前执行，可配合占比计算实现「先筛选再统计占比」</li>
+<li>若过滤后数据为空，任务会报错跳过</li>
+</ul>
+</div>
+</div>
+
+<h3 id="pivot-validate">4.8 配置校验</h3>
+<div class="card">
+<p>执行透视分析前，系统自动校验配置项，提前发现错误。也可使用 <code>--check</code> 参数仅校验不执行。</p>
+
+<div class="card-header" style="margin-top:14px">校验项一览</div>
+<table>
+<tr><th style="width:8%">级别</th><th style="width:30%">校验内容</th><th>说明</th></tr>
+<tr><td><span class="tag tag-red">error</span></td><td>值字段为空</td><td>必须指定至少一个值字段</td></tr>
+<tr><td><span class="tag tag-red">error</span></td><td>聚合方式不支持</td><td>检查是否填写了合法的聚合函数名</td></tr>
+<tr><td><span class="tag tag-red">error</span></td><td>数据源文件不存在</td><td>指定的数据文件在目录中找不到</td></tr>
+<tr><td><span class="tag tag-red">error</span></td><td>Sheet 不存在</td><td>数据文件中没有指定的 Sheet</td></tr>
+<tr><td><span class="tag tag-red">error</span></td><td>列名不存在</td><td>行维度 / 列维度 / 值字段中的列在数据中找不到</td></tr>
+<tr><td><span class="tag tag-green">warning</span></td><td>行维度和列维度都为空</td><td>将生成单行汇总，可能非预期</td></tr>
+<tr><td><span class="tag tag-green">warning</span></td><td>值映射数量不一致</td><td>值映射数与值字段数不匹配</td></tr>
+<tr><td><span class="tag tag-blue">info</span></td><td>已设置为不计算</td><td>「是否计算」列为否，该任务将被跳过</td></tr>
+</table>
+
+<div class="card-header" style="margin-top:14px">使用方式</div>
+<pre># 仅校验配置（不执行分析）
+python app/main.py pivot 路径/文件夹 --check
+
+# 正常执行时自动校验（有 error 则中止）
+python app/main.py pivot 路径/文件夹</pre>
+
+<div class="callout callout-info" style="margin-top:12px">
+<b>校验规则：</b>
+<ul style="margin-top:6px;">
+<li><b>error</b>（错误）：必须修正才能继续执行</li>
+<li><b>warning</b>（警告）：可继续执行，但可能影响结果</li>
+<li><b>info</b>（提示）：仅供了解，不影响执行</li>
+<li>设置「是否计算」为否的任务仅产生 info 提示，不进行其他校验</li>
+</ul>
+</div>
+</div>
+
 <hr class="divider">
 
 <h2 id="cli">五、命令行用法</h2>
@@ -478,7 +564,10 @@ python app/main.py 路径/项目配置.xlsx
 python app/main.py ppt 路径/文件夹
 
 # 仅执行透视分析
-python app/main.py pivot 路径/文件夹</pre>
+python app/main.py pivot 路径/文件夹
+
+# 仅校验透视分析配置（不执行）
+python app/main.py pivot 路径/文件夹 --check</pre>
 <p style="color:var(--muted);margin-top:8px">输出文件保存在 <code>output_时间戳/</code> 子目录。PPT 为 <code>.pptx</code>，双击图表可查看和编辑原生数据。</p>
 </div>
 
