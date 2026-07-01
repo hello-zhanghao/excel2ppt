@@ -57,9 +57,9 @@ def read_pivot_config(config_path, sheet_name=None):
         task["备注"] = str(item.get("备注", "")).strip() if item.get("备注") else ""
         task["行映射"] = str(item.get("行映射", "")).strip() if item.get("行映射") else (str(item.get("行维度映射", "")).strip() if item.get("行维度映射") else str(item.get("映射表", "")).strip() if item.get("映射表") else "")
         task["列映射"] = str(item.get("列映射", "")).strip() if item.get("列映射") else (str(item.get("列维度映射", "")).strip() if item.get("列维度映射") else "")
-        task["值映射"] = str(item.get("值映射", "")).strip() if item.get("值映射") else (str(item.get("值字段映射", "")).strip() if item.get("值字段映射") else "")
-        task["分箱"] = str(item.get("分箱", "")).strip() if item.get("分箱") else ""
-        task["值计算"] = str(item.get("值计算", "")).strip() if item.get("值计算") else ""
+        task["值映射"] = str(item.get("值映射", "")).strip().replace("，", ",") if item.get("值映射") else (str(item.get("值字段映射", "")).strip().replace("，", ",") if item.get("值字段映射") else "")
+        task["分箱"] = str(item.get("分箱", "")).strip().replace("，", ",") if item.get("分箱") else ""
+        task["值计算"] = str(item.get("值计算", "")).strip().replace("，", ",") if item.get("值计算") else ""
         task["是否计算"] = str(item.get("是否计算", "是")).strip() if item.get("是否计算") else "是"
         task["过滤条件"] = str(item.get("过滤条件", "")).strip() if item.get("过滤条件") else ""
 
