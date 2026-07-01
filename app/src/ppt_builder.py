@@ -401,7 +401,16 @@ def _add_combo_chart(slide, chart_info, chart_type, title, categories, values, c
         type_map.append("column")
 
     chart_data = CategoryChartData()
-    chart_data.categories = [str(c) for c in categories]
+    # 检测层级X轴：categories为 [(parent, [(child, {...}), ...]), ...]
+    if categories and isinstance(categories[0], (tuple, list)) and len(categories[0]) == 2 \
+            and isinstance(categories[0][1], list):
+        cats = chart_data.categories
+        for parent, children in categories:
+            cat = cats.add_category(str(parent))
+            for child_label, _child_data in children:
+                cat.add_sub_category(str(child_label))
+    else:
+        chart_data.categories = [str(c) for c in categories]
     for s_name, s_vals in series_list:
         chart_data.add_series(s_name, s_vals)
 
