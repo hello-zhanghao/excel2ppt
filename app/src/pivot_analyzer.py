@@ -741,7 +741,7 @@ def run_analysis(task, config_dir):
 
     for col in 值字段:
         af_for_col = _get_agg_for_col(col, 聚合函数, 值字段)
-        if af_for_col not in ("count", "nunique"):
+        if af_for_col not in ("count", "nunique", "pct", "count_pct"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df = df.dropna(subset=值字段, how="all")
@@ -892,7 +892,7 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
                 tmp_col = f"__pct_{tmp_col_counter}__"
                 tmp_col_counter += 1
                 pct_tmp_cols[tmp_col] = vcol
-                field_funcs[tmp_col] = ["sum"]
+                field_funcs[tmp_col] = ["sum"] if pd.api.types.is_numeric_dtype(df[vcol]) else ["count"]
                 has_sum_pct = True
             elif a_mapped == "count_pct":
                 tmp_col = f"__cntpct_{tmp_col_counter}__"
