@@ -112,6 +112,26 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.8.0 (2026-07-02)
+
+**🐛 修复**
+- 修复纯 line 图在 Office 中"文件损坏"无法显示：数据标签位置 `OUTSIDE_END` 对 line/scatter/area 不支持，改用 `CENTER`
+- 修复 `series.marker.style = 8` 用整数赋值，改为 `XL_MARKER_STYLE.CIRCLE` 枚举
+- 修复 `chart_map` 用图表标题作 key 导致同名图表被覆盖：改为 list 存储
+- 修复 `ppt` 子命令无法引用透视结果：新增 `--pivot-file` 参数
+- 修复版本号不一致（main.py 中 2.5.0 与文档 2.7.0 不同步）
+- 修复地图图片临时文件 `_ppt_map_*.png` 从不清理：改用 BytesIO 流直接插入
+- 修复 OOXML 异常被静默 `pass` 吞没：改为打印警告便于诊断
+- 修复结论模板多系列只取第一个系列统计：合并所有系列值
+- 修复 `_compute_stats` 遇非数值数据抛 TypeError：过滤无法转 float 的值
+- 修复层级图判断用 `_hierarchical={}` 隐式标志：改为显式 `_is_hierarchical=True`
+
+**🔧 优化**
+- 消除跨模块私有成员导入：pivot_analyzer 新增公开 `find_data_files()`
+- `MSO_SHAPE` import 提到模块顶部
+- PPT 图表错误信息分类：区分 KeyError/Sheet不存在/列名匹配失败并给修复建议
+- 新增 PPT 配置 `--check` 校验功能：检查布局/图表类型/X-Y列名/Sheet存在性
+
 ### v2.7.0 (2026-07-01)
 
 **🐛 修复**

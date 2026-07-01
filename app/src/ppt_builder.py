@@ -6,7 +6,7 @@ from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.chart.data import CategoryChartData, XyChartData
-from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION, XL_LABEL_POSITION
+from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION, XL_LABEL_POSITION, XL_MARKER_STYLE
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.oxml.ns import qn, nsmap
 from lxml import etree
@@ -712,7 +712,7 @@ def _apply_series_color(chart, color_hex, chart_type, colors):
             if chart_type == "line":
                 series.format.line.color.rgb = s_color
                 series.format.line.width = Pt(2)
-                series.marker.style = 8
+                series.marker.style = XL_MARKER_STYLE.CIRCLE
                 series.marker.size = 6
                 series.marker.format.fill.solid()
                 series.marker.format.fill.fore_color.rgb = s_color
@@ -803,7 +803,11 @@ def _style_chart(chart, chart_type):
             else:
                 data_labels.show_value = True
                 data_labels.number_format = '0'
-                data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
+                # line/scatter/area 图表不支持 OUTSIDE_END，Office 会报文件损坏
+                if chart_type in ("line", "scatter", "area"):
+                    data_labels.position = XL_LABEL_POSITION.CENTER
+                else:
+                    data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
         except Exception:
             pass
     except Exception as e:
