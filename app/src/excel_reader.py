@@ -399,15 +399,9 @@ def _read_dataframe_columns(file_path, sheet_name, x_range, y_range):
     x_col_names = [cn.strip() for cn in str(x_range).split(",") if cn.strip()] if x_range else []
     y_col_names = [cn.strip() for cn in str(y_range).split(",") if cn.strip()] if y_range else []
     
-    # 查找匹配的列
-    x_cols = [c for c in df.columns if any(xn in c or c in xn for xn in x_col_names)] if x_col_names else []
-    y_cols = [c for c in df.columns if any(yn in c or c in yn for yn in y_col_names)] if y_col_names else []
-    
-    # 如果没有匹配，尝试直接使用列名
-    if not x_cols:
-        x_cols = [c for c in df.columns if c in x_col_names] if x_col_names else []
-    if not y_cols:
-        y_cols = [c for c in df.columns if c in y_col_names] if y_col_names else []
+    # 精确匹配列名
+    x_cols = [c for c in df.columns if c in x_col_names] if x_col_names else []
+    y_cols = [c for c in df.columns if c in y_col_names] if y_col_names else []
     
     if not x_cols:
         # 尝试使用第一个文本列作为 X 轴
@@ -663,17 +657,17 @@ def _read_grouped(excel_path, sheet_name, x_col_names, y_col_name):
 
 def _read_hierarchical_multi_y(excel_path, sheet_name, x_col_names, y_col_names):
     df = pd.read_excel(excel_path, sheet_name=sheet_name)
-    cat_col = _fuzzy_match_column(x_col_names[0], df.columns)
-    sub_col = _fuzzy_match_column(x_col_names[1], df.columns)
+    cat_col = _exact_match_column(x_col_names[0], df.columns)
+    sub_col = _exact_match_column(x_col_names[1], df.columns)
     if not cat_col or not sub_col:
         df = pd.read_excel(excel_path, sheet_name=sheet_name, header=1)
-        cat_col = _fuzzy_match_column(x_col_names[0], df.columns)
-        sub_col = _fuzzy_match_column(x_col_names[1], df.columns)
+        cat_col = _exact_match_column(x_col_names[0], df.columns)
+        sub_col = _exact_match_column(x_col_names[1], df.columns)
     if not cat_col or not sub_col:
         return [], {}
     matched_y = []
     for ycn in y_col_names:
-        m = _fuzzy_match_column(ycn, df.columns)
+        m = _exact_match_column(ycn, df.columns)
         matched_y.append(m if m else ycn)
     hierarchical = []
     y_values = {ycn: [] for ycn in y_col_names}
@@ -808,6 +802,15 @@ def _read_axis(excel_path, sheet_name, ref, is_x=False):
     return _read_range_by_columns(excel_path, sheet_name, ref_str, combine_multi_col=is_x)
 
 
+def _exact_match_column(cn, df_columns):
+    """精确匹配列名，找不到返回 None。"""
+    s = str(cn).strip()
+    for c in df_columns:
+        if s == str(c).strip():
+            return c
+    return None
+
+
 def _fuzzy_match_column(cn, df_columns):
     """模糊匹配列名，精确匹配优先于子串匹配。"""
     s = str(cn).strip()
@@ -849,7 +852,7 @@ def _read_range_by_columns(excel_path, sheet_name, col_names_str, combine_multi_
 
     available = []
     for cn in col_names:
-        matched = _fuzzy_match_column(cn, df.columns)
+        matched = _exact_match_column(cn, df.columns)
         if matched:
             available.append(matched)
 
@@ -857,7 +860,7 @@ def _read_range_by_columns(excel_path, sheet_name, col_names_str, combine_multi_
         df = pd.read_excel(excel_path, sheet_name=sheet_name, header=1)
         available = []
         for cn in col_names:
-            matched = _fuzzy_match_column(cn, df.columns)
+            matched = _exact_match_column(cn, df.columns)
             if matched:
                 available.append(matched)
 
@@ -870,7 +873,7 @@ def _read_range_by_columns(excel_path, sheet_name, col_names_str, combine_multi_
     if not combine_multi_col:
         series_cols = []
         for cn in col_names:
-            matched = _fuzzy_match_column(cn, df.columns)
+            matched = _exact_match_column(cn, df.columns)
             if matched and matched not in series_cols:
                 series_cols.append(matched)
         if len(series_cols) == 1:
@@ -886,14 +889,15 @@ def _read_range_by_columns(excel_path, sheet_name, col_names_str, combine_multi_
         parts = []
         all_none = True
         for cn in col_names:
-            matched = _fuzzy_match_column(cn, df.columns)
-            if matched:
-                val = row[matched]
-                if pd.notna(val):
-                    all_none = False
-                    parts.append(str(val))
-                else:
-                    parts.append("")
+            matched = _exact_match_column(cn, df.columns)
+            if not matched:
+                continue
+            val = row[matched]
+            if pd.notna(val):
+                all_none = False
+                parts.append(str(val))
+            else:
+                parts.append("")
         if not all_none:
             valid_parts = [p for p in parts if p != ""]
             combined.append(" - ".join(valid_parts))
