@@ -61,6 +61,15 @@
   .dl-btn-alt { background:var(--accent2); }
   .dl-btn-alt:hover { background:#1a52d4; text-decoration:none; }
   .dl-note { margin-top:16px; font-size:12px; color:#90a4cc; }
+  .faq-item { margin-bottom:12px; border:1px solid rgba(0,0,0,.1); border-radius:8px; overflow:hidden; }
+  .faq-item summary { padding:12px 16px; cursor:pointer; font-size:14px; background:#fafafa; color:#333; list-style:none; display:flex; align-items:center; gap:8px; }
+  .faq-item summary::-webkit-details-marker { display:none; }
+  .faq-item summary::before { content:"▶"; font-size:10px; transition:transform .2s; }
+  .faq-item[open] summary::before { transform:rotate(90deg); }
+  .faq-item[open] summary { background:#f0f0f0; }
+  .faq-item p, .faq-item ul, .faq-item pre { margin:12px 16px; font-size:13px; line-height:1.6; color:#444; }
+  .faq-item ul { padding-left:20px; }
+  .faq-item li { margin-bottom:4px; }
   @media (max-width:900px) { .sidebar { display:none; } .main { padding:16px; } .grid-2,.grid-3 { grid-template-columns:1fr; } }
 
 </style>
@@ -95,6 +104,7 @@
 
 <div class="nav-section-title">其他</div>
 <a class="nav-link" href="#cli">命令行用法</a>
+<a class="nav-link" href="#faq">常见问题</a>
 <a class="nav-link" href="#download">示例下载</a>
 </nav>
 </div>
@@ -460,6 +470,54 @@ python app/main.py ppt 路径/文件夹
 # 仅执行透视分析
 python app/main.py pivot 路径/文件夹</pre>
 <p style="color:var(--muted);margin-top:8px">输出文件保存在 <code>output_时间戳/</code> 子目录。PPT 为 <code>.pptx</code>，双击图表可查看和编辑原生数据。</p>
+</div>
+
+<div class="card" style="background:#fff7e6;border-color:#f5c842;margin-top:24px;">
+<h2 id="faq" style="color:#b37400;border-bottom-color:#b37400;">❓ 常见问题（FAQ）</h2>
+
+<details class="faq-item">
+<summary><b>命令行路径包含空格会报错吗？</b></summary>
+<p><b>GUI 模式</b>：完全没问题，通过对话框选择的路径会自动处理空格。<br>
+<b>命令行模式</b>：需要给路径加双引号，例如：</p>
+<pre>python app/main.py "F:\我的 文件夹"      # ✅ 正确
+python app/main.py F:\我的 文件夹        # ❌ 错误，空格会拆分参数</pre>
+<p>文件读取本身（pandas、openpyxl）完全支持空格路径。</p>
+</details>
+
+<details class="faq-item">
+<summary><b>数据文件一定要和配置文件放同一个文件夹吗？</b></summary>
+<p>不一定。工具会自动在同一文件夹中查找第一个非配置 Excel/CSV 文件作为数据源。也可以在配置文件中通过「数据源」列指定其他文件的名称或路径。</p>
+</details>
+
+<details class="faq-item">
+<summary><b>透视分析和 PPT 报告可以同时生成吗？</b></summary>
+<p>可以。如果配置文件中同时包含「PPT配置」和「透视分析」两个 Sheet，工具会自动识别并依次生成 PPT 和 Excel 分析结果。</p>
+</details>
+
+<details class="faq-item">
+<summary><b>Excel 文件被占用导致读取失败？</b></summary>
+<p>请确保配置和数据 Excel 文件没有被其他程序（如 Excel 本身）打开状态。工具会尝试读取文件，文件被占用时可能报错。</p>
+</details>
+
+<details class="faq-item">
+<summary><b>CSV 文件不支持哪些功能？</b></summary>
+<p>CSV 文件不支持以下功能（Excel 支持）：</p>
+<ul>
+<li>「区块名」列（用于在同一 Sheet 中划分数据区域）</li>
+<li>多 Sheet 结构的数据文件</li>
+</ul>
+<p>其他功能（透视分析、PPT 图表生成）均支持。</p>
+</details>
+
+<details class="faq-item">
+<summary><b>图表数据源如何指定不同文件？</b></summary>
+<p>在 PPT 配置的「数据源」列填写文件名即可：</p>
+<ul>
+<li>带扩展名：<code>销售数据.csv</code></li>
+<li>不带扩展名：<code>销售数据</code>（系统自动匹配）</li>
+<li>模糊匹配：填写部分名称如 <code>指标</code>，系统按匹配度自动选择</li>
+</ul>
+</details>
 </div>
 
 <div class="download-section">
