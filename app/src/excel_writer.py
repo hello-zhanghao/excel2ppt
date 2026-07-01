@@ -29,6 +29,9 @@ def write_results(tasks, results, errors, output_path):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
+    if len(tasks) != len(results):
+        print(f"    [警告] 任务数({len(tasks)})与结果数({len(results)})不一致，取较小值对齐")
+
     groups = {}
     for task, result in zip(tasks, results):
         if result is None:
@@ -83,6 +86,8 @@ def _write_multi_result_sheet(wb, sheet_name, group_items):
 
         if len(items) > 1:
             merged_df = _merge_same_dim_results(items, row_dims)
+            if merged_df is None:
+                continue
             title = _get_block_title(items[0][0])
             _write_block_title(ws, title, current_row, len(merged_df.columns))
             current_row += 1

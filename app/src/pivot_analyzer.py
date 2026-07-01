@@ -345,7 +345,8 @@ def _simple_filter(df, expr):
             if result is None:
                 result = sub
             else:
-                result = pd.concat([result, sub]).drop_duplicates()
+                result = pd.concat([result, sub])
+                result = result[~result.index.duplicated(keep='first')]
         return result if result is not None else df
     
     # 按 AND 拆分
@@ -1145,11 +1146,6 @@ def _apply_mapping(df, col_map, val_map):
                     break
                 # 匹配 "原列名_聚合后缀" 格式（如 "销售额_求和" -> "新名称_求和"）
                 if c.startswith(src + "_"):
-                    suffix = c[len(src):]  # 取 "_求和" 部分
-                    rename[c] = dst + suffix
-                    break
-                # 部分匹配
-                if c.startswith(src):
                     suffix = c[len(src):]
                     rename[c] = dst + suffix
                     break

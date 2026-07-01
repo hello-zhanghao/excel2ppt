@@ -470,6 +470,9 @@ def _read_with_block_name(excel_path, sheet_name, block_name, x_range, y_range):
 
     x_cols = [header_map[cn] for cn in x_col_names if cn in header_map]
     y_cols = [header_map[cn] for cn in y_col_names if cn in header_map]
+    missing_y = [cn for cn in y_col_names if cn not in header_map]
+    if missing_y:
+        print(f"    [警告] 区块数据中未找到以下Y轴列: {missing_y}")
 
     if not x_cols:
         wb.close()
@@ -746,11 +749,18 @@ def _read_hierarchical_from_ws(ws, header_row, max_row, max_col, x_cols, y_col, 
 
 
 def _find_block_name_row(ws, max_row, max_col, block_name):
+    """查找区块名所在行，使用子串匹配但只在首列查找精确匹配。"""
+    bn = block_name.strip().lower()
     for r in range(1, max_row + 1):
-        for c in range(1, max_col + 1):
-            cell = ws.cell(row=r, column=c)
-            if cell.value and block_name in str(cell.value).strip():
-                return r
+        cell_val = ws.cell(row=r, column=1).value
+        if cell_val and bn == str(cell_val).strip().lower():
+            return r
+    if not bn:
+        return None
+    for r in range(1, max_row + 1):
+        cell_val = ws.cell(row=r, column=1).value
+        if cell_val and bn in str(cell_val).strip().lower():
+            return r
     return None
 
 
@@ -779,6 +789,21 @@ def _read_axis(excel_path, sheet_name, ref, is_x=False):
     return _read_range_by_columns(excel_path, sheet_name, ref_str, combine_multi_col=is_x)
 
 
+def _fuzzy_match_column(cn, df_columns):
+    """模糊匹配列名，精确匹配优先于子串匹配。"""
+    s = str(cn).strip()
+    for c in df_columns:
+        if s == str(c).strip():
+            return c
+    for c in df_columns:
+        if s in str(c):
+            return c
+    for c in df_columns:
+        if str(c).strip() in s:
+            return c
+    return None
+
+
 def _read_range_by_columns(excel_path, sheet_name, col_names_str, combine_multi_col=False):
     col_names = [c.strip() for c in str(col_names_str).split(",") if c.strip()]
     if not col_names:
@@ -788,19 +813,17 @@ def _read_range_by_columns(excel_path, sheet_name, col_names_str, combine_multi_
 
     available = []
     for cn in col_names:
-        for c in df.columns:
-            if cn == str(c).strip() or cn in str(c) or str(c).strip() in cn:
-                available.append(c)
-                break
+        matched = _fuzzy_match_column(cn, df.columns)
+        if matched:
+            available.append(matched)
 
     if not available:
         df = pd.read_excel(excel_path, sheet_name=sheet_name, header=1)
         available = []
         for cn in col_names:
-            for c in df.columns:
-                if cn == str(c).strip() or cn in str(c) or str(c).strip() in cn:
-                    available.append(c)
-                    break
+            matched = _fuzzy_match_column(cn, df.columns)
+            if matched:
+                available.append(matched)
 
     if not available:
         return []
@@ -808,10 +831,9 @@ def _read_range_by_columns(excel_path, sheet_name, col_names_str, combine_multi_
     if len(available) == 1 or not combine_multi_col:
         series_cols = []
         for cn in col_names:
-            for c in df.columns:
-                if cn == str(c).strip() or cn in str(c) or str(c).strip() in cn:
-                    series_cols.append(c)
-                    break
+            matched = _fuzzy_match_column(cn, df.columns)
+            if matched:
+                series_cols.append(matched)
         if not combine_multi_col and len(series_cols) == 1:
             return df[series_cols[0]].dropna().tolist()
         if not combine_multi_col and len(series_cols) > 1:
@@ -825,10 +847,8 @@ def _read_range_by_columns(excel_path, sheet_name, col_names_str, combine_multi_
         parts = []
         all_none = True
         for cn in col_names:
-            matched = None
-            for c in df.columns:
-                if cn == str(c).strip() or cn in str(c) or str(c).strip() in cn:
-                    matched = c
+            matched = _fuzzy_match_column(cn, df.columns)
+            if matched:
                     break
             if matched:
                 val = row[matched]

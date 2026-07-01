@@ -689,8 +689,9 @@ def main():
             else:
                 out_dir = os.path.dirname(args.output) or "."
                 os.makedirs(out_dir, exist_ok=True)
-                ppt_out = args.output
-                pivot_out = args.output.replace(".pptx", ".xlsx").replace("_报告_", "_分析_")
+                base_name = os.path.basename(args.output).rsplit(".", 1)[0]
+                ppt_out = os.path.join(out_dir, f"{base_name}.pptx")
+                pivot_out = os.path.join(out_dir, f"{base_name}_分析.xlsx")
             _run_pivot_mode(config_path, pivot_out, validate_only=getattr(args, 'check', False))
             if not getattr(args, 'check', False):
                 print()
