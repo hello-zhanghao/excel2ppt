@@ -935,9 +935,9 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
     if has_sum_pct or has_count_pct:
         df = df.copy()
         for tmp_col, orig_col in pct_tmp_cols.items():
-            df[tmp_col] = df[orig_col]
+            df[tmp_col] = df[orig_col].astype(float)
         for tmp_col, orig_col in count_pct_tmp_cols.items():
-            df[tmp_col] = df[orig_col]
+            df[tmp_col] = df[orig_col].astype(float)
     
     for vcol, funcs in field_funcs.items():
         agg_dict[vcol] = funcs
@@ -952,22 +952,24 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
                 agg_part = str(col[1]).strip()
                 
                 if field_name in pct_tmp_cols and agg_part == 'sum':
-                    total = grouped.iloc[:, i].sum()
+                    total = grouped[col].sum()
+                    grouped[col] = grouped[col].astype(float)
                     if total != 0:
-                        grouped.iloc[:, i] = (grouped.iloc[:, i].astype(float) / total).round(4)
+                        grouped[col] = (grouped[col] / total).round(4)
                     else:
-                        grouped.iloc[:, i] = 0.0
+                        grouped[col] = 0.0
                 
                 elif field_name in count_pct_tmp_cols and agg_part == 'count':
-                    total = grouped.iloc[:, i].sum()
+                    total = grouped[col].sum()
+                    grouped[col] = grouped[col].astype(float)
                     if total != 0:
-                        grouped.iloc[:, i] = (grouped.iloc[:, i].astype(float) / total).round(4)
+                        grouped[col] = (grouped[col] / total).round(4)
                     else:
-                        grouped.iloc[:, i] = 0.0
+                        grouped[col] = 0.0
                 
                 elif field_name not in pct_tmp_cols and field_name not in count_pct_tmp_cols:
-                    if pd.api.types.is_numeric_dtype(grouped.iloc[:, i]):
-                        grouped.iloc[:, i] = grouped.iloc[:, i].round(2)
+                    if pd.api.types.is_numeric_dtype(grouped[col]):
+                        grouped[col] = grouped[col].round(2)
             elif col not in group_cols and pd.api.types.is_numeric_dtype(grouped[col]):
                 grouped[col] = grouped[col].round(2)
         
