@@ -16,7 +16,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.1.0"
+__VERSION__ = "2.3.0"
 __UPDATE_DATE__ = "2026-07-01"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -99,7 +99,11 @@ def _detect_mode(config_path):
     return "ppt"
 
 
-def _run_ppt_mode(config_path, output_path=None):
+def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None):
+    """
+    生成PPT。
+    :param pivot_data_file: 透视分析结果文件路径，用于 {pivot} 数据源引用
+    """
     from src.excel_reader import (
         read_config, read_data, read_geo_data, find_data_file, get_data_file_info
     )
@@ -112,6 +116,9 @@ def _run_ppt_mode(config_path, output_path=None):
     pages = config.get("pages", [])
     colors = config.get("colors", {})
     print(f"    → PPT页面: {len(pages)} 页")
+
+    if pivot_data_file:
+        print(f"    → 透视结果数据源: {os.path.basename(pivot_data_file)}")
 
     # 全局数据文件路径
     default_data_file = general.get("数据文件", general.get("excel_path", ""))
@@ -141,12 +148,22 @@ def _run_ppt_mode(config_path, output_path=None):
 
             # 查找数据文件：根据图表指定的数据源或全局默认
             if data_source:
-                file_path = find_data_file(data_source, config_dir)
-                if file_path:
-                    print(f"    [信息] [{page_title}] {chart_title} 使用数据源: {os.path.basename(file_path)}")
+                ds_lower = str(data_source).strip().lower()
+                # 支持 {pivot} / pivot / 透视结果 引用透视分析结果
+                if ds_lower in ("{pivot}", "pivot", "透视结果", "透视分析"):
+                    if pivot_data_file and os.path.exists(pivot_data_file):
+                        file_path = pivot_data_file
+                        print(f"    [信息] [{page_title}] {chart_title} 使用透视结果数据")
+                    else:
+                        print(f"    ! [{page_title}] {chart_title} 引用透视结果但未找到透视输出文件")
+                        continue
                 else:
-                    print(f"    ! [{page_title}] {chart_title} 数据源 '{data_source}' 未找到")
-                    continue
+                    file_path = find_data_file(data_source, config_dir)
+                    if file_path:
+                        print(f"    [信息] [{page_title}] {chart_title} 使用数据源: {os.path.basename(file_path)}")
+                    else:
+                        print(f"    ! [{page_title}] {chart_title} 数据源 '{data_source}' 未找到")
+                        continue
             else:
                 file_path = default_data_file
             
@@ -591,9 +608,9 @@ def _dispatch_from_gui(raw_args):
         base = os.path.basename(config_path).rsplit(".", 1)[0]
         ppt_out = os.path.join(out_dir, f"{base}_报告_{ts}.pptx")
         pivot_out = os.path.join(out_dir, f"{base}_分析_{ts}.xlsx")
-        _run_ppt_mode(config_path, ppt_out)
-        print()
         _run_pivot_mode(config_path, pivot_out)
+        print()
+        _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out)
         return
     print(f"[信息] 自动检测配置类型: {detected}")
     if detected == "pivot":
@@ -655,9 +672,9 @@ def main():
                 os.makedirs(out_dir, exist_ok=True)
                 ppt_out = args.output
                 pivot_out = args.output.replace(".pptx", ".xlsx").replace("_报告_", "_分析_")
-            _run_ppt_mode(config_path, ppt_out)
-            print()
             _run_pivot_mode(config_path, pivot_out)
+            print()
+            _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out)
             return
         print(f"[信息] 自动检测配置类型: {detected}")
         mode = detected

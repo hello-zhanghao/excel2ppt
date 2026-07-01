@@ -152,7 +152,7 @@
 <tr><td><b>布局</b></td><td>&mdash;</td><td><code>1图 / 2图上下 / 2图左右 / 4图 / 左图右文 / 上文下图</code></td></tr>
 <tr><td><b>图表类型</b></td><td>&mdash;</td><td>见下方「图表类型详解」</td></tr>
 <tr><td><b>数据Sheet</b></td><td>&#x2714;</td><td>数据所在的 Sheet 名称（CSV文件可填写任意值，会被忽略）</td></tr>
-<tr><td><b>数据源</b></td><td>&mdash;</td><td>数据文件名称，支持 Excel(.xlsx) 或 CSV 文件，系统按匹配度自动选择</td></tr>
+<tr><td><b>数据源</b></td><td>&mdash;</td><td>数据文件名称，支持 Excel(.xlsx) 或 CSV 文件，系统按匹配度自动选择。填 <code>{pivot}</code> 或 <code>透视结果</code> 可引用透视分析的输出结果</td></tr>
 <tr><td><b>X轴范围</b></td><td>&#x2714;</td><td>列名（<code>频段</code>）、多列（<code>频段,带宽</code>）或 Excel 范围（<code>A2:A15</code>）</td></tr>
 <tr><td><b>Y轴范围</b></td><td>&#x2714;</td><td>列名或逗号分隔多系列，也支持 Excel 范围</td></tr>
 <tr><td><b>图表标题</b></td><td>&mdash;</td><td>图表上方显示标题</td></tr>
@@ -167,6 +167,15 @@
 <li>填写文件名（不带扩展名）：系统自动匹配，如 <code>网络指标数据</code></li>
 <li>填写部分名称：系统按匹配度自动选择，如 <code>指标</code> 可能匹配到 <code>网络指标数据.xlsx</code></li>
 <li>不填写：继承上一行的数据源</li>
+</ul>
+</div>
+<div class="callout callout-tip">
+<strong>💡 引用透视分析结果：</strong>如果配置包含「透视分析」Sheet（综合配置），PPT 图表可以直接引用透视分析的输出结果作为数据源：
+<ul style="margin-top:8px;">
+<li>在「数据源」列填写 <code>{pivot}</code> 或 <code>透视结果</code> 或 <code>pivot</code></li>
+<li>在「数据Sheet」列填写透视分析任务中「结果Sheet」的名称</li>
+<li>执行顺序：系统会先执行所有透视分析任务，再生成 PPT，确保结果可用</li>
+<li>适用场景：需要先汇总/分组数据，再用汇总结果做 PPT 图表</li>
 </ul>
 </div>
 </div>
