@@ -26,8 +26,8 @@ dist/
 *.swo
 *~
 
-# 输出目录中的临时文件
-output_*/~$*
+# 输出目录
+output_*/
 
 # 系统文件
 Thumbs.db
