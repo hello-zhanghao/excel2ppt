@@ -111,8 +111,8 @@ def _write_multi_result_sheet(wb, sheet_name, group_items):
 
 def _get_block_title(task):
     """获取区块标题：优先用备注，否则用任务序号"""
-    remark = task.get("备注", "")
-    if remark and str(remark).strip():
+    remark = task.get("备注")
+    if remark is not None and str(remark).strip():
         return str(remark).strip()
     seq = task.get("序号", "?")
     return f"任务{seq}"
@@ -200,6 +200,9 @@ def _write_scalar_block(ws, task, result, remark, start_row):
         c2.border = THIN_BORDER
         row += 1
 def _safe_sheet_name(name):
+    if not name or not str(name).strip():
+        return "分析结果"
+    name = str(name)
     illegal = r"[]:*?/\\"
     for ch in illegal:
         name = name.replace(ch, "_")

@@ -237,7 +237,7 @@ def _find_or_get_sheet(wb, sheet_name, keywords):
         return wb[sheet_name]
     for name in wb.sheetnames:
         ws = wb[name]
-        row = [str(c.value).strip() if c.value else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
+        row = [str(c.value).strip() if c.value is not None else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
         if len(keywords & set(row)) >= 2:
             return ws
     return wb[wb.sheetnames[0]]
@@ -258,7 +258,7 @@ def _parse_config(ws):
     if header_idx is None:
         header_idx = 0
 
-    headers = [str(c).strip() if c else "" for c in all_rows[header_idx]]
+    headers = [str(c).strip() if c is not None else "" for c in all_rows[header_idx]]
 
     raw_rows = []
     for row in all_rows[header_idx + 1:]:
@@ -295,15 +295,15 @@ def _group_rows_to_pages(raw_rows):
                 pages.append(current_page)
             last_sheet = None
             last_data_source = None
-            page_title = str(row.get("页面标题", "")).strip() if row.get("页面标题") else ""
-            sub_title = str(row.get("副标题", "")).strip() if row.get("副标题") else ""
+            page_title = str(row.get("页面标题", "")).strip() if row.get("页面标题") is not None else ""
+            sub_title = str(row.get("副标题", "")).strip() if row.get("副标题") is not None else ""
             if sub_title:
                 page_title = page_title + "|" + sub_title if page_title else sub_title
             current_page = {
                 "页码": page_num,
                 "页面类型": str(row.get("页面类型", "内容")).strip() or "内容",
                 "页面标题": page_title,
-                "布局": str(row.get("布局", "")).strip() if row.get("布局") else "",
+                "布局": str(row.get("布局", "")).strip() if row.get("布局") is not None else "",
                 "charts": [],
             }
             current_page_num = page_num
@@ -333,11 +333,11 @@ def _group_rows_to_pages(raw_rows):
                 "图表类型": str(row.get("图表类型", "column")).strip() if row.get("图表类型") else "column",
                 "数据Sheet": sheet_val,
                 "数据源": data_source,
-                "X轴范围": str(row.get("X轴范围", row.get("X轴", ""))).strip() if (row.get("X轴范围") or row.get("X轴")) else "",
-                "Y轴范围": str(row.get("Y轴范围", row.get("Y轴", ""))).strip() if (row.get("Y轴范围") or row.get("Y轴")) else "",
-                "颜色": str(row.get("颜色", "")).strip() if row.get("颜色") else "",
-                "区块名": str(row.get("区块名", "")).strip() if row.get("区块名") else "",
-                "结论模板": str(row.get("结论模板", "")).strip() if row.get("结论模板") else "",
+                "X轴范围": str(row.get("X轴范围", row.get("X轴", ""))).strip() if (row.get("X轴范围") is not None or row.get("X轴") is not None) else "",
+                "Y轴范围": str(row.get("Y轴范围", row.get("Y轴", ""))).strip() if (row.get("Y轴范围") is not None or row.get("Y轴") is not None) else "",
+                "颜色": str(row.get("颜色", "")).strip() if row.get("颜色") is not None else "",
+                "区块名": str(row.get("区块名", "")).strip() if row.get("区块名") is not None else "",
+                "结论模板": str(row.get("结论模板", "")).strip() if row.get("结论模板") is not None else "",
             }
             current_page["charts"].append(chart_def)
 
@@ -360,16 +360,17 @@ def read_data(file_path, sheet_name, x_range, y_range, block_name=None):
     """
     x_col_names = [cn.strip() for cn in str(x_range).split(",") if cn.strip()] if x_range else []
     y_col_names = [cn.strip() for cn in str(y_range).split(",") if cn.strip()] if y_range else []
-    
-    # 判断文件类型
+
+    if not file_path:
+        print("    [警告] 数据文件路径为空")
+        return [], {}
+
     ext = os.path.splitext(str(file_path))[1].lower()
     is_csv = ext == ".csv"
-    
-    # CSV 文件不支持区块名读取，需要特殊处理
+
     if is_csv:
         if block_name and str(block_name).strip():
-            # CSV 文件忽略区块名，直接读取全部数据
-            pass
+            print(f"    [警告] CSV文件不支持区块名，将读取全量数据")
         return _read_dataframe_columns(file_path, sheet_name, x_range, y_range)
     
     # Excel 文件使用原有逻辑
@@ -458,12 +459,18 @@ def _read_with_block_name(excel_path, sheet_name, block_name, x_range, y_range):
         return [], []
 
     header_map = {}
-    for c in range(1, max_col + 1):
-        cell_val = ws.cell(row=header_row, column=c).value
-        if cell_val:
-            col_name = str(cell_val).strip()
-            if col_name not in header_map:
-                header_map[col_name] = c
+    for attempt in range(3):
+        hrow = header_row + attempt
+        if hrow > max_row:
+            break
+        for c in range(1, max_col + 1):
+            cell_val = ws.cell(row=hrow, column=c).value
+            if cell_val is not None and str(cell_val).strip():
+                col_name = str(cell_val).strip()
+                if col_name not in header_map:
+                    header_map[col_name] = c
+        if header_map:
+            break
 
     x_col_names = [cn.strip() for cn in str(x_range).split(",") if cn.strip()]
     y_col_names = [cn.strip() for cn in str(y_range).split(",") if cn.strip()]
@@ -586,7 +593,7 @@ def _read_grouped_from_ws(ws, header_row, max_row, max_col, x_cols, y_col, x_col
 
 
 def _read_grouped(excel_path, sheet_name, x_col_names, y_col_name):
-    df = pd.read_excel(excel_path, sheet_name=sheet_name)
+    df = pd.read_excel(excel_path, sheet_name=sheet_name) if not str(excel_path).lower().endswith('.csv') else pd.read_csv(excel_path)
 
     cat_col = x_col_names[0]
     group_col = x_col_names[1]
@@ -749,17 +756,17 @@ def _read_hierarchical_from_ws(ws, header_row, max_row, max_col, x_cols, y_col, 
 
 
 def _find_block_name_row(ws, max_row, max_col, block_name):
-    """查找区块名所在行，使用子串匹配但只在首列查找精确匹配。"""
+    """查找区块名所在行，首列精确匹配优先，再回退子串匹配。"""
     bn = block_name.strip().lower()
     for r in range(1, max_row + 1):
         cell_val = ws.cell(row=r, column=1).value
-        if cell_val and bn == str(cell_val).strip().lower():
+        if cell_val is not None and bn == str(cell_val).strip().lower():
             return r
     if not bn:
         return None
     for r in range(1, max_row + 1):
         cell_val = ws.cell(row=r, column=1).value
-        if cell_val and bn in str(cell_val).strip().lower():
+        if cell_val is not None and bn in str(cell_val).strip().lower():
             return r
     return None
 
@@ -931,7 +938,7 @@ def read_geo_data(excel_path, sheet_name, x_range, y_range):
     if not all_cols:
         return None
 
-    df = pd.read_excel(excel_path, sheet_name=sheet_name)
+    df = read_data_file(excel_path, sheet_name)
     available = [c for c in all_cols if c in df.columns]
     if not available:
         return None

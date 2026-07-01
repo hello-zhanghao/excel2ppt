@@ -31,7 +31,9 @@ def find_config_file(folder):
         name = os.path.basename(f)
         if "配置" in name or "config" in name.lower():
             return f
-    return xlsx_files[0]
+    if len(xlsx_files) == 1:
+        return xlsx_files[0]
+    return None
 
 
 def _auto_find_data_file(config_dir, config_path):
@@ -75,7 +77,11 @@ def _resolve_config_path(args):
 
 def _detect_mode(config_path):
     import openpyxl
-    wb = openpyxl.load_workbook(config_path, read_only=True)
+    try:
+        wb = openpyxl.load_workbook(config_path, read_only=True)
+    except Exception as e:
+        print(f"[错误] 无法读取配置文件: {e}")
+        sys.exit(1)
     ppt_keywords = {"页码", "页面类型", "页面标题", "图表类型"}
     pivot_keywords = {"数据源", "行维度", "列维度", "值字段", "聚合方式"}
     ppt_found = False
@@ -83,7 +89,7 @@ def _detect_mode(config_path):
     for name in wb.sheetnames:
         ws = wb[name]
         try:
-            row = [str(c.value).strip() if c.value else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
+            row = [str(c.value).strip() if c.value is not None else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
         except StopIteration:
             continue
         row_set = set(row)
@@ -96,7 +102,9 @@ def _detect_mode(config_path):
         return "all"
     if pivot_found:
         return "pivot"
-    return "ppt"
+    if ppt_found:
+        return "ppt"
+    return "unknown"
 
 
 def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None):
@@ -212,6 +220,8 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None):
         output_dir = os.path.dirname(output_path) or "."
         os.makedirs(output_dir, exist_ok=True)
 
+    if os.path.exists(output_path):
+        print(f"    [警告] 输出文件已存在，将被覆盖: {os.path.basename(output_path)}")
     print(f"[PPT/3] 生成PPT: {output_path}")
     build_ppt(config, chart_map, output_path)
     print(f"\n[OK] 完成！PPT已保存至: {output_path}")
@@ -303,6 +313,8 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False):
     else:
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
+    if os.path.exists(output_path):
+        print(f"    [警告] 输出文件已存在，将被覆盖: {os.path.basename(output_path)}")
     print(f"[Pivot/3] 输出结果: {output_path}")
     valid_tasks = [t for t, r in zip(tasks, results) if r is not None]
     write_results(valid_tasks, valid_results, errors, output_path)
@@ -629,6 +641,9 @@ def _dispatch_from_gui(raw_args):
         _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out)
         return
     print(f"[信息] 自动检测配置类型: {detected}")
+    if detected == "unknown":
+        print("[错误] 未识别的配置类型，请确认 Excel 包含正确的配置 Sheet")
+        sys.exit(1)
     if detected == "pivot":
         _run_pivot_mode(config_path, args.output)
     else:
@@ -698,6 +713,9 @@ def main():
                 _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out)
             return
         print(f"[信息] 自动检测配置类型: {detected}")
+        if detected == "unknown":
+            print("[错误] 未识别的配置类型，请确认 Excel 包含正确的配置 Sheet")
+            sys.exit(1)
         mode = detected
     else:
         args = legacy.parse_args(raw_args)

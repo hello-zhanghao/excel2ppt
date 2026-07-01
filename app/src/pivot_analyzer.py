@@ -48,7 +48,7 @@ def read_pivot_config(config_path, sheet_name=None):
         task = {}
         task["序号"] = item.get("序号", "")
         task["数据源"] = str(item.get("数据源", "")).strip() if item.get("数据源") else ""
-        task["sheet"] = str(item.get("Sheet", "")).strip() if item.get("Sheet") else "Sheet1"
+        task["sheet"] = str(item.get("Sheet", item.get("sheet", ""))).strip() if (item.get("Sheet") or item.get("sheet")) else "Sheet1"
         task["行维度"] = str(item.get("行维度", "")).strip() if item.get("行维度") else ""
         task["列维度"] = str(item.get("列维度", "")).strip() if item.get("列维度") else ""
         task["值字段"] = str(item.get("值字段", "")).strip() if item.get("值字段") else ""
@@ -340,7 +340,7 @@ def _simple_filter(df, expr):
         # OR 条件：合并各部分结果
         result = None
         for part in or_parts:
-            part = part.strip().strip("()")
+            part = _strip_brackets(part.strip())
             sub = _simple_filter(df, part)
             if result is None:
                 result = sub
@@ -354,12 +354,18 @@ def _simple_filter(df, expr):
     if len(and_parts) > 1:
         result = df
         for part in and_parts:
-            part = part.strip().strip("()")
+            part = _strip_brackets(part.strip())
             result = _simple_filter(result, part)
         return result
     
     # 单个条件
     return _parse_single_condition(df, expr)
+
+
+def _strip_brackets(s):
+    while s.startswith("(") and s.endswith(")"):
+        s = s[1:-1]
+    return s
 
 
 def _split_by_keyword(expr, keyword):
@@ -1150,9 +1156,10 @@ def _apply_mapping(df, col_map, val_map):
                     rename[c] = dst + suffix
                     break
     df = df.rename(columns=rename)
-    for col in df.columns:
-        if pd.api.types.is_string_dtype(df[col]) or pd.api.types.is_object_dtype(df[col]):
-            df[col] = df[col].astype(str).map(lambda x: val_map.get(x, x))
+    if val_map:
+        for col in df.columns:
+            if pd.api.types.is_string_dtype(df[col]) or pd.api.types.is_object_dtype(df[col]):
+                df[col] = df[col].astype(str).map(lambda x: val_map.get(x, x))
     return df
 
 
@@ -1226,6 +1233,9 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs):
                         df[col] = df[col] * factor
                     elif expr.startswith("/"):
                         divisor = float(expr[1:])
+                        if divisor == 0:
+                            print(f"    [警告] 值计算除数为0，跳过: {expr}")
+                            continue
                         df[col] = df[col] / divisor
                     elif expr.startswith("+"):
                         addend = float(expr[1:])
@@ -1240,6 +1250,6 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs):
 
 def _find_matching_calc(col, calc_map, value_cols):
     for vcol, expr in calc_map.items():
-        if vcol in col:
+        if col == vcol or col.startswith(vcol + "_"):
             return expr
     return None
