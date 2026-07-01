@@ -6,6 +6,11 @@ __pycache__/
 *.egg-info/
 *.spec.bak
 
+# 打包文件
+build/
+dist/
+*.spec
+
 # Office临时文件
 ~$*.xlsx
 ~$*.pptx
