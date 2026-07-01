@@ -10,6 +10,10 @@ HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center", wrap_text=T
 TOTAL_FONT = Font(name="Microsoft YaHei", bold=True, size=11)
 TOTAL_FILL = PatternFill(start_color="D9E2F3", end_color="D9E2F3", fill_type="solid")
 
+BLOCK_TITLE_FONT = Font(name="Microsoft YaHei", bold=True, size=11, color="FFFFFF")
+BLOCK_TITLE_FILL = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
+BLOCK_TITLE_ALIGNMENT = Alignment(horizontal="left", vertical="center", indent=1)
+
 DATA_FONT = Font(name="Microsoft YaHei", size=10)
 DATA_ALIGNMENT = Alignment(horizontal="center", vertical="center")
 
@@ -67,6 +71,9 @@ def _write_multi_result_sheet(wb, sheet_name, group_items):
             for task, result in items:
                 if current_row > 1:
                     current_row += 1
+                title = _get_block_title(task)
+                _write_block_title(ws, title, current_row, 2)
+                current_row += 1
                 _write_scalar_block(ws, task, result, task.get("备注", ""), current_row)
                 current_row = ws.max_row + 1
             continue
@@ -76,6 +83,9 @@ def _write_multi_result_sheet(wb, sheet_name, group_items):
 
         if len(items) > 1:
             merged_df = _merge_same_dim_results(items, row_dims)
+            title = _get_block_title(items[0][0])
+            _write_block_title(ws, title, current_row, len(merged_df.columns))
+            current_row += 1
             _write_df_block(ws, merged_df, current_row)
             current_row = ws.max_row + 1
         else:
@@ -83,12 +93,39 @@ def _write_multi_result_sheet(wb, sheet_name, group_items):
             for key, df in result.items():
                 if current_row > 1:
                     current_row += 1
+                title = _get_block_title(task)
+                _write_block_title(ws, title, current_row, len(df.columns))
+                current_row += 1
                 _write_df_block(ws, df, current_row)
                 current_row = ws.max_row + 1
 
     if ws.max_column and ws.max_row:
         _auto_fit_columns(ws)
         ws.freeze_panes = ws.cell(row=1, column=1)
+
+
+def _get_block_title(task):
+    """获取区块标题：优先用备注，否则用任务序号"""
+    remark = task.get("备注", "")
+    if remark and str(remark).strip():
+        return str(remark).strip()
+    seq = task.get("序号", "?")
+    return f"任务{seq}"
+
+
+def _write_block_title(ws, title, row, col_count):
+    """在指定行写入区块标题（合并单元格，深蓝底白字）"""
+    cell = ws.cell(row=row, column=1, value=title)
+    cell.font = BLOCK_TITLE_FONT
+    cell.fill = BLOCK_TITLE_FILL
+    cell.alignment = BLOCK_TITLE_ALIGNMENT
+    cell.border = THIN_BORDER
+    if col_count > 1:
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=col_count)
+    for ci in range(2, col_count + 1):
+        c = ws.cell(row=row, column=ci)
+        c.fill = BLOCK_TITLE_FILL
+        c.border = THIN_BORDER
 
 
 def _get_row_dims(task):
