@@ -781,18 +781,37 @@ def _read_axis(excel_path, sheet_name, ref, is_x=False):
 
 def _read_range_by_columns(excel_path, sheet_name, col_names_str, combine_multi_col=False):
     col_names = [c.strip() for c in str(col_names_str).split(",") if c.strip()]
+    if not col_names:
+        return []
 
     df = pd.read_excel(excel_path, sheet_name=sheet_name)
 
-    available = [c for c in df.columns if c in col_names]
+    available = []
+    for cn in col_names:
+        for c in df.columns:
+            if cn == str(c).strip() or cn in str(c) or str(c).strip() in cn:
+                available.append(c)
+                break
+
+    if not available:
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=1)
+        available = []
+        for cn in col_names:
+            for c in df.columns:
+                if cn == str(c).strip() or cn in str(c) or str(c).strip() in cn:
+                    available.append(c)
+                    break
+
     if not available:
         return []
 
     if len(available) == 1 or not combine_multi_col:
         series_cols = []
         for cn in col_names:
-            if cn in df.columns:
-                series_cols.append(cn)
+            for c in df.columns:
+                if cn == str(c).strip() or cn in str(c) or str(c).strip() in cn:
+                    series_cols.append(c)
+                    break
         if not combine_multi_col and len(series_cols) == 1:
             return df[series_cols[0]].dropna().tolist()
         if not combine_multi_col and len(series_cols) > 1:
@@ -806,8 +825,13 @@ def _read_range_by_columns(excel_path, sheet_name, col_names_str, combine_multi_
         parts = []
         all_none = True
         for cn in col_names:
-            if cn in df.columns:
-                val = row[cn]
+            matched = None
+            for c in df.columns:
+                if cn == str(c).strip() or cn in str(c) or str(c).strip() in cn:
+                    matched = c
+                    break
+            if matched:
+                val = row[matched]
                 if pd.notna(val):
                     all_none = False
                     parts.append(str(val))
