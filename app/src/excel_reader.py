@@ -378,7 +378,12 @@ def read_data(file_path, sheet_name, x_range, y_range, block_name=None):
         return _read_with_block_name(file_path, sheet_name, str(block_name).strip(), x_range, y_range)
 
     if len(x_col_names) >= 2:
-        return _read_hierarchical_multi_y(file_path, sheet_name, x_col_names, y_col_names)
+        result = _read_hierarchical_multi_y(file_path, sheet_name, x_col_names, y_col_names)
+        if result[0] or any(v for v in result[1].values()):
+            return result
+        x_values = _read_axis(file_path, sheet_name, x_range, is_x=True)
+        y_values = _read_axis(file_path, sheet_name, y_range, is_x=False)
+        return x_values, y_values
 
     x_values = _read_axis(file_path, sheet_name, x_range, is_x=True)
     y_values = _read_axis(file_path, sheet_name, y_range, is_x=False)
@@ -658,10 +663,18 @@ def _read_grouped(excel_path, sheet_name, x_col_names, y_col_name):
 
 def _read_hierarchical_multi_y(excel_path, sheet_name, x_col_names, y_col_names):
     df = pd.read_excel(excel_path, sheet_name=sheet_name)
-    cat_col = x_col_names[0]
-    sub_col = x_col_names[1]
-    if cat_col not in df.columns or sub_col not in df.columns:
+    cat_col = _fuzzy_match_column(x_col_names[0], df.columns)
+    sub_col = _fuzzy_match_column(x_col_names[1], df.columns)
+    if not cat_col or not sub_col:
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=1)
+        cat_col = _fuzzy_match_column(x_col_names[0], df.columns)
+        sub_col = _fuzzy_match_column(x_col_names[1], df.columns)
+    if not cat_col or not sub_col:
         return [], {}
+    matched_y = []
+    for ycn in y_col_names:
+        m = _fuzzy_match_column(ycn, df.columns)
+        matched_y.append(m if m else ycn)
     hierarchical = []
     y_values = {ycn: [] for ycn in y_col_names}
     current_parent = None
@@ -679,11 +692,10 @@ def _read_hierarchical_multi_y(excel_path, sheet_name, x_col_names, y_col_names)
         sub_val = row.get(sub_col)
         sub_str = str(sub_val) if pd.notna(sub_val) else ""
         children_y = {}
-        for ycn in y_col_names:
-            if ycn in df.columns:
-                v = row.get(ycn)
-                if pd.notna(v):
-                    children_y[ycn] = v
+        for ycn, mcn in zip(y_col_names, matched_y):
+            v = row.get(mcn)
+            if pd.notna(v):
+                children_y[ycn] = v
         current_children.append((sub_str, children_y))
         for ycn in y_col_names:
             if ycn in children_y:
@@ -807,6 +819,23 @@ def _fuzzy_match_column(cn, df_columns):
             return c
     for c in df_columns:
         if str(c).strip() in s:
+            return c
+    import re
+    s_clean = re.sub(r'[()（）%]', '', s)
+    if s_clean != s:
+        for c in df_columns:
+            c_clean = re.sub(r'[()（）%]', '', str(c))
+            if s_clean == c_clean:
+                return c
+            if s_clean in c_clean or c_clean in s_clean:
+                return c
+    for c in df_columns:
+        c_clean = re.sub(r'[()（）%\s]', '', str(c))
+        s_set = set(s_clean)
+        c_set = set(c_clean)
+        if c_set and c_set.issubset(s_set):
+            return c
+        if s_set and s_set.issubset(c_set):
             return c
     return None
 
