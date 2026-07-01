@@ -18,6 +18,8 @@ AGG_MAP = {
     "pct": "pct",
     "占比": "pct",
     "percentage": "pct",
+    "count_pct": "count_pct",
+    "计数占比": "count_pct",
 }
 
 
@@ -388,8 +390,10 @@ def _cross_pivot(df, row_dims, col_dims, value_cols, agg_funcs, task):
     results = {}
     for vcol in value_cols:
         for af in agg_funcs:
-            is_pct = af in ("pct", "占比", "percentage")
-            actual_af = "sum" if is_pct else af
+            a_mapped = AGG_MAP.get(af, af)
+            is_sum_pct = a_mapped == "pct"
+            is_count_pct = a_mapped == "count_pct"
+            actual_af = "sum" if is_sum_pct else ("count" if is_count_pct else af)
             pivot = pd.pivot_table(
                 df,
                 values=vcol,
@@ -399,11 +403,13 @@ def _cross_pivot(df, row_dims, col_dims, value_cols, agg_funcs, task):
                 fill_value=0,
             )
 
-            if is_pct:
+            if is_sum_pct or is_count_pct:
                 grand = pivot.values.sum()
                 if grand != 0:
                     pivot = pivot / grand
                     pivot = pivot.map(lambda x: round(x, 4))
+                else:
+                    pivot = pivot.map(lambda x: 0.0)
 
             pivot = pivot.reset_index()
 
@@ -468,7 +474,8 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
         return {"结果": result_df}
 
     agg_dict = {}
-    has_pct = False
+    has_sum_pct = False  # 数值占比
+    has_count_pct = False  # 计数占比
     per_field_funcs = _align_funcs_to_fields(value_cols, agg_funcs)
     
     # 处理重复字段名：对同一字段的多个聚合合并到一起
@@ -476,6 +483,8 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
     # pandas groupby().agg() 会返回 tuple 列名，如 ('销售额', 'sum'), ('销售额', 'mean')
     agg_dict = {}
     field_funcs = {}  # 记录每个字段的聚合函数列表
+    pct_cols = {}  # 记录哪些列需要计算数值占比
+    count_pct_cols = {}  # 记录哪些列需要计算计数占比
     for idx, vcol in enumerate(value_cols):
         # 直接使用索引获取对应的聚合函数（避免 per_field_funcs 字典重复键问题）
         if idx < len(agg_funcs):
@@ -485,11 +494,20 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
         
         for a in funcs_for_vcol:
             a_mapped = AGG_MAP.get(a, a)
-            if a_mapped in ("pct", "占比", "percentage"):
+            if a_mapped == "pct":
+                # 数值占比：先 sum，再计算占比
                 if vcol not in field_funcs:
                     field_funcs[vcol] = []
                 field_funcs[vcol].append("sum")
-                has_pct = True
+                pct_cols[vcol] = True
+                has_sum_pct = True
+            elif a_mapped == "count_pct":
+                # 计数占比：先 count，再计算占比
+                if vcol not in field_funcs:
+                    field_funcs[vcol] = []
+                field_funcs[vcol].append("count")
+                count_pct_cols[vcol] = True
+                has_count_pct = True
             else:
                 if vcol not in field_funcs:
                     field_funcs[vcol] = []
@@ -500,6 +518,39 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
         agg_dict[vcol] = funcs
 
     grouped = df.groupby(group_cols, as_index=False, observed=True).agg(agg_dict)
+
+    # ========== 先计算占比（在列名重命名之前）==========
+    # 在这个阶段，列名可能是 tuple 格式，如 ('上行PRB利用率', 'sum')
+    if has_sum_pct or has_count_pct:
+        orig_tuples = [col for col in grouped.columns.values]
+        for i, col in enumerate(orig_tuples):
+            if isinstance(col, tuple) and len(col) >= 2:
+                field_name = str(col[0]).strip()
+                agg_part = str(col[1]).strip()
+                
+                if field_name in pct_cols and agg_part == 'sum':
+                    # 数值占比：计算该列的占比
+                    total = grouped.iloc[:, i].sum()
+                    if total != 0:
+                        grouped.iloc[:, i] = (grouped.iloc[:, i].astype(float) / total).round(4)
+                    else:
+                        grouped.iloc[:, i] = 0.0
+                
+                elif field_name in count_pct_cols and agg_part == 'count':
+                    # 计数占比：计算该列的占比
+                    total = grouped.iloc[:, i].sum()
+                    if total != 0:
+                        grouped.iloc[:, i] = (grouped.iloc[:, i].astype(float) / total).round(4)
+                    else:
+                        grouped.iloc[:, i] = 0.0
+            elif col not in group_cols and pd.api.types.is_numeric_dtype(grouped[col]):
+                # 非占比列，四舍五入
+                grouped[col] = grouped[col].round(2)
+    else:
+        # 没有占比计算，直接四舍五入
+        for col in grouped.columns:
+            if col not in group_cols:
+                grouped[col] = grouped[col].round(2)
 
     # 检查是否有值映射配置
     val_map_str = task.get("值映射", "") if task else ""
@@ -558,18 +609,6 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
                 seen[name] = i
 
     grouped = grouped.sort_values(group_cols)
-
-    if has_pct:
-        for col in grouped.columns:
-            if col not in group_cols and pd.api.types.is_numeric_dtype(grouped[col]):
-                total = grouped[col].sum()
-                if total != 0:
-                    grouped[col] = grouped[col] / total
-                    grouped[col] = grouped[col].round(4)
-    else:
-        for col in grouped.columns:
-            if col not in group_cols:
-                grouped[col] = grouped[col].round(2)
 
     return {"结果": grouped}
 
