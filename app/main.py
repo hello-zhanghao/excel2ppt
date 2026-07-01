@@ -16,8 +16,8 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.5.0"
-__UPDATE_DATE__ = "2026-07-01"
+__VERSION__ = "2.7.0"
+__UPDATE_DATE__ = "2026-07-02"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -107,15 +107,24 @@ def _detect_mode(config_path):
     return "unknown"
 
 
-def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None):
+def _append_chart(chart_map, chart_title, chart_def, page_title):
+    """追加图表到 chart_map（list），同名时打印警告但不丢弃。"""
+    same_name = [c for c in chart_map if c.get("图表标题") == chart_title]
+    if same_name:
+        print(f"    [警告] [{page_title}] 图表标题 '{chart_title}' 与已有图表重名，两者均保留")
+    chart_map.append(chart_def)
+
+
+def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_only=False):
     """
     生成PPT。
     :param pivot_data_file: 透视分析结果文件路径，用于 {pivot} 数据源引用
+    :param validate_only: 仅校验配置不执行生成
     """
     from src.excel_reader import (
         read_config, read_data, read_geo_data, find_data_file, get_data_file_info
     )
-    from src.ppt_builder import build_ppt
+    from src.ppt_builder import build_ppt, validate_ppt_config, print_ppt_validation_results
 
     config_dir = os.path.dirname(config_path)
     print(f"[PPT/1] 读取配置: {config_path}")
@@ -125,8 +134,32 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None):
     colors = config.get("colors", {})
     print(f"    → PPT页面: {len(pages)} 页")
 
+    # 配置校验
+    print(f"[PPT/校验] 检查配置...")
+    val_results, all_ok = validate_ppt_config(config, config_dir, pivot_data_file)
+    print_ppt_validation_results(val_results)
+
+    if validate_only:
+        print("[校验] 仅校验模式，不执行生成")
+        return None
+
+    if not all_ok:
+        print("[错误] 配置校验未通过，请修正后再执行")
+        sys.exit(1)
+
     if pivot_data_file:
         print(f"    → 透视结果数据源: {os.path.basename(pivot_data_file)}")
+    else:
+        # 检测是否引用了透视结果但未提供文件，提前给出明确提示
+        pivot_keywords = ("{pivot}", "pivot", "透视结果", "透视分析")
+        refs_pivot = any(
+            str(cd.get("数据源", "")).strip().lower() in pivot_keywords
+            for page in pages for cd in page.get("charts", [])
+        )
+        if refs_pivot:
+            print(f"    [警告] 配置引用了 {{pivot}} 数据源但未提供 --pivot-file，相关图表将被跳过")
+            print(f"           建议：使用 'python main.py 配置.xlsx' 自动模式（先透视后PPT），")
+            print(f"                 或先用 pivot 子命令生成结果，再用 'ppt --pivot-file 结果.xlsx' 指定")
 
     # 全局数据文件路径
     default_data_file = general.get("数据文件", general.get("excel_path", ""))
@@ -141,7 +174,7 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None):
 
     print(f"[PPT/2] 读取图表数据...")
     total_charts = 0
-    chart_map = {}
+    chart_map = []  # 使用 list 避免同名图表键覆盖
 
     for page_def in pages:
         page_title = str(page_def.get("页面标题", f"第{page_def.get('页码', '?')}页"))
@@ -185,7 +218,7 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None):
                     if geo_df is not None and len(geo_df) > 0:
                         chart_def["_geo_df"] = geo_df
                         chart_def["_is_map"] = True
-                        chart_map[chart_title] = chart_def
+                        _append_chart(chart_map, chart_title, chart_def, page_title)
                         total_charts += 1
                         print(f"    [OK] [{page_title}] {chart_title} (地图)")
                     else:
@@ -197,14 +230,27 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None):
                     chart_def["_categories"] = x_values
                     chart_def["_values"] = y_values
                     if isinstance(x_values, list) and x_values and isinstance(x_values[0], (tuple, list)):
-                        chart_def["_hierarchical"] = {}
-                    chart_map[chart_title] = chart_def
+                        chart_def["_is_hierarchical"] = True
+                    _append_chart(chart_map, chart_title, chart_def, page_title)
                     total_charts += 1
                     print(f"    [OK] [{page_title}] {chart_title}")
                 else:
                     print(f"    - [{page_title}] {chart_title} (无数据)")
+            except KeyError as e:
+                print(f"    ! [{page_title}] {chart_title} 列名未找到: {e}")
+                print(f"      建议: 检查 X轴='{x_range}' Y轴='{y_range}' 是否与数据 Sheet '{data_sheet}' 的列名完全一致")
+            except (FileNotFoundError, PermissionError) as e:
+                print(f"    ! [{page_title}] {chart_title} 数据文件访问失败: {e}")
             except Exception as e:
-                print(f"    ! [{page_title}] {chart_title} (错误: {e})")
+                msg = str(e).lower()
+                if "sheet" in msg or "worksheet" in msg:
+                    print(f"    ! [{page_title}] {chart_title} Sheet不存在: {e}")
+                    print(f"      建议: 检查 数据Sheet='{data_sheet}' 是否存在于 {os.path.basename(file_path)}")
+                elif "column" in msg or "key" in msg:
+                    print(f"    ! [{page_title}] {chart_title} 列名匹配失败: {e}")
+                    print(f"      建议: 检查 X轴='{x_range}' Y轴='{y_range}' 列名是否精确匹配")
+                else:
+                    print(f"    ! [{page_title}] {chart_title} (错误: {e})")
 
     print(f"    → 共 {total_charts} 个图表")
     if total_charts == 0 and not pages:
@@ -231,7 +277,7 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None):
 
 def _run_pivot_mode(config_path, output_path=None, validate_only=False):
     from src.pivot_analyzer import (
-        read_pivot_config, run_analysis, _auto_find_data_files,
+        read_pivot_config, run_analysis, find_data_files,
         validate_pivot_config, print_validation_results
     )
     from src.excel_writer import write_results
@@ -245,7 +291,7 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False):
         print("[错误] 没有有效的分析任务。")
         sys.exit(1)
 
-    data_files = _auto_find_data_files(config_dir, config_path)
+    data_files = find_data_files(config_dir, config_path)
     if data_files:
         print(f"    → 找到数据文件: {[os.path.basename(f) for f in data_files]}")
 
@@ -674,6 +720,8 @@ def main():
         ppt_p.add_argument("folder_or_config", nargs="?", default=None)
         ppt_p.add_argument("-c", "--config", default=None)
         ppt_p.add_argument("-o", "--output", default=None)
+        ppt_p.add_argument("--pivot-file", dest="pivot_file", default=None,
+                           help="透视分析结果文件路径，用于 {pivot} 数据源引用")
         ppt_p.add_argument("--check", action="store_true", help="仅校验配置，不执行")
         pivot_p = sub.add_parser("pivot", help="透视分析")
         pivot_p.add_argument("folder_or_config", nargs="?", default=None)
@@ -687,6 +735,8 @@ def main():
     legacy.add_argument("folder_or_config", nargs="?", default=None, help="文件夹路径或配置文件")
     legacy.add_argument("-c", "--config", default=None, help="配置文件路径")
     legacy.add_argument("-o", "--output", default=None, help="输出路径")
+    legacy.add_argument("--pivot-file", dest="pivot_file", default=None,
+                        help="透视分析结果文件路径，用于 {pivot} 数据源引用")
     legacy.add_argument("--check", action="store_true", help="仅校验配置，不执行")
 
     if mode == "auto":
@@ -727,9 +777,8 @@ def main():
     if mode == "pivot":
         _run_pivot_mode(config_path, output_path, validate_only=validate_only)
     else:
-        if validate_only:
-            print("[信息] PPT模式校验功能暂未实现，将直接执行")
-        _run_ppt_mode(config_path, output_path)
+        pivot_file = getattr(args, "pivot_file", None)
+        _run_ppt_mode(config_path, output_path, pivot_data_file=pivot_file, validate_only=validate_only)
 
 
 if __name__ == "__main__":

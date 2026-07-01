@@ -7,6 +7,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.chart.data import CategoryChartData, XyChartData
 from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION, XL_LABEL_POSITION
+from pptx.enum.shapes import MSO_SHAPE
 from pptx.oxml.ns import qn, nsmap
 from lxml import etree
 
@@ -81,7 +82,7 @@ def _generate_auto_pages(config, chart_map):
     """没有「PPT页面」Sheet时，自动按每页图表数分页（兼容旧模式）"""
     general = config.get("general", {})
     charts_per_slide = int(general.get("charts_per_slide", 4))
-    chart_list = list(chart_map.values())
+    chart_list = list(chart_map)
     pages = []
     for i in range(0, len(chart_list), charts_per_slide):
         page_charts = chart_list[i:i + charts_per_slide]
@@ -121,8 +122,6 @@ def _add_cover_slide(prs, title, subtitle, colors):
     slide = prs.slides.add_slide(slide_layout)
 
     _set_slide_bg(slide, "FFFFFF")
-
-    from pptx.enum.shapes import MSO_SHAPE
 
     top_bar = slide.shapes.add_shape(
         MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), prs.slide_width, Inches(0.06)
@@ -219,7 +218,10 @@ def _add_content_slide_from_def(prs, page_def, chart_map, colors):
             else:
                 chart_name = page_def.get(f"图表{i}", "")
                 if chart_name and str(chart_name).strip():
-                    chart_def = chart_map.get(str(chart_name).strip())
+                    chart_def = next(
+                        (c for c in chart_map if c.get("图表标题") == str(chart_name).strip()),
+                        None,
+                    )
             if chart_def:
                 active_charts.append(chart_def)
 
@@ -246,7 +248,6 @@ def _add_page_title(slide, title, colors):
     p.alignment = PP_ALIGN.LEFT
     _set_font_name(p, FONT_NAME)
 
-    from pptx.enum.shapes import MSO_SHAPE
     line_left = Inches(0.6)
     line_top = Inches(0.78)
     line_width = Inches(1.6)
@@ -308,7 +309,7 @@ def _add_native_chart(slide, chart_info, colors, left, top, width, height):
     categories = chart_info.get("_categories", [])
     values = chart_info.get("_values", [])
     color = str(chart_info.get("颜色", "")).strip()
-    hierarchical = chart_info.get("_hierarchical")
+    is_hierarchical = bool(chart_info.get("_is_hierarchical"))
 
     if chart_info.get("_is_map"):
         _add_map_slide(slide, chart_info, left, top, width, height)
@@ -326,7 +327,7 @@ def _add_native_chart(slide, chart_info, colors, left, top, width, height):
     is_scatter = chart_type == "scatter"
     xl_type = _get_chart_type(chart_type)
 
-    if hierarchical is not None and isinstance(values, dict):
+    if is_hierarchical and isinstance(values, dict):
         _add_hierarchical_chart(slide, chart_type, title, categories, values, color, colors, xl_type, chart_info, left, top, width, height)
         return
 
@@ -587,11 +588,9 @@ def _apply_combo_series_color(chart, chart_type, colors, type_map):
                         spPr.remove(ln)
                     except Exception:
                         pass
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[警告] 组合图颜色应用失败: {e}")
 
-
-import tempfile
 
 def _add_map_slide(slide, chart_info, left, top, width, height):
     from src.map_builder import build_scatter_map, build_heatmap, save_map_image
@@ -634,12 +633,9 @@ def _add_map_slide(slide, chart_info, left, top, width, height):
     if fig is None:
         return
 
-    png_buf = save_map_image(fig)
-    tmp_path = os.path.join(tempfile.gettempdir(), f"_ppt_map_{id(chart_info)}.png")
-    with open(tmp_path, "wb") as f:
-        f.write(png_buf.read())
-
-    slide.shapes.add_picture(tmp_path, left, top, width, height)
+    # 直接用 BytesIO 流插入图片，避免临时文件残留
+    png_stream = save_map_image(fig)
+    slide.shapes.add_picture(png_stream, left, top, width, height)
 
 
 def _get_chart_type(chart_type):
@@ -744,8 +740,8 @@ def _style_chart(chart, chart_type):
             chart.legend.include_in_layout = False
             chart.legend.font.size = Pt(9)
             chart.legend.font.color.rgb = _hex_to_rgb(HW_DARK)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[警告] 图例样式设置失败: {e}")
 
     try:
         chart_cs = chart._chartSpace
@@ -776,8 +772,8 @@ def _style_chart(chart, chart_type):
                             sc = etree.SubElement(sf, qn('a:srgbClr'))
                         sc.set('val', 'D9D9D9')
                         ln.set('w', '9525')
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[警告] 网格线样式设置失败: {e}")
 
     try:
         if chart_type != "pie":
@@ -791,8 +787,8 @@ def _style_chart(chart, chart_type):
             cat_axis.tick_labels.font.size = Pt(9)
             cat_axis.tick_labels.font.color.rgb = _hex_to_rgb(HW_DARK)
             _force_axis_text_horizontal(cat_axis)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[警告] 坐标轴样式设置失败: {e}")
 
     try:
         plot = chart.plots[0]
@@ -810,8 +806,8 @@ def _style_chart(chart, chart_type):
                 data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
         except Exception:
             pass
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[警告] 数据标签样式设置失败: {e}")
 
 
 def _force_axis_text_horizontal(axis):
@@ -851,6 +847,7 @@ def _render_conclusion(slide, chart_info, left, top, width):
 
     ctx = _compute_stats(flat_cats, flat_vals)
 
+    # 多系列时补充每个系列的命名统计；全局 max/min/avg 已基于全量数据计算
     if isinstance(values, dict) and len(values) > 1:
         for s_name in values:
             svals = [v for v in values[s_name] if v is not None]
@@ -859,6 +856,7 @@ def _render_conclusion(slide, chart_info, left, top, width):
                 ctx[f"min_{s_name}"] = min(svals)
                 ctx[f"avg_{s_name}"] = round(sum(svals) / len(svals), 1)
                 ctx[f"total_{s_name}"] = sum(svals)
+            # 标记多系列：占位符 {max_<系列名>} 可精确定位到某一系列
 
     try:
         text = tmpl
@@ -886,34 +884,51 @@ def _render_conclusion(slide, chart_info, left, top, width):
 
 
 def _flatten_chart_data(categories, values):
+    """
+    展平图表数据用于统计。
+    多系列时合并所有系列的 (类别, 值)，而非只取第一个系列，
+    以确保 _compute_stats 的全局 max/min/avg 反映完整数据。
+    """
+    # 先展开单系列的类别标签
+    if isinstance(categories, list) and categories and isinstance(categories[0], (tuple, list)):
+        base_cats = [str(child_label) for parent, children in categories for child_label, _ in children]
+    else:
+        base_cats = [str(c) for c in categories]
+
     flat_cats = []
     flat_vals = []
-    if isinstance(categories, list) and categories and isinstance(categories[0], (tuple, list)):
-        for parent, children in categories:
-            for child_label, _child_data in children:
-                flat_cats.append(str(child_label))
-        if isinstance(values, dict):
-            first_key = next(iter(values.keys()), "")
-            if first_key:
-                flat_vals = [v for v in values[first_key] if v is not None]
-    else:
-        flat_cats = [str(c) for c in categories]
-        if isinstance(values, dict):
-            first_key = next(iter(values.keys()), "")
-            if first_key:
-                flat_vals = [v for v in values[first_key] if v is not None]
-        elif isinstance(values, list):
-            flat_vals = [v for v in values if v is not None]
+
+    if isinstance(values, dict):
+        # 多系列：每个系列都用相同的 base_cats，合并所有 (cat, val)
+        for s_vals in values.values():
+            for i, v in enumerate(s_vals):
+                if v is not None:
+                    flat_vals.append(v)
+                    flat_cats.append(base_cats[i] if i < len(base_cats) else f"项{i+1}")
+    elif isinstance(values, list):
+        for i, v in enumerate(values):
+            if v is not None:
+                flat_vals.append(v)
+                flat_cats.append(base_cats[i] if i < len(base_cats) else f"项{i+1}")
+
     return flat_cats, flat_vals
 
 
 def _compute_stats(categories, values):
     if not values:
         return {}
-    pairs = list(zip(categories, values))
+    # 防御非数值数据：过滤掉无法转 float 的值，避免 sort/sum 抛 TypeError
+    pairs = []
+    for cat, v in zip(categories, values):
+        try:
+            pairs.append((cat, float(v)))
+        except (TypeError, ValueError):
+            continue
+    if not pairs:
+        return {}
     pairs.sort(key=lambda x: x[1], reverse=True)
-    total = sum(values)
-    avg = round(total / len(values), 1)
+    total = sum(p[1] for p in pairs)
+    avg = round(total / len(pairs), 1)
     ctx = {
         "max_val": pairs[0][1],
         "max_cat": pairs[0][0],
@@ -921,7 +936,7 @@ def _compute_stats(categories, values):
         "min_cat": pairs[-1][0],
         "avg": avg,
         "total": total,
-        "count": len(values),
+        "count": len(pairs),
     }
     if len(pairs) >= 3:
         ctx["top3_cats"] = ", ".join(p[0] for p in pairs[:3])
@@ -929,3 +944,269 @@ def _compute_stats(categories, values):
         ctx["bottom3_cats"] = ", ".join(p[0] for p in pairs[-3:])
         ctx["bottom3_vals"] = ", ".join(str(p[1]) for p in pairs[-3:])
     return ctx
+
+
+# ==================== PPT 配置校验 ====================
+
+VALID_CHART_TYPES = {"bar", "column", "line", "pie", "scatter", "area", "doughnut", "combo", "map", "heatmap"}
+PIVOT_DATA_SOURCE_KEYWORDS = ("{pivot}", "pivot", "透视结果", "透视分析")
+
+
+def validate_ppt_config(config, config_dir, pivot_data_file=None):
+    """
+    校验 PPT 配置，返回 (results, all_ok)。
+    results: list[dict] 每项含 level(error/warning/info)/page/chart/column/message
+    all_ok: True 表示无错误
+    """
+    results = []
+    pages = config.get("pages", [])
+
+    if not pages:
+        results.append({
+            "level": "warning",
+            "page": "-",
+            "chart": "-",
+            "column": "-",
+            "message": "未检测到 PPT 页面配置（pages 为空）",
+        })
+        return results, True
+
+    # 收集数据文件 Sheet 列名缓存，避免重复 IO
+    sheet_columns_cache = {}
+
+    def _get_sheet_columns(file_path, sheet_name):
+        key = (file_path, sheet_name)
+        if key in sheet_columns_cache:
+            return sheet_columns_cache[key]
+        try:
+            import openpyxl
+            ext = os.path.splitext(str(file_path))[1].lower()
+            if ext == ".csv":
+                import pandas as pd
+                df = pd.read_csv(file_path, encoding="utf-8-sig", nrows=0)
+                cols = list(df.columns)
+            else:
+                wb = openpyxl.load_workbook(file_path, read_only=True)
+                if sheet_name and sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                else:
+                    ws = wb[wb.sheetnames[0]]
+                row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+                cols = [str(c).strip() if c is not None else "" for c in row]
+                wb.close()
+            sheet_columns_cache[key] = cols
+            return cols
+        except Exception as e:
+            sheet_columns_cache[key] = None
+            return None
+
+    for page_idx, page in enumerate(pages, 1):
+        page_num = page.get("页码", page_idx)
+        page_type = str(page.get("页面类型", "内容")).strip().lower()
+        layout = str(page.get("布局", "")).strip()
+        charts = page.get("charts", [])
+
+        # 封面页不校验图表配置
+        if page_type in ("cover", "封面"):
+            continue
+
+        # 校验布局名
+        if layout and layout not in LAYOUT_POSITIONS:
+            results.append({
+                "level": "error",
+                "page": str(page_num),
+                "chart": "-",
+                "column": "布局",
+                "message": f"布局 '{layout}' 不支持，可用: {', '.join(LAYOUT_POSITIONS.keys())}",
+            })
+
+        # 校验图表数量与布局槽位
+        if layout and layout in LAYOUT_POSITIONS and charts:
+            slot_count = len(LAYOUT_POSITIONS[layout])
+            if len(charts) > slot_count:
+                results.append({
+                    "level": "warning",
+                    "page": str(page_num),
+                    "chart": "-",
+                    "column": "布局",
+                    "message": f"图表数 {len(charts)} 超过布局 '{layout}' 的槽位 {slot_count}，多出的将被忽略",
+                })
+
+        for chart in charts:
+            chart_title = str(chart.get("图表标题", "")).strip()
+            chart_type = str(chart.get("图表类型", "column")).strip().lower()
+            data_sheet = str(chart.get("数据Sheet", "")).strip()
+            data_source = str(chart.get("数据源", "")).strip()
+            x_range = str(chart.get("X轴范围", chart.get("X轴", ""))).strip()
+            y_range = str(chart.get("Y轴范围", chart.get("Y轴", ""))).strip()
+            chart_id = chart_title or f"第{page_idx}页图表"
+
+            # 校验图表标题
+            if not chart_title:
+                results.append({
+                    "level": "warning",
+                    "page": str(page_num),
+                    "chart": chart_id,
+                    "column": "图表标题",
+                    "message": "图表标题为空",
+                })
+
+            # 校验图表类型
+            if chart_type:
+                # 组合图支持逗号分隔
+                types = [t.strip() for t in chart_type.split(",")]
+                for t in types:
+                    if t and t not in VALID_CHART_TYPES:
+                        results.append({
+                            "level": "error",
+                            "page": str(page_num),
+                            "chart": chart_id,
+                            "column": "图表类型",
+                            "message": f"图表类型 '{t}' 不支持，可用: {', '.join(sorted(VALID_CHART_TYPES))}",
+                        })
+
+            # 跳过地图类型的列名校验（地图列名逻辑较灵活）
+            if chart_type in ("map", "heatmap"):
+                continue
+
+            # 校验 X/Y 轴必填
+            if not x_range:
+                results.append({
+                    "level": "error",
+                    "page": str(page_num),
+                    "chart": chart_id,
+                    "column": "X轴",
+                    "message": "X轴未指定",
+                })
+            if not y_range:
+                results.append({
+                    "level": "error",
+                    "page": str(page_num),
+                    "chart": chart_id,
+                    "column": "Y轴",
+                    "message": "Y轴未指定",
+                })
+            if not x_range or not y_range:
+                continue
+
+            # 解析数据文件路径
+            is_pivot_ref = data_source.lower() in PIVOT_DATA_SOURCE_KEYWORDS
+            if is_pivot_ref:
+                if not pivot_data_file or not os.path.exists(str(pivot_data_file)):
+                    results.append({
+                        "level": "warning",
+                        "page": str(page_num),
+                        "chart": chart_id,
+                        "column": "数据源",
+                        "message": f"引用透视结果但未提供 --pivot-file，图表将被跳过",
+                    })
+                file_path = pivot_data_file
+            elif data_source:
+                from src.excel_reader import find_data_file as _find
+                file_path = _find(data_source, config_dir)
+                if not file_path:
+                    results.append({
+                        "level": "warning",
+                        "page": str(page_num),
+                        "chart": chart_id,
+                        "column": "数据源",
+                        "message": f"数据源 '{data_source}' 未找到匹配文件",
+                    })
+            else:
+                # 无数据源时无法校验列名，跳过
+                continue
+
+            if not file_path or not os.path.exists(str(file_path)):
+                continue
+
+            # 校验 Sheet 存在性与列名匹配
+            cols = _get_sheet_columns(file_path, data_sheet)
+            if cols is None:
+                results.append({
+                    "level": "warning",
+                    "page": str(page_num),
+                    "chart": chart_id,
+                    "column": "数据Sheet",
+                    "message": f"无法读取 Sheet '{data_sheet}' 的列名（文件可能被占用）",
+                })
+                continue
+
+            # 校验 Sheet 名（Excel 才校验，CSV 无 Sheet）
+            ext = os.path.splitext(str(file_path))[1].lower()
+            if ext != ".csv" and data_sheet:
+                import openpyxl
+                try:
+                    wb = openpyxl.load_workbook(file_path, read_only=True)
+                    if data_sheet not in wb.sheetnames:
+                        results.append({
+                            "level": "error",
+                            "page": str(page_num),
+                            "chart": chart_id,
+                            "column": "数据Sheet",
+                            "message": f"Sheet '{data_sheet}' 不存在，可用: {', '.join(wb.sheetnames)}",
+                        })
+                    wb.close()
+                except Exception:
+                    pass
+
+            # 校验 X 轴列名（透视结果文件含区块标题行，列名匹配可能误报，降级为警告）
+            is_pivot_result = is_pivot_ref or "分析" in os.path.basename(str(file_path))
+            col_check_level = "warning" if is_pivot_result else "error"
+            x_cols = [c.strip() for c in x_range.split(",") if c.strip()]
+            for xc in x_cols:
+                if xc not in cols:
+                    results.append({
+                        "level": col_check_level,
+                        "page": str(page_num),
+                        "chart": chart_id,
+                        "column": "X轴",
+                        "message": f"X轴列名 '{xc}' 在 Sheet '{data_sheet}' 首行中未找到，可用列: {', '.join(c for c in cols[:10] if c)}{'...' if len(cols) > 10 else ''}",
+                    })
+
+            # 校验 Y 轴列名
+            y_cols = [c.strip() for c in y_range.split(",") if c.strip()]
+            for yc in y_cols:
+                if yc not in cols:
+                    results.append({
+                        "level": col_check_level,
+                        "page": str(page_num),
+                        "chart": chart_id,
+                        "column": "Y轴",
+                        "message": f"Y轴列名 '{yc}' 在 Sheet '{data_sheet}' 首行中未找到，可用列: {', '.join(c for c in cols[:10] if c)}{'...' if len(cols) > 10 else ''}",
+                    })
+
+    all_ok = all(r["level"] != "error" for r in results)
+    return results, all_ok
+
+
+def print_ppt_validation_results(results):
+    """格式化打印 PPT 配置校验结果，返回 all_ok"""
+    if not results:
+        print("[校验] 全部通过 ✓")
+        return True
+
+    error_count = sum(1 for r in results if r["level"] == "error")
+    warning_count = sum(1 for r in results if r["level"] == "warning")
+    info_count = sum(1 for r in results if r["level"] == "info")
+
+    print(f"\n{'='*60}")
+    print(f"  PPT 配置校验结果")
+    print(f"{'='*60}")
+    print(f"  错误: {error_count}  |  警告: {warning_count}  |  提示: {info_count}")
+    print(f"{'='*60}")
+
+    for r in results:
+        icon = {"error": "✗", "warning": "⚠", "info": "ℹ"}.get(r["level"], " ")
+        col_info = f" [{r['column']}]" if r.get("column") and r["column"] != "-" else ""
+        chart_info = f" [{r['chart']}]" if r.get("chart") and r["chart"] != "-" else ""
+        print(f"  {icon} [页{r['page']}{chart_info}{col_info}] {r['message']}")
+
+    print(f"{'='*60}")
+
+    if error_count > 0:
+        print(f"  ❌ 发现 {error_count} 个错误，请修正后再执行")
+    elif warning_count > 0:
+        print(f"  ⚠  发现 {warning_count} 个警告，可继续执行但可能影响结果")
+    print()
+
+    return error_count == 0

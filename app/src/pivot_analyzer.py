@@ -1121,6 +1121,12 @@ def _auto_find_data_files(config_dir, config_path):
     return candidates
 
 
+# 公开别名，供 main.py 等外部模块调用（避免导入下划线私有成员）
+def find_data_files(config_dir, config_path):
+    """查找配置目录下的候选数据文件（公开 API）。"""
+    return _auto_find_data_files(config_dir, config_path)
+
+
 def _parse_mapping(mapping_str, row_map_str, col_map_str, val_map_str, 行维度, 列维度, 值字段):
     parts_legacy = [p.strip() for p in mapping_str.split(",") if p.strip()] if mapping_str and mapping_str.strip() else []
     if parts_legacy and any("=" in p for p in parts_legacy):
