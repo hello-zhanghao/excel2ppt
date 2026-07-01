@@ -489,8 +489,17 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
 def _flatten_col(col):
     if isinstance(col, tuple):
         parts = [str(p).strip() for p in col if str(p).strip()]
-        if len(parts) >= 2 and _is_display_name(parts[0]):
-            return parts[0]
+        if len(parts) >= 2:
+            # 多层列名（如 "销售额" + "sum"），保留完整信息避免列名冲突
+            # 第一部分是字段名，第二部分是聚合函数
+            field_name = parts[0]
+            agg_func = parts[1] if len(parts) > 1 else ""
+            # 如果聚合函数是 sum/mean 等英文，转为中文
+            agg_cn = {"sum": "求和", "mean": "均值", "avg": "均值", "count": "计数",
+                      "max": "最大值", "min": "最小值", "nunique": "去重"}.get(agg_func, agg_func)
+            if agg_cn:
+                return f"{field_name}_{agg_cn}"
+            return f"{field_name}_{agg_func}"
         return "_".join(parts) if parts else str(col)
     return str(col).strip()
 
