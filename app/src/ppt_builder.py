@@ -14,12 +14,24 @@ from lxml import etree
 HW_RED = "#C8102E"
 HW_DARK = "#182B49"
 HW_GRAY = "#8C8C8C"
+HW_LIGHT = "#F7F8FA"
+HW_BORDER = "#E5E7EB"
 FONT_NAME = "Microsoft YaHei"
 
+# 商务配色：主色+辅色，避免紫黄混搭
 HUAWEI_PALETTE = [
-    "#C8102E", "#182B49", "#5B9BD5", "#ED7D31",
-    "#70AD47", "#A5A5A5", "#FFC000", "#9B59B6",
+    "#C8102E",  # 主红
+    "#182B49",  # 深蓝
+    "#5B9BD5",  # 浅蓝
+    "#ED7D31",  # 橙
+    "#70AD47",  # 绿
+    "#A5A5A5",  # 灰
+    "#FFC000",  # 金黄
+    "#4472C4",  # 商务蓝
 ]
+
+# 页脚项目名（可被配置覆盖）
+DEFAULT_FOOTER = "数据分析报告"
 
 LAYOUT_POSITIONS = {
     "1图": [
@@ -60,7 +72,8 @@ def build_ppt(config, chart_map, output_path):
     if not pages:
         pages = _generate_auto_pages(config, chart_map)
 
-    for page_def in pages:
+    total_pages = len(pages)
+    for idx, page_def in enumerate(pages):
         page_type = str(page_def.get("页面类型", "content")).strip().lower()
 
         if page_type == "cover" or page_type == "封面":
@@ -72,7 +85,7 @@ def build_ppt(config, chart_map, output_path):
                 subtitle = parts[1].strip()
             _add_cover_slide(prs, title, subtitle, colors)
         else:
-            _add_content_slide_from_def(prs, page_def, chart_map, colors)
+            _add_content_slide_from_def(prs, page_def, chart_map, colors, idx + 1, total_pages)
 
     prs.save(output_path)
     return output_path
@@ -123,56 +136,75 @@ def _add_cover_slide(prs, title, subtitle, colors):
 
     _set_slide_bg(slide, "FFFFFF")
 
-    top_bar = slide.shapes.add_shape(
-        MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), prs.slide_width, Inches(0.06)
+    # 左侧深色色块（占宽 1/3，作背景）
+    left_block = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(4.5), prs.slide_height
     )
-    top_bar.fill.solid()
-    top_bar.fill.fore_color.rgb = _hex_to_rgb(HW_RED)
-    top_bar.line.fill.background()
+    left_block.fill.solid()
+    left_block.fill.fore_color.rgb = _hex_to_rgb(HW_DARK)
+    left_block.line.fill.background()
 
-    left_accent = slide.shapes.add_shape(
-        MSO_SHAPE.RECTANGLE, Inches(1.3), Inches(2.5), Inches(0.06), Inches(0.8)
+    # 深色块右侧红色竖条（强调色）
+    red_accent = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, Inches(4.5), Inches(0), Inches(0.06), prs.slide_height
     )
-    left_accent.fill.solid()
-    left_accent.fill.fore_color.rgb = _hex_to_rgb(HW_RED)
-    left_accent.line.fill.background()
+    red_accent.fill.solid()
+    red_accent.fill.fore_color.rgb = _hex_to_rgb(HW_RED)
+    red_accent.line.fill.background()
 
+    # 左侧块顶部小红色装饰
+    top_deco = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, Inches(0.6), Inches(0.6), Inches(0.8), Inches(0.06)
+    )
+    top_deco.fill.solid()
+    top_deco.fill.fore_color.rgb = _hex_to_rgb(HW_RED)
+    top_deco.line.fill.background()
+
+    # 左侧块上的项目标识
+    tag_box = slide.shapes.add_textbox(
+        Inches(0.6), Inches(0.8), Inches(3.5), Inches(0.5)
+    )
+    ttf = tag_box.text_frame
+    ttf.word_wrap = True
+    tp = ttf.paragraphs[0]
+    tp.text = "DATA REPORT"
+    tp.font.size = Pt(11)
+    tp.font.bold = True
+    tp.font.color.rgb = _hex_to_rgb("#FFFFFF")
+    tp.alignment = PP_ALIGN.LEFT
+    _set_font_name(tp, FONT_NAME)
+
+    # 主标题（右侧白色区域，左对齐）
     txBox = slide.shapes.add_textbox(
-        Inches(1.7), Inches(2.5), Inches(10), Inches(1.2)
+        Inches(5.0), Inches(2.7), Inches(7.8), Inches(1.5)
     )
     tf = txBox.text_frame
     tf.word_wrap = True
     p = tf.paragraphs[0]
     p.text = title
-    p.font.size = Pt(42)
+    p.font.size = Pt(40)
     p.font.bold = True
     p.font.color.rgb = _hex_to_rgb(HW_DARK)
     p.alignment = PP_ALIGN.LEFT
     _set_font_name(p, FONT_NAME)
 
+    # 副标题
     if subtitle:
         txBox2 = slide.shapes.add_textbox(
-            Inches(1.7), Inches(3.8), Inches(10), Inches(0.8)
+            Inches(5.0), Inches(4.0), Inches(7.8), Inches(0.8)
         )
         tf2 = txBox2.text_frame
         p2 = tf2.paragraphs[0]
         p2.text = subtitle
-        p2.font.size = Pt(18)
+        p2.font.size = Pt(16)
         p2.font.color.rgb = _hex_to_rgb(HW_GRAY)
         p2.alignment = PP_ALIGN.LEFT
         _set_font_name(p2, FONT_NAME)
 
-    bottom_line = slide.shapes.add_shape(
-        MSO_SHAPE.RECTANGLE, Inches(1.3), Inches(5.8),
-        Inches(10.7), Inches(0.01)
-    )
-    bottom_line.fill.solid()
-    bottom_line.fill.fore_color.rgb = _hex_to_rgb("#D0D0D0")
-    bottom_line.line.fill.background()
-
+    # 右下日期
     date_str = strftime("%Y.%m.%d")
     date_box = slide.shapes.add_textbox(
-        Inches(1.3), Inches(5.9), Inches(5), Inches(0.4)
+        Inches(5.0), Inches(6.5), Inches(5), Inches(0.4)
     )
     dtf = date_box.text_frame
     dp = dtf.paragraphs[0]
@@ -182,8 +214,20 @@ def _add_cover_slide(prs, title, subtitle, colors):
     dp.alignment = PP_ALIGN.LEFT
     _set_font_name(dp, FONT_NAME)
 
+    # 左侧块底部小标识
+    foot_box = slide.shapes.add_textbox(
+        Inches(0.6), Inches(6.7), Inches(3.5), Inches(0.4)
+    )
+    ftf = foot_box.text_frame
+    fp = ftf.paragraphs[0]
+    fp.text = DEFAULT_FOOTER
+    fp.font.size = Pt(9)
+    fp.font.color.rgb = _hex_to_rgb("#A0A8B0")
+    fp.alignment = PP_ALIGN.LEFT
+    _set_font_name(fp, FONT_NAME)
 
-def _add_content_slide_from_def(prs, page_def, chart_map, colors):
+
+def _add_content_slide_from_def(prs, page_def, chart_map, colors, page_num=0, total_pages=0):
     slide_layout = prs.slide_layouts[6]
     slide = prs.slides.add_slide(slide_layout)
 
@@ -191,9 +235,15 @@ def _add_content_slide_from_def(prs, page_def, chart_map, colors):
 
     layout = str(page_def.get("布局", "4图")).strip()
     title = str(page_def.get("页面标题", ""))
+    # 支持"主标题|副标题"语法
+    subtitle = ""
+    if "|" in title:
+        parts = title.split("|", 1)
+        title = parts[0].strip()
+        subtitle = parts[1].strip()
 
     if title:
-        _add_page_title(slide, title, colors)
+        _add_page_title(slide, title, subtitle, colors)
 
     positions = LAYOUT_POSITIONS.get(layout, LAYOUT_POSITIONS["4图"])
 
@@ -225,18 +275,60 @@ def _add_content_slide_from_def(prs, page_def, chart_map, colors):
             if chart_def:
                 active_charts.append(chart_def)
 
+    # A4：给每个图表区加浅灰圆角矩形背景
+    chart_rects = []
     for idx, chart_def in enumerate(active_charts):
         if idx >= len(positions):
             break
         left, top, width, height = positions[idx]
+        _add_chart_bg(slide, left, top, width, height)
+        chart_rects.append((left, top, width, height))
+
+    for idx, chart_def in enumerate(active_charts):
+        if idx >= len(chart_rects):
+            break
+        left, top, width, height = chart_rects[idx]
         _add_native_chart(slide, chart_def, colors, left, top, width, height)
 
+    _add_footer(slide, page_num, total_pages)
 
-def _add_page_title(slide, title, colors):
-    left = Inches(0.6)
+
+def _add_chart_bg(slide, left, top, width, height):
+    """图表区背景：浅灰圆角矩形，让图表与白底页面视觉分离"""
+    pad = Inches(0.1)
+    bg = slide.shapes.add_shape(
+        MSO_SHAPE.ROUNDED_RECTANGLE,
+        left - pad, top - pad,
+        width + 2 * pad, height + 2 * pad
+    )
+    bg.fill.solid()
+    bg.fill.fore_color.rgb = _hex_to_rgb(HW_LIGHT)
+    bg.line.color.rgb = _hex_to_rgb(HW_BORDER)
+    bg.line.width = Pt(0.5)
+    try:
+        bg.adjustments[0] = 0.04
+    except Exception:
+        pass
+    # 移到最底层
+    spTree = bg._element.getparent()
+    spTree.remove(bg._element)
+    spTree.insert(2, bg._element)
+
+
+def _add_page_title(slide, title, subtitle, colors):
+    # 左侧装饰色块
+    deco_block = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, Inches(0.6), Inches(0.28), Inches(0.08), Inches(0.5)
+    )
+    deco_block.fill.solid()
+    deco_block.fill.fore_color.rgb = _hex_to_rgb(HW_RED)
+    deco_block.line.fill.background()
+
+    # 主标题
+    left = Inches(0.85)
     top = Inches(0.2)
-    width = Inches(12.1)
-    height = Inches(0.55)
+    width = Inches(11.85)
+    height = Inches(0.5)
     txBox = slide.shapes.add_textbox(left, top, width, height)
     tf = txBox.text_frame
     tf.word_wrap = True
@@ -248,8 +340,23 @@ def _add_page_title(slide, title, colors):
     p.alignment = PP_ALIGN.LEFT
     _set_font_name(p, FONT_NAME)
 
+    # 副标题
+    if subtitle:
+        sub_box = slide.shapes.add_textbox(
+            Inches(0.85), Inches(0.72), Inches(11.85), Inches(0.3)
+        )
+        stf = sub_box.text_frame
+        stf.word_wrap = True
+        sp = stf.paragraphs[0]
+        sp.text = subtitle
+        sp.font.size = Pt(11)
+        sp.font.color.rgb = _hex_to_rgb(HW_GRAY)
+        sp.alignment = PP_ALIGN.LEFT
+        _set_font_name(sp, FONT_NAME)
+
+    # 红色短线（标题下方）
     line_left = Inches(0.6)
-    line_top = Inches(0.78)
+    line_top = Inches(0.78 if not subtitle else 1.05)
     line_width = Inches(1.6)
     line_height = Inches(0.04)
     shape = slide.shapes.add_shape(
@@ -258,6 +365,43 @@ def _add_page_title(slide, title, colors):
     shape.fill.solid()
     shape.fill.fore_color.rgb = _hex_to_rgb(HW_RED)
     shape.line.fill.background()
+
+
+def _add_footer(slide, page_num, total_pages):
+    """页脚：左侧项目名 + 右侧页码 + 顶部分隔线"""
+    # 分隔细线
+    line = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, Inches(0.6), Inches(7.05), Inches(12.1), Inches(0.015)
+    )
+    line.fill.solid()
+    line.fill.fore_color.rgb = _hex_to_rgb(HW_BORDER)
+    line.line.fill.background()
+
+    # 左下项目名
+    left_box = slide.shapes.add_textbox(
+        Inches(0.6), Inches(7.1), Inches(6), Inches(0.3)
+    )
+    ltf = left_box.text_frame
+    lp = ltf.paragraphs[0]
+    lp.text = DEFAULT_FOOTER
+    lp.font.size = Pt(8)
+    lp.font.color.rgb = _hex_to_rgb(HW_GRAY)
+    lp.alignment = PP_ALIGN.LEFT
+    _set_font_name(lp, FONT_NAME)
+
+    # 右下页码
+    if total_pages:
+        page_text = f"{page_num} / {total_pages}"
+        right_box = slide.shapes.add_textbox(
+            Inches(11.0), Inches(7.1), Inches(1.7), Inches(0.3)
+        )
+        rtf = right_box.text_frame
+        rp = rtf.paragraphs[0]
+        rp.text = page_text
+        rp.font.size = Pt(8)
+        rp.font.color.rgb = _hex_to_rgb(HW_GRAY)
+        rp.alignment = PP_ALIGN.RIGHT
+        _set_font_name(rp, FONT_NAME)
 
 
 def _add_right_text(slide, text, colors):
@@ -776,7 +920,7 @@ def _style_chart(chart, chart_type):
         print(f"[警告] 网格线样式设置失败: {e}")
 
     try:
-        if chart_type != "pie":
+        if chart_type not in ("pie", "doughnut", "scatter"):
             value_axis = chart.value_axis
             value_axis.tick_labels.font.size = Pt(9)
             value_axis.tick_labels.font.color.rgb = _hex_to_rgb(HW_GRAY)
@@ -792,24 +936,27 @@ def _style_chart(chart, chart_type):
 
     try:
         plot = chart.plots[0]
-        plot.has_data_labels = True
-        data_labels = plot.data_labels
-        data_labels.font.size = Pt(9)
-        data_labels.font.color.rgb = _hex_to_rgb(HW_DARK)
-        try:
-            data_labels.show_legend_key = False
-            if chart_type in ("pie", "doughnut"):
-                data_labels.number_format = '0.0%'
-            else:
-                data_labels.show_value = True
-                data_labels.number_format = '0'
-                # line/scatter/area 图表不支持 OUTSIDE_END，Office 会报文件损坏
-                if chart_type in ("line", "scatter", "area"):
-                    data_labels.position = XL_LABEL_POSITION.CENTER
+        # scatter 图不支持数据标签，跳过
+        if chart_type != "scatter":
+            plot.has_data_labels = True
+            data_labels = plot.data_labels
+            data_labels.font.size = Pt(9)
+            data_labels.font.color.rgb = _hex_to_rgb(HW_DARK)
+            try:
+                data_labels.show_legend_key = False
+                if chart_type in ("pie", "doughnut"):
+                    data_labels.number_format = '0.0%'
                 else:
-                    data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
-        except Exception:
-            pass
+                    data_labels.show_value = True
+                    # 千分位 + 负数红色（商务报表风格）
+                    data_labels.number_format = '#,##0;[Red]-#,##0'
+                    # line/area 图表不支持 OUTSIDE_END，Office 会报文件损坏
+                    if chart_type in ("line", "area"):
+                        data_labels.position = XL_LABEL_POSITION.CENTER
+                    else:
+                        data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
+            except Exception:
+                pass
     except Exception as e:
         print(f"[警告] 数据标签样式设置失败: {e}")
 
