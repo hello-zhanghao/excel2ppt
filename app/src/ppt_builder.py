@@ -73,6 +73,8 @@ def build_ppt(config, chart_map, output_path):
         pages = _generate_auto_pages(config, chart_map)
 
     total_pages = len(pages)
+    # auto 颜色计数器：单系列图填 auto 时，按图表序号从调色板循环取色
+    color_counter = [0]
     for idx, page_def in enumerate(pages):
         page_type = str(page_def.get("页面类型", "content")).strip().lower()
 
@@ -85,7 +87,7 @@ def build_ppt(config, chart_map, output_path):
                 subtitle = parts[1].strip()
             _add_cover_slide(prs, title, subtitle, colors)
         else:
-            _add_content_slide_from_def(prs, page_def, chart_map, colors, idx + 1, total_pages)
+            _add_content_slide_from_def(prs, page_def, chart_map, colors, idx + 1, total_pages, color_counter)
 
     prs.save(output_path)
     return output_path
@@ -227,7 +229,7 @@ def _add_cover_slide(prs, title, subtitle, colors):
     _set_font_name(fp, FONT_NAME)
 
 
-def _add_content_slide_from_def(prs, page_def, chart_map, colors, page_num=0, total_pages=0):
+def _add_content_slide_from_def(prs, page_def, chart_map, colors, page_num=0, total_pages=0, color_counter=None):
     slide_layout = prs.slide_layouts[6]
     slide = prs.slides.add_slide(slide_layout)
 
@@ -288,7 +290,7 @@ def _add_content_slide_from_def(prs, page_def, chart_map, colors, page_num=0, to
         if idx >= len(chart_rects):
             break
         left, top, width, height = chart_rects[idx]
-        _add_native_chart(slide, chart_def, colors, left, top, width, height)
+        _add_native_chart(slide, chart_def, colors, left, top, width, height, color_counter)
 
     _add_footer(slide, page_num, total_pages)
 
@@ -447,7 +449,7 @@ def _add_top_text(slide, text, colors):
         p.space_after = Pt(4)
 
 
-def _add_native_chart(slide, chart_info, colors, left, top, width, height):
+def _add_native_chart(slide, chart_info, colors, left, top, width, height, color_counter=None):
     chart_type = str(chart_info.get("图表类型", "column")).strip().lower()
     title = str(chart_info.get("图表标题", ""))
     categories = chart_info.get("_categories", [])
@@ -459,7 +461,13 @@ def _add_native_chart(slide, chart_info, colors, left, top, width, height):
         _add_map_slide(slide, chart_info, left, top, width, height)
         return
 
-    if not color:
+    # auto：按图表序号从调色板循环取色，让每页图表颜色自动错开
+    if color.lower() == "auto":
+        if color_counter is None:
+            color_counter = [0]
+        color = HUAWEI_PALETTE[color_counter[0] % len(HUAWEI_PALETTE)]
+        color_counter[0] += 1
+    elif not color:
         color = HW_RED
     if not categories:
         return
