@@ -77,7 +77,7 @@ def _write_multi_result_sheet(wb, sheet_name, group_items):
                 title = _get_block_title(task)
                 _write_block_title(ws, title, current_row, 2)
                 current_row += 1
-                _write_scalar_block(ws, task, result, task.get("备注", ""), current_row)
+                _write_scalar_block(ws, task, result, task.get("区块名", ""), current_row)
                 current_row = ws.max_row + 1
             continue
 
@@ -110,10 +110,10 @@ def _write_multi_result_sheet(wb, sheet_name, group_items):
 
 
 def _get_block_title(task):
-    """获取区块标题：优先用备注，否则用任务序号"""
-    remark = task.get("备注")
-    if remark is not None and str(remark).strip():
-        return str(remark).strip()
+    """获取区块标题：优先用区块名，否则用任务序号"""
+    title = task.get("区块名", task.get("备注"))
+    if title is not None and str(title).strip():
+        return str(title).strip()
     seq = task.get("序号", "?")
     return f"任务{seq}"
 

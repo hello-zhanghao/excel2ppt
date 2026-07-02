@@ -243,6 +243,48 @@ def _find_or_get_sheet(wb, sheet_name, keywords):
     return wb[wb.sheetnames[0]]
 
 
+# 主题色键名（中英文），匹配到则归入 colors；其余键值归入 general
+_COLOR_KEYS = {
+    "主色", "primary", "深色", "dark", "灰色", "gray",
+    "浅色", "light", "边框", "border", "调色板", "palette",
+}
+
+
+def _parse_kv_block(all_rows, end_idx):
+    """解析表头行之前的"键|值"配置区，返回 (colors, general)。
+
+    约定：配置 Sheet 顶部、表头行（页码/序号/编号）之前的行，
+    每行前两列为"键|值"。颜色键归入 colors，其余归入 general。
+    无配置区时返回两个空 dict（向后兼容，走默认主题）。
+    """
+    colors = {}
+    general = {}
+    for row in all_rows[:end_idx]:
+        if not row or row[0] is None:
+            continue
+        key = str(row[0]).strip()
+        if not key:
+            continue
+        val = row[1] if len(row) > 1 and row[1] is not None else None
+        if val is None:
+            continue
+        val = str(val).strip()
+        if not val:
+            continue
+
+        key_lower = key.lower()
+        if key_lower.startswith("accent") or key.startswith("强调色"):
+            colors[key] = val
+        elif key in _COLOR_KEYS or key_lower in _COLOR_KEYS:
+            if key in ("调色板", "palette") or key_lower == "palette":
+                colors["palette"] = [c.strip() for c in val.split(",") if c.strip()]
+            else:
+                colors[key] = val
+        else:
+            general[key] = val
+    return colors, general
+
+
 def _parse_config(ws):
     all_rows = list(ws.iter_rows(values_only=True))
 
@@ -257,6 +299,9 @@ def _parse_config(ws):
 
     if header_idx is None:
         header_idx = 0
+
+    # 表头行之前的"键|值"行 → 主题色(colors)/通用(general)配置
+    colors, general = _parse_kv_block(all_rows, header_idx)
 
     headers = [str(c).strip() if c is not None else "" for c in all_rows[header_idx]]
 
@@ -273,8 +318,8 @@ def _parse_config(ws):
     pages = _group_rows_to_pages(raw_rows)
 
     return {
-        "general": {},
-        "colors": {},
+        "general": general,
+        "colors": colors,
         "pages": pages,
     }
 
@@ -300,11 +345,13 @@ def _group_rows_to_pages(raw_rows):
             if sub_title:
                 page_title = page_title + "|" + sub_title if page_title else sub_title
             html_page_show = str(row.get("HTML生成", row.get("是否生成HTML", "是"))).strip() if (row.get("HTML生成") is not None or row.get("是否生成HTML") is not None) else "是"
+            text_content = str(row.get("文字内容", "")).strip() if row.get("文字内容") is not None else ""
             current_page = {
                 "页码": page_num,
                 "页面类型": str(row.get("页面类型", "内容")).strip() or "内容",
                 "页面标题": page_title,
                 "布局": str(row.get("布局", "")).strip() if row.get("布局") is not None else "",
+                "文字内容": text_content,
                 "HTML生成": html_page_show,
                 "charts": [],
             }

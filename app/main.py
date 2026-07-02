@@ -260,7 +260,11 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_
         sys.exit(1)
 
     if not output_path:
-        output_dir = _ensure_output_dir(config_dir)
+        # 有透视结果文件时，复用其所在目录，避免 Excel 和 PPT 分散到不同目录
+        if pivot_data_file and os.path.exists(str(pivot_data_file)):
+            output_dir = os.path.dirname(os.path.abspath(str(pivot_data_file)))
+        else:
+            output_dir = _ensure_output_dir(config_dir)
         base_name = os.path.splitext(os.path.basename(config_path))[0]
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = os.path.join(output_dir, f"{base_name}_报告_{timestamp_str}.pptx")
