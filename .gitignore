@@ -6,10 +6,13 @@ __pycache__/
 *.egg-info/
 *.spec.bak
 
-# 打包文件
+# 打包临时文件
 build/
 dist/
 *.spec
+
+# 允许提交 exe 可执行文件（供用户直接使用）
+# *.exe
 
 # Office临时文件
 ~$*.xlsx
