@@ -805,6 +805,11 @@ def run_analysis(task, config_dir):
     if val_calc and result:
         result = _apply_value_calc(result, val_calc, 值字段, 聚合函数)
 
+    if 行维度:
+        task["行维度"] = ",".join(行维度)
+    if 列维度:
+        task["列维度"] = ",".join(列维度)
+
     return result, None
 
 
@@ -1154,9 +1159,17 @@ def _map_fields(map_str, fields, col_map):
     if not map_str or not map_str.strip():
         return col_map
     parts = [p.strip() for p in map_str.split(",") if p.strip()]
-    for i, new_name in enumerate(parts):
-        if i < len(fields) and new_name:
-            col_map[fields[i]] = new_name
+    for i, part in enumerate(parts):
+        if not part:
+            continue
+        if "=" in part:
+            src, dst = part.split("=", 1)
+            src = src.strip()
+            dst = dst.strip()
+            if src and dst:
+                col_map[src] = dst
+        elif i < len(fields) and part:
+            col_map[fields[i]] = part
     return col_map
 
 
