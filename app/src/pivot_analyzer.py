@@ -984,7 +984,10 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
                 elif field_name in count_pct_tmp_cols:
                     orig = count_pct_tmp_cols[field_name]
                     new_cols[i] = (orig, 'count_pct')
-        grouped.columns = pd.MultiIndex.from_tuples(new_cols) if any(isinstance(c, tuple) for c in new_cols) else new_cols
+        for i in range(len(new_cols)):
+            if not isinstance(new_cols[i], tuple):
+                new_cols[i] = (new_cols[i], '')
+        grouped.columns = pd.MultiIndex.from_tuples(new_cols)
     else:
         for col in grouped.columns:
             if col not in group_cols:
@@ -1209,6 +1212,12 @@ def _apply_binning(bin_spec, row_dims, col_dims, df, col_map):
     spec = bin_spec.strip()
     if "=" not in spec:
         return row_dims, col_dims, df
+    
+    custom_name = None
+    if "|" in spec:
+        spec, custom_name = spec.split("|", 1)
+        custom_name = custom_name.strip()
+    
     col_name, params_str = spec.split("=", 1)
     col_name = col_name.strip()
     params_str = params_str.strip()
@@ -1239,8 +1248,14 @@ def _apply_binning(bin_spec, row_dims, col_dims, df, col_map):
     labels = []
     for i in range(len(bin_edges) - 1):
         labels.append(f"{_fmt_num(bin_edges[i])}~{_fmt_num(bin_edges[i+1])}")
-    binned_col = col_name + "_区间"
+    
+    if custom_name:
+        binned_col = custom_name
+    else:
+        binned_col = col_name
     df[binned_col] = pd.cut(df[col_name], bins=bin_edges, labels=labels, include_lowest=True)
+    if binned_col != col_name and col_name in df.columns:
+        df.drop(col_name, axis=1, inplace=True)
     new_row_dims = [binned_col if d == col_name else d for d in row_dims]
     new_col_dims = [binned_col if d == col_name else d for d in col_dims]
     return new_row_dims, new_col_dims, df
