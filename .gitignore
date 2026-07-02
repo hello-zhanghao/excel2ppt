@@ -6,13 +6,11 @@ __pycache__/
 *.egg-info/
 *.spec.bak
 
-# 打包临时文件
+# 打包相关（临时文件 + 生成的 exe，由 build_exe.bat 本地生成）
 build/
 dist/
 *.spec
-
-# 允许提交 exe 可执行文件（供用户直接使用）
-# *.exe
+*.exe
 
 # Office临时文件
 ~$*.xlsx
