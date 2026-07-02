@@ -483,8 +483,8 @@ def _select_folder():
 
         root = tk.Tk()
         root.title("Excel 统一分析工具")
-        root.geometry("720x680")
-        root.minsize(600, 500)
+        root.geometry("720x720")
+        root.minsize(600, 560)
         root.configure(bg="#f7f8fa")
 
         # 样式
@@ -499,21 +499,25 @@ def _select_folder():
         style.configure("Pick.TButton", font=("Microsoft YaHei", 10), padding=6)
         style.configure("Scan.TButton", font=("Microsoft YaHei", 10), padding=6)
 
-        # 主容器
-        main_frame = ttk.Frame(root, padding="16 12 16 12")
+        # 主容器（用 tk.Frame 确保背景色生效，避免 ttk 主题在 Win11 下渲染异常）
+        main_frame = tk.Frame(root, bg="#f7f8fa", padx=16, pady=12)
         main_frame.pack(fill="both", expand=True)
 
-        # 标题行
-        title_frame = ttk.Frame(main_frame)
-        title_frame.pack(anchor="w", fill="x", pady=(0, 2))
-        ttk.Label(title_frame, text="Excel 统一分析工具", style="Header.TLabel").pack(side="left")
-        ttk.Label(title_frame, text=f"v{__VERSION__}", style="Info.TLabel").pack(side="left", padx=(8, 0), pady=(4, 0))
-        
+        # 标题行（用 tk.Label 确保文字渲染，不受 ttk 主题影响）
+        title_frame = tk.Frame(main_frame, bg="#f7f8fa")
+        title_frame.pack(anchor="w", fill="x", pady=(0, 4))
+        tk.Label(title_frame, text="Excel 统一分析工具", font=("Microsoft YaHei", 16, "bold"),
+                 fg="#182B49", bg="#f7f8fa").pack(side="left")
+        tk.Label(title_frame, text=f"v{__VERSION__}", font=("Microsoft YaHei", 9),
+                 fg="#666666", bg="#f7f8fa").pack(side="left", padx=(8, 0), pady=(10, 0))
+
         # 副标题和版本信息
-        sub_frame = ttk.Frame(main_frame)
+        sub_frame = tk.Frame(main_frame, bg="#f7f8fa")
         sub_frame.pack(anchor="w", fill="x", pady=(0, 12))
-        ttk.Label(sub_frame, text="PPT 报告生成 + 透视分析", style="Info.TLabel").pack(side="left")
-        ttk.Label(sub_frame, text=f"| 更新日期: {__UPDATE_DATE__}", style="Info.TLabel").pack(side="left", padx=(12, 0))
+        tk.Label(sub_frame, text="PPT 报告生成 + 透视分析", font=("Microsoft YaHei", 9),
+                 fg="#666666", bg="#f7f8fa").pack(side="left")
+        tk.Label(sub_frame, text=f"| 更新日期: {__UPDATE_DATE__}", font=("Microsoft YaHei", 9),
+                 fg="#999999", bg="#f7f8fa").pack(side="left", padx=(12, 0))
 
         # 路径选择行
         path_frame = ttk.Frame(main_frame)
