@@ -1,58 +1,57 @@
 @echo off
-chcp 65001 >nul
 setlocal enabledelayedexpansion
-title Excel 统一分析工具 - 打包脚本
+title Excel ͳһ�������� - ����ű�
 
 echo ============================================================
-echo   Excel 统一分析工具 - 一键打包脚本
+echo   Excel ͳһ�������� - һ������ű�
 echo ============================================================
 echo.
 
-REM 切换到脚本所在目录的 app 子目录
+REM �л����ű�����Ŀ¼�� app ��Ŀ¼
 cd /d "%~dp0app"
 
-REM ===== 1. 检查 Python =====
-echo [1/4] 检查 Python 环境...
+REM ===== 1. ��� Python =====
+echo [1/4] ��� Python ����...
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo   [错误] 未找到 Python，请先安装 Python 3.8+ 并添加到 PATH
-    echo   下载地址: https://www.python.org/downloads/
+    echo   [����] δ�ҵ� Python�����Ȱ�װ Python 3.8+ �����ӵ� PATH
+    echo   ���ص�ַ: https://www.python.org/downloads/
     pause
     exit /b 1
 )
 for /f "tokens=2" %%i in ('python --version') do set PYVER=%%i
-echo   Python 版本: %PYVER%  [OK]
+echo   Python �汾: %PYVER%  [OK]
 echo.
 
-REM ===== 2. 安装项目依赖 =====
-echo [2/4] 安装项目依赖...
+REM ===== 2. ��װ��Ŀ���� =====
+echo [2/4] ��װ��Ŀ����...
 python -m pip install --upgrade pip >nul 2>&1
 python -m pip install -r requirements.txt
 if errorlevel 1 (
-    echo   [错误] 依赖安装失败，请检查 requirements.txt
+    echo   [����] ������װʧ�ܣ����� requirements.txt
     pause
     exit /b 1
 )
-echo   依赖安装完成  [OK]
+echo   ������װ���  [OK]
 echo.
 
-REM ===== 3. 安装 PyInstaller =====
-echo [3/4] 安装 PyInstaller 打包工具...
+REM ===== 3. ��װ PyInstaller =====
+echo [3/4] ��װ PyInstaller �������...
 python -m pip install pyinstaller
 if errorlevel 1 (
-    echo   [错误] PyInstaller 安装失败
+    echo   [����] PyInstaller ��װʧ��
     pause
     exit /b 1
 )
-echo   PyInstaller 安装完成  [OK]
+echo   PyInstaller ��װ���  [OK]
 echo.
 
-REM ===== 4. 开始打包 =====
-echo [4/4] 开始打包（单文件 GUI 模式，约需 2-5 分钟）...
+REM ===== 4. ��ʼ��� =====
+echo [4/4] ��ʼ��������ļ� GUI ģʽ��Լ�� 2-5 ���ӣ�...
 echo.
 
 python -m PyInstaller --noconfirm --onefile --windowed ^
-    --name "Excel统一分析工具" ^
+    --name "Excelͳһ��������" ^
     --add-data "static;static" ^
     --hidden-import "tkinter" ^
     --hidden-import "tkinter.filedialog" ^
@@ -76,32 +75,32 @@ python -m PyInstaller --noconfirm --onefile --windowed ^
 
 if errorlevel 1 (
     echo.
-    echo   [错误] 打包失败，请查看上方错误信息
+    echo   [����] ���ʧ�ܣ���鿴�Ϸ�������Ϣ
     pause
     exit /b 1
 )
 
-REM ===== 移动 exe 到项目根目录 =====
-if exist "dist\Excel统一分析工具.exe" (
-    move /y "dist\Excel统一分析工具.exe" "%~dp0Excel统一分析工具.exe" >nul
+REM ===== �ƶ� exe ����Ŀ��Ŀ¼ =====
+if exist "dist\Excelͳһ��������.exe" (
+    move /y "dist\Excelͳһ��������.exe" "%~dp0Excelͳһ��������.exe" >nul
     echo.
     echo ============================================================
-    echo   打包成功！
+    echo   ����ɹ���
     echo ============================================================
-    echo   输出文件: %~dp0Excel统一分析工具.exe
-    echo   文件大小:
-    for %%A in ("%~dp0Excel统一分析工具.exe") do echo     %%~zA 字节
+    echo   ����ļ�: %~dp0Excelͳһ��������.exe
+    echo   �ļ���С:
+    for %%A in ("%~dp0Excelͳһ��������.exe") do echo     %%~zA �ֽ�
     echo.
-    echo   使用方法: 双击 exe 文件即可启动 GUI 界面
+    echo   ʹ�÷���: ˫�� exe �ļ��������� GUI ����
     echo ============================================================
 ) else (
-    echo   [错误] 未找到生成的 exe 文件
+    echo   [����] δ�ҵ����ɵ� exe �ļ�
 )
 
-REM 清理临时文件
+REM ������ʱ�ļ�
 if exist "build" rmdir /s /q "build"
 if exist "dist" rmdir /s /q "dist"
-if exist "Excel统一分析工具.spec" del /q "Excel统一分析工具.spec"
+if exist "Excelͳһ��������.spec" del /q "Excelͳһ��������.spec"
 
 echo.
 pause
