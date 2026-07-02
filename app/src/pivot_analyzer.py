@@ -936,8 +936,9 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
         df = df.copy()
         for tmp_col, orig_col in pct_tmp_cols.items():
             df[tmp_col] = df[orig_col].astype(float)
+        # count_pct 只做行数计数，与数据类型无关，直接复制原始列（支持字符串列）
         for tmp_col, orig_col in count_pct_tmp_cols.items():
-            df[tmp_col] = df[orig_col].astype(float)
+            df[tmp_col] = df[orig_col]
     
     for vcol, funcs in field_funcs.items():
         agg_dict[vcol] = funcs
