@@ -383,10 +383,19 @@ def _run_html_mode(config_path, output_path=None, pivot_file=None, ppt_file=None
     :param ppt_file: PPT文件路径（可选）
     """
     from src.html_builder import generate_html_report, start_preview_server
+    from src.excel_reader import read_ppt_config
 
     config_dir = os.path.dirname(config_path)
     print(f"[HTML/1] 读取配置: {config_path}")
 
+    ppt_pages = []
+    try:
+        ppt_pages = read_ppt_config(config_path)
+        print(f"    → PPT 配置: {len(ppt_pages)} 页")
+    except Exception as e:
+        print(f"    [警告] 读取 PPT 配置失败: {e}")
+
+    pivot_excel = None
     if pivot_file:
         if os.path.isabs(pivot_file):
             pivot_excel = pivot_file
@@ -397,21 +406,6 @@ def _run_html_mode(config_path, output_path=None, pivot_file=None, ppt_file=None
         else:
             print(f"    [警告] 指定的透视结果文件不存在: {pivot_excel}")
             pivot_excel = None
-    else:
-        pivot_excel = None
-
-    if ppt_file:
-        if os.path.isabs(ppt_file):
-            ppt_path = ppt_file
-        else:
-            ppt_path = os.path.join(config_dir, ppt_file)
-        if os.path.exists(ppt_path):
-            print(f"    → PPT文件: {os.path.basename(ppt_path)}")
-        else:
-            print(f"    [警告] 指定的PPT文件不存在: {ppt_path}")
-            ppt_path = None
-    else:
-        ppt_path = None
 
     if not pivot_excel:
         print(f"[HTML/2] 自动查找透视分析结果...")
@@ -428,26 +422,21 @@ def _run_html_mode(config_path, output_path=None, pivot_file=None, ppt_file=None
                     pivot_excel = excel_files[0]
                     print(f"    → 使用最新Excel: {os.path.basename(pivot_excel)}")
 
-    if not ppt_path:
-        output_dirs = glob.glob(os.path.join(config_dir, "output_*"))
-        if output_dirs:
-            for d in reversed(sorted(output_dirs, key=os.path.getmtime)):
-                ppt_files = glob.glob(os.path.join(d, "*.pptx"))
-                if ppt_files:
-                    ppt_path = ppt_files[0]
-                    print(f"    → 找到PPT: {os.path.basename(ppt_path)}")
-                    break
-
-    if not pivot_excel and not ppt_path:
-        print(f"    [警告] 未找到透视结果或PPT文件，尝试直接运行透视分析...")
+    if not pivot_excel:
+        print(f"    未找到透视结果，自动运行透视分析...")
         pivot_excel = _run_pivot_mode(config_path)
-        if pivot_excel:
-            print(f"[HTML/3] 生成PPT...")
-            ppt_out_dir = os.path.dirname(pivot_excel)
-            base_name = os.path.splitext(os.path.basename(config_path))[0]
-            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-            ppt_path = os.path.join(ppt_out_dir, f"{base_name}_报告_{timestamp_str}.pptx")
-            _run_ppt_mode(config_path, ppt_path, pivot_data_file=pivot_excel)
+
+    ppt_path = None
+    if ppt_file:
+        if os.path.isabs(ppt_file):
+            ppt_path = ppt_file
+        else:
+            ppt_path = os.path.join(config_dir, ppt_file)
+        if os.path.exists(ppt_path):
+            print(f"    → PPT文件: {os.path.basename(ppt_path)}")
+        else:
+            print(f"    [警告] 指定的PPT文件不存在: {ppt_path}")
+            ppt_path = None
 
     if not output_path:
         out_dir = os.path.dirname(pivot_excel) if pivot_excel else config_dir
@@ -456,13 +445,14 @@ def _run_html_mode(config_path, output_path=None, pivot_file=None, ppt_file=None
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = os.path.join(out_dir, f"{base_name}_报告_{timestamp_str}.html")
 
-    print(f"[HTML/4] 生成HTML报告...")
+    print(f"[HTML/3] 生成HTML报告...")
     html_path = generate_html_report(
         excel_path=pivot_excel,
         ppt_path=ppt_path,
+        ppt_config=ppt_pages if ppt_pages else None,
         output_dir=os.path.dirname(output_path),
         report_title=f"{os.path.splitext(os.path.basename(config_path))[0]} - 数据分析报告",
-        report_subtitle="透视分析结果 + PPT预览",
+        report_subtitle="透视分析结果",
     )
 
     if html_path:
@@ -474,7 +464,8 @@ def _run_html_mode(config_path, output_path=None, pivot_file=None, ppt_file=None
         print(f"  • 数据摘要卡片")
         print(f"  • 图表切换（柱状图/折线图/饼图/表格）")
         print(f"  • 数据详情表格")
-        print(f"  • PPT页面预览（点击缩放）")
+        if ppt_path:
+            print(f"  • PPT页面预览（点击缩放）")
     else:
         print(f"[错误] HTML报告生成失败")
         sys.exit(1)

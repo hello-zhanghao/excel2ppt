@@ -227,10 +227,21 @@ def generate_html_report(excel_path, ppt_path, output_dir):
     
     sys.path.insert(0, PROJECT_DIR)
     from app.src.html_builder import generate_html_report as build_html
+    from app.src.excel_reader import read_config
+    
+    config_path = os.path.join(SCRIPT_DIR, "项目配置.xlsx")
+    ppt_pages = []
+    try:
+        config = read_config(config_path)
+        ppt_pages = config.get("pages", [])
+        print(f"  PPT 配置: {len(ppt_pages)} 页")
+    except Exception as e:
+        print(f"  [警告] 读取 PPT 配置失败: {e}")
     
     html_path = build_html(
         excel_path=excel_path,
         ppt_path=ppt_path,
+        ppt_config=ppt_pages if ppt_pages else None,
         output_dir=output_dir,
         report_title="防护用例测试报告",
         report_subtitle="透视分析结果 + PPT预览",
