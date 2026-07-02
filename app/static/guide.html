@@ -79,7 +79,7 @@
 <div class="sidebar" id="sidebar">
 <div class="sidebar-header">
 <h3>&#x1F4CA; 统一分析工具</h3>
-<div class="ver">操作指南 v2.8.0</div>
+<div class="ver">操作指南 v2.9.1</div>
 </div>
 <nav class="sidebar-nav">
 <div class="nav-section-title">入门</div>
@@ -105,6 +105,8 @@
 <a class="nav-link sub" href="#pivot-validate">配置校验</a>
 
 <div class="nav-section-title">其他</div>
+<a class="nav-link" href="#html-report">HTML 报告</a>
+<a class="nav-link" href="#pct-format">百分数格式</a>
 <a class="nav-link" href="#cli">命令行用法</a>
 <a class="nav-link" href="#faq">常见问题</a>
 <a class="nav-link" href="#download">示例下载</a>
@@ -145,7 +147,7 @@
 
 <h2 id="ppt-config" style="color:var(--accent);border-bottom-color:var(--accent);">三、PPT 配置列说明</h2>
 <div class="card">
-<p>Sheet 名 <code>PPT配置</code>，标题行首列为 <code>页码</code>，系统自动识别。共 <b>13 列</b>：</p>
+<p>Sheet 名 <code>PPT配置</code>，标题行首列为 <code>页码</code>，系统自动识别。共 <b>16 列</b>：</p>
 <table>
 <tr><th style="width:10%">列名</th><th style="width:12%">必填</th><th>说明</th></tr>
 <tr><td><b>页码</b></td><td>&#x2714;</td><td>相同页码的多行合并到同一页幻灯片</td></tr>
@@ -155,12 +157,15 @@
 <tr><td><b>图表类型</b></td><td>&mdash;</td><td>见下方「图表类型详解」</td></tr>
 <tr><td><b>数据Sheet</b></td><td>&#x2714;</td><td>数据所在的 Sheet 名称（CSV文件可填写任意值，会被忽略）</td></tr>
 <tr><td><b>数据源</b></td><td>&mdash;</td><td>数据文件名称，支持 Excel(.xlsx) 或 CSV 文件，系统按匹配度自动选择。填 <code>{pivot}</code> 或 <code>透视结果</code> 可引用透视分析的输出结果</td></tr>
-<tr><td><b>X轴范围</b></td><td>&#x2714;</td><td>列名（<code>频段</code>）、多列（<code>频段,带宽</code>）或 Excel 范围（<code>A2:A15</code>）</td></tr>
-<tr><td><b>Y轴范围</b></td><td>&#x2714;</td><td>列名或逗号分隔多系列，也支持 Excel 范围</td></tr>
+<tr><td><b>X轴</b></td><td>&#x2714;</td><td>列名（<code>频段</code>）、多列（<code>频段,带宽</code>）或 Excel 范围（<code>A2:A15</code>）</td></tr>
+<tr><td><b>Y轴</b></td><td>&#x2714;</td><td>列名或逗号分隔多系列，也支持 Excel 范围</td></tr>
 <tr><td><b>图表标题</b></td><td>&mdash;</td><td>图表上方显示标题</td></tr>
 <tr><td><b>颜色</b></td><td>&mdash;</td><td>单系列颜色（如 <code>#C8102E</code>），不填则自动调色板</td></tr>
 <tr><td><b>区块名</b></td><td>&mdash;</td><td>在数据 Sheet 中定位特定区块的表头行（CSV文件不支持）</td></tr>
 <tr><td><b>结论模板</b></td><td>&mdash;</td><td>含占位符的结论文本，见下方「结论模板」</td></tr>
+<tr><td><b>HTML生成</b></td><td>&mdash;</td><td>控制该行是否在 HTML 报告中生成。填 <code>否</code>/<code>0</code>/<code>跳过</code> 则跳过，默认「是」</td></tr>
+<tr><td><b>HTML图表类型</b></td><td>&mdash;</td><td>HTML 报告中的图表类型（<code>bar</code>/<code>line</code>/<code>pie</code>/<code>table</code>），覆盖 PPT 图表类型</td></tr>
+<tr><td><b>备注</b></td><td>&mdash;</td><td>页面备注说明，会显示在 HTML 报告章节下方</td></tr>
 </table>
 <div class="callout callout-info">
 <strong>数据源匹配说明：</strong>系统支持 Excel(.xlsx) 和 CSV 两种数据文件格式。填写数据源时：
@@ -434,12 +439,14 @@ Y轴范围: 基站数</pre>
 <p style="font-size:13px">例：<code>下行PRB=0,30,50,70,100</code><br>&rarr; 0~30, 30~50, 50~70, 70~100</p>
 </div>
 </div>
-<div class="callout callout-info" style="margin-top:12px"><b>规则：</b>3 个参数 = 自动等距；4 个及以上 = 自定义断点。分箱后列自动替换行/列维度中的原始列名。</div>
+<div class="callout callout-info" style="margin-top:12px"><b>规则：</b>3 个参数 = 自动等距；4 个及以上 = 自定义断点。分箱后列自动替换行/列维度中的原始列名。支持 <code>|自定义列名</code> 后缀，如 <code>销售额=500,1000,1500,2000|销售额区间</code>。</div>
 </div>
 
 <h3 id="pivot-calc">4.5 值后处理（聚合后换算）</h3>
 <div class="card">
 <p>聚合完成后对数值列做一步换算，在 <b>「值计算」</b>列填写：</p>
+
+<div class="card-header" style="margin-top:14px">单列与常数运算</div>
 <table>
 <tr><th>表达式</th><th>效果</th><th>示例</th></tr>
 <tr><td><code>*100</code></td><td>乘以 100</td><td>77.4% &rarr; 7740</td></tr>
@@ -447,6 +454,18 @@ Y轴范围: 基站数</pre>
 <tr><td><code>+10</code></td><td>加 10</td><td>400 &rarr; 410</td></tr>
 <tr><td><code>-5</code></td><td>减 5</td><td>100 &rarr; 95</td></tr>
 </table>
+
+<div class="card-header" style="margin-top:14px"><span class="tag tag-green">多列组合运算</span>（v2.9.0 新增）</div>
+<table>
+<tr><th>表达式</th><th>效果</th><th>示例</th></tr>
+<tr><td><code>列A/列B</code></td><td>两列相除</td><td><code>销售额/销量</code> &rarr; 单价</td></tr>
+<tr><td><code>列A+列B</code></td><td>两列相加</td><td><code>销售额+利润</code></td></tr>
+<tr><td><code>列A*列B</code></td><td>两列相乘</td><td><code>单价*销量</code></td></tr>
+<tr><td><code>列A-列B</code></td><td>两列相减</td><td><code>收入-成本</code></td></tr>
+<tr><td><code>列A/列B=新列名</code></td><td>指定结果列名</td><td><code>销售额/销量=单价(万元/个)</code></td></tr>
+<tr><td><code>列A/列B*100</code></td><td>组合运算</td><td><code>利润/销售额*100</code> &rarr; 利润率</td></tr>
+</table>
+<div class="callout callout-info" style="margin-top:12px"><b>注意：</b>多列组合需要使用<b>值映射后的列名</b>。如配置 <code>值字段=销售额,销量</code>、<code>值映射=总销售额,总销量</code>，则表达式应写 <code>总销售额/总销量=单价</code>。</div>
 <p style="margin-top:8px;font-size:13px">多值字段对应多表达式时逗号分隔：<code>*100,*1000</code>（利用率&times;100，速率&times;1000）。</p>
 </div>
 
@@ -557,7 +576,71 @@ python app/main.py pivot 路径/文件夹</pre>
 
 <hr class="divider">
 
-<h2 id="cli">五、命令行用法</h2>
+<h2 id="html-report" style="color:#70AD47;border-bottom-color:#70AD47;">五、HTML 报告生成</h2>
+<div class="card">
+<p>无需额外配置，从 PPT 配置 + 透视结果自动生成可交互的 HTML 数据报告（v2.9.0 新增）。</p>
+
+<div class="card-header" style="margin-top:14px">特性</div>
+<div class="grid-2" style="margin-top:12px">
+<div>
+<ul style="font-size:13px">
+<li><b>零配置</b>：直接从 PPT 配置推断图表类型和布局</li>
+<li><b>图表切换</b>：每个章节支持柱状图/折线图/饼图一键切换</li>
+<li><b>目录导航</b>：左侧目录，点击跳转对应章节</li>
+</ul>
+</div>
+<div>
+<ul style="font-size:13px">
+<li><b>数据摘要</b>：自动提取合计、平均、最大、最小值</li>
+<li><b>响应式</b>：适配手机、平板、电脑</li>
+<li><b>离线浏览</b>：ECharts 内嵌，无需联网</li>
+</ul>
+</div>
+</div>
+
+<div class="card-header" style="margin-top:14px">控制方式</div>
+<p style="font-size:13px">在 PPT 配置中使用以下两列控制 HTML 输出：</p>
+<table>
+<tr><th>配置列</th><th>说明</th></tr>
+<tr><td><b>HTML生成</b></td><td>填 <code>否</code>/<code>0</code>/<code>跳过</code> 则该页不在 HTML 中显示</td></tr>
+<tr><td><b>HTML图表类型</b></td><td>覆盖 PPT 图表类型，可选 <code>bar</code>/<code>line</code>/<code>pie</code>/<code>table</code></td></tr>
+</table>
+
+<div class="card-header" style="margin-top:14px">命令行</div>
+<pre># 从配置文件生成 HTML 报告
+python app/main.py html 项目配置.xlsx
+
+# 指定透视结果文件
+python app/main.py html 项目配置.xlsx --pivot-file 分析结果.xlsx
+
+# 指定输出路径
+python app/main.py html 项目配置.xlsx -o report.html</pre>
+</div>
+
+<h2 id="pct-format" style="color:#ED7D31;border-bottom-color:#ED7D31;">六、百分数格式化</h2>
+<div class="card">
+<p>输出结果会自动识别百分数列并格式化显示（v2.9.1 新增）。</p>
+
+<div class="card-header" style="margin-top:14px">识别规则</div>
+<p style="font-size:13px">列名包含以下关键词时自动识别为百分数列：</p>
+<p><span class="tag tag-blue">占比</span> <span class="tag tag-blue">率</span> <span class="tag tag-blue">pct</span> <span class="tag tag-blue">百分比</span> <span class="tag tag-blue">比例</span></p>
+
+<div class="card-header" style="margin-top:14px">格式化规则</div>
+<table>
+<tr><th>列名</th><th>原始值</th><th>转换</th><th>Excel 显示</th></tr>
+<tr><td>销售额占比</td><td>0.3765</td><td>&times;100</td><td><code>37.6%</code></td></tr>
+<tr><td>PRB利用率</td><td>0.98</td><td>&times;100</td><td><code>98.1%</code></td></tr>
+<tr><td>PRB利用率(%)</td><td>98.1</td><td>保持</td><td><code>98.1%</code></td></tr>
+<tr><td>总销售额</td><td>4800</td><td>保持</td><td><code>4800</code></td></tr>
+</table>
+<div class="callout callout-info" style="margin-top:12px">
+<b>关键规则：</b>列名<b>不含</b> <code>%</code> 时值 &times;100；<b>含</b> <code>%</code> 时值不变直接显示。这样可以区分「透视结果的小数（0.38）」和「外部数据的百分数（38.1）」两种来源。
+</div>
+</div>
+
+<hr class="divider">
+
+<h2 id="cli">七、命令行用法</h2>
 <div class="card">
 <pre># 无参数 → 打开 GUI 窗口
 python app/main.py
@@ -573,8 +656,12 @@ python app/main.py ppt 路径/文件夹
 python app/main.py pivot 路径/文件夹
 
 # 仅校验透视分析配置（不执行）
-python app/main.py pivot 路径/文件夹 --check</pre>
-<p style="color:var(--muted);margin-top:8px">输出文件保存在 <code>output_时间戳/</code> 子目录。PPT 为 <code>.pptx</code>，双击图表可查看和编辑原生数据。</p>
+python app/main.py pivot 路径/文件夹 --check
+
+# 生成 HTML 报告
+python app/main.py html 路径/文件夹
+python app/main.py html 路径/文件夹 --pivot-file 分析结果.xlsx</pre>
+<p style="color:var(--muted);margin-top:8px">输出文件保存在 <code>output_时间戳/</code> 子目录。PPT 为 <code>.pptx</code>，双击图表可查看和编辑原生数据。HTML 为 <code>.html</code>，浏览器直接打开。</p>
 </div>
 
 <div class="card" style="background:#fff7e6;border-color:#f5c842;margin-top:24px;">
