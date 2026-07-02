@@ -1268,6 +1268,18 @@ def _fmt_num(val):
 
 
 def _apply_value_calc(result, val_calc, value_cols, agg_funcs):
+    """
+    值计算：支持单列与常数运算，以及多列组合运算。
+    
+    语法格式：
+    1. 单列与常数：*100, /1000, +10, -5
+    2. 多列组合：销售额/销量, 利润/销售额*100
+    3. 指定结果列名：销售额/销量=单价
+    
+    示例：
+    - 值计算="销售额,销量"
+    - 表达式列："销售额/销量=单价"
+    """
     calcs = [c.strip() for c in val_calc.split(",")]
     calc_map = {}
     for i, expr in enumerate(calcs):
@@ -1279,29 +1291,81 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs):
     for key, df in result.items():
         if not isinstance(df, pd.DataFrame):
             continue
+        
+        new_cols = {}
+        
         for col in df.columns:
             if not pd.api.types.is_numeric_dtype(df[col]):
                 continue
             expr = _find_matching_calc(col, calc_map, value_cols)
             if expr:
+                # 解析表达式
+                result_col_name = None
+                if "=" in expr:
+                    expr_part, result_col_name = expr.split("=", 1)
+                    expr = expr_part.strip()
+                    result_col_name = result_col_name.strip()
+                
+                # 检查是否包含多列运算
+                has_multi_col = False
+                for vcol in value_cols:
+                    if vcol in expr:
+                        has_multi_col = True
+                        break
+                
                 try:
-                    if expr.startswith("*"):
-                        factor = float(expr[1:])
-                        df[col] = df[col] * factor
-                    elif expr.startswith("/"):
-                        divisor = float(expr[1:])
-                        if divisor == 0:
-                            print(f"    [警告] 值计算除数为0，跳过: {expr}")
-                            continue
-                        df[col] = df[col] / divisor
-                    elif expr.startswith("+"):
-                        addend = float(expr[1:])
-                        df[col] = df[col] + addend
-                    elif expr.startswith("-"):
-                        subtrahend = float(expr[1:])
-                        df[col] = df[col] - subtrahend
-                except Exception:
-                    pass
+                    if has_multi_col:
+                        # 多列组合运算
+                        calc_df = df.copy()
+                        # 替换列名为有效的变量名（处理特殊字符）
+                        expr_safe = expr
+                        col_mapping = {}
+                        for vcol in value_cols:
+                            if vcol in expr_safe:
+                                safe_name = vcol.replace("(", "_").replace(")", "_").replace("%", "")
+                                col_mapping[safe_name] = vcol
+                                expr_safe = expr_safe.replace(vcol, safe_name)
+                                if safe_name != vcol and vcol in calc_df.columns:
+                                    calc_df[safe_name] = calc_df[vcol]
+                        
+                        # 使用 pandas eval 进行计算
+                        calc_result = calc_df.eval(expr_safe)
+                        
+                        if result_col_name:
+                            new_col_name = result_col_name
+                        else:
+                            # 自动生成列名
+                            new_col_name = expr.replace("/", "_除_").replace("*", "_乘_").replace("+", "_加_").replace("-", "_减_")
+                            new_col_name = new_col_name.replace("(", "").replace(")", "").replace("%", "")
+                        
+                        new_cols[new_col_name] = calc_result
+                    else:
+                        # 单列与常数运算（保持原有逻辑）
+                        if expr.startswith("*"):
+                            factor = float(expr[1:])
+                            df[col] = df[col] * factor
+                        elif expr.startswith("/"):
+                            divisor = float(expr[1:])
+                            if divisor == 0:
+                                print(f"    [警告] 值计算除数为0，跳过: {expr}")
+                                continue
+                            df[col] = df[col] / divisor
+                        elif expr.startswith("+"):
+                            addend = float(expr[1:])
+                            df[col] = df[col] + addend
+                        elif expr.startswith("-"):
+                            subtrahend = float(expr[1:])
+                            df[col] = df[col] - subtrahend
+                        elif expr.replace(".", "").replace("-", "").isnumeric():
+                            # 纯数字常量替换
+                            df[col] = float(expr)
+                except Exception as e:
+                    print(f"    [警告] 值计算表达式解析失败: {expr}, 错误: {e}")
+        
+        # 添加新计算的列
+        for new_col_name, calc_result in new_cols.items():
+            df[new_col_name] = calc_result
+
     return result
 
 
