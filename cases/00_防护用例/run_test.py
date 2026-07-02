@@ -222,171 +222,26 @@ def pptx_to_images(ppt_path, output_dir):
 
 
 def generate_html_report(excel_path, ppt_path, output_dir):
-    """生成自包含 HTML 报告：PPT 页面截图 + Excel 数据表格"""
+    """使用 html_builder 生成 HTML 报告"""
     print_header("生成 HTML 报告（手机可查看）")
-
-    if not ppt_path or not os.path.exists(ppt_path):
-        print(f"  {RED}PPT 文件不存在，跳过{RESET}")
-        return None
-
-    # 1. PPT 转图片
-    images_dir = os.path.join(output_dir, "slide_images")
-    print(f"  正在将 PPT 转为图片...")
-    images = pptx_to_images(ppt_path, images_dir)
-    if not images:
-        print(f"  {YELLOW}未生成图片，跳过 HTML 报告{RESET}")
-        return None
-    print(f"  {GREEN}已生成 {len(images)} 张幻灯片图片{RESET}")
-
-    # 2. 读取 Excel 数据
-    excel_sections = []
-    if excel_path and os.path.exists(excel_path):
-        wb = openpyxl.load_workbook(excel_path, data_only=True)
-        for sheet_name in wb.sheetnames:
-            ws = wb[sheet_name]
-            rows = list(ws.iter_rows(values_only=True))
-            if not rows:
-                continue
-            # 找表头行
-            header_idx = 0
-            for i, row in enumerate(rows[:3]):
-                non_none = [c for c in row if c is not None]
-                if len(non_none) >= 2:
-                    header_idx = i
-                    break
-            headers = [str(c) if c is not None else "" for c in rows[header_idx]]
-            col_indices = [i for i, h in enumerate(headers) if h.strip()]
-            headers = [headers[i] for i in col_indices]
-
-            data_rows = []
-            for row in rows[header_idx + 1:]:
-                vals = []
-                for i in col_indices:
-                    v = row[i] if i < len(row) else None
-                    if v is None:
-                        vals.append("")
-                    elif isinstance(v, float):
-                        vals.append(f"{v:.4f}" if v != int(v) else str(int(v)))
-                    else:
-                        vals.append(str(v))
-                if any(v.strip() for v in vals):
-                    data_rows.append(vals)
-
-            excel_sections.append({
-                "name": sheet_name,
-                "headers": headers,
-                "rows": data_rows,
-            })
-        wb.close()
-
-    # 3. 构建 HTML
-    # 图片转 base64 嵌入，生成完全自包含的 HTML
-    slide_html_parts = []
-    for idx, img_path in enumerate(images, 1):
-        with open(img_path, "rb") as f:
-            img_b64 = base64.b64encode(f.read()).decode("utf-8")
-        slide_html_parts.append(f'''
-    <div class="slide-card">
-      <div class="slide-num">第 {idx} 页</div>
-      <img src="data:image/png;base64,{img_b64}" alt="Slide {idx}" loading="lazy" onclick="this.classList.toggle('zoomed')">
-    </div>''')
-
-    # Excel 表格 HTML
-    excel_html_parts = []
-    for sec in excel_sections:
-        header_cells = "".join(f"<th>{h}</th>" for h in sec["headers"])
-        body_rows = ""
-        for row in sec["rows"]:
-            cells = "".join(f"<td>{v}</td>" for v in row)
-            body_rows += f"<tr>{cells}</tr>"
-        excel_html_parts.append(f'''
-    <div class="excel-card">
-      <h3>{sec["name"]}</h3>
-      <div class="table-wrap">
-        <table><thead><tr>{header_cells}</tr></thead><tbody>{body_rows}</tbody></table>
-      </div>
-    </div>''')
-
-    html_content = f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>防护用例测试报告</title>
-<style>
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #f0f2f5; color: #333; }}
-  .header {{ background: linear-gradient(135deg, #2E75B6, #1a4a7a); color: #fff; padding: 20px 16px; text-align: center; position: sticky; top: 0; z-index: 100; }}
-  .header h1 {{ font-size: 18px; margin-bottom: 4px; }}
-  .header p {{ font-size: 12px; opacity: 0.8; }}
-  .container {{ max-width: 900px; margin: 0 auto; padding: 12px; }}
-  .section-title {{ font-size: 16px; font-weight: bold; color: #2E75B6; margin: 20px 0 10px; padding-left: 8px; border-left: 4px solid #2E75B6; }}
-  .slide-card {{ background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 16px; overflow: hidden; }}
-  .slide-num {{ background: #2E75B6; color: #fff; font-size: 13px; padding: 6px 12px; }}
-  .slide-card img {{ width: 100%; display: block; cursor: zoom-out; transition: transform 0.3s; }}
-  .slide-card img.zoomed {{ transform: scale(1.5); cursor: zoom-in; }}
-  .excel-card {{ background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 16px; overflow: hidden; }}
-  .excel-card h3 {{ font-size: 14px; color: #2E75B6; padding: 8px 12px; border-bottom: 1px solid #eee; }}
-  .table-wrap {{ overflow-x: auto; -webkit-overflow-scrolling: touch; }}
-  table {{ width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }}
-  th {{ background: #f5f7fa; color: #333; font-weight: 600; padding: 8px 10px; text-align: left; border-bottom: 2px solid #ddd; position: sticky; top: 0; }}
-  td {{ padding: 6px 10px; border-bottom: 1px solid #eee; }}
-  tbody tr:nth-child(even) {{ background: #fafbfc; }}
-  .footer {{ text-align: center; padding: 20px; color: #999; font-size: 12px; }}
-</style>
-</head>
-<body>
-<div class="header">
-  <h1>防护用例测试报告</h1>
-  <p>PPT 幻灯片预览 + Excel 数据明细</p>
-</div>
-<div class="container">
-  <div class="section-title">PPT 幻灯片预览（点击图片可缩放）</div>
-  {''.join(slide_html_parts)}
-  <div class="section-title">Excel 透视分析数据</div>
-  {''.join(excel_html_parts)}
-  <div class="footer">由防护用例测试脚本自动生成</div>
-</div>
-</body>
-</html>"""
-
-    html_path = os.path.join(output_dir, "preview.html")
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(html_content)
-    print(f"  {GREEN}HTML 报告已生成: {html_path}{RESET}")
+    
+    sys.path.insert(0, PROJECT_DIR)
+    from app.src.html_builder import generate_html_report as build_html
+    
+    html_path = build_html(
+        excel_path=excel_path,
+        ppt_path=ppt_path,
+        output_dir=output_dir,
+        report_title="防护用例测试报告",
+        report_subtitle="透视分析结果 + PPT预览",
+    )
     return html_path
 
 
 def start_preview_server(html_path):
-    """启动本地 HTTP 服务器托管 HTML 报告"""
-    import http.server
-    import threading
-    import socket
-
-    # 找可用端口
-    for port in range(8765, 8780):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(("", port))
-                break
-        except OSError:
-            continue
-
-    directory = os.path.dirname(html_path)
-    filename = os.path.basename(html_path)
-
-    handler = lambda *args: http.server.SimpleHTTPRequestHandler(
-        *args, directory=directory
-    )
-
-    server = http.server.HTTPServer(("0.0.0.0", port), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    url = f"http://localhost:{port}/{filename}"
-    print(f"  {GREEN}预览服务已启动: {url}{RESET}")
-    print(f"  {CYAN}在 TRAE 预览面板中查看，手机端也可访问{RESET}")
-    return url, server
+    """使用 html_builder 启动预览服务器"""
+    from app.src.html_builder import start_preview_server as start_server
+    return start_server(html_path)
 
 
 def main():
