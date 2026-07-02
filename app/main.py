@@ -149,6 +149,18 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_
         print("[错误] 配置校验未通过，请修正后再执行")
         sys.exit(1)
 
+    # 跳过「是否生成=否」的页面
+    skip_keywords = ("否", "no", "false", "0", "不生成", "跳过", "skip")
+    filtered_pages = []
+    for page in pages:
+        should_gen = str(page.get("是否生成", "是")).strip().lower()
+        if should_gen in skip_keywords:
+            print(f"    [SKIP] 第{page.get('页码','?')}页：是否生成=否")
+            continue
+        filtered_pages.append(page)
+    pages = filtered_pages
+    config["pages"] = pages
+
     if pivot_data_file:
         print(f"    → 透视结果数据源: {os.path.basename(pivot_data_file)}")
     else:

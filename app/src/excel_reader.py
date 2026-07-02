@@ -344,7 +344,7 @@ def _group_rows_to_pages(raw_rows):
             sub_title = str(row.get("副标题", "")).strip() if row.get("副标题") is not None else ""
             if sub_title:
                 page_title = page_title + "|" + sub_title if page_title else sub_title
-            html_page_show = str(row.get("HTML生成", row.get("是否生成HTML", "是"))).strip() if (row.get("HTML生成") is not None or row.get("是否生成HTML") is not None) else "是"
+            html_page_show = str(row.get("是否生成", row.get("HTML生成", "是"))).strip() if (row.get("是否生成") is not None or row.get("HTML生成") is not None) else "是"
             text_content = str(row.get("文字内容", "")).strip() if row.get("文字内容") is not None else ""
             current_page = {
                 "页码": page_num,
@@ -352,7 +352,7 @@ def _group_rows_to_pages(raw_rows):
                 "页面标题": page_title,
                 "布局": str(row.get("布局", "")).strip() if row.get("布局") is not None else "",
                 "文字内容": text_content,
-                "HTML生成": html_page_show,
+                "是否生成": html_page_show,
                 "charts": [],
             }
             current_page_num = page_num
@@ -377,9 +377,6 @@ def _group_rows_to_pages(raw_rows):
             elif last_data_source:
                 data_source = last_data_source
             
-            html_chart_type = str(row.get("HTML图表类型", row.get("HTML图表", ""))).strip() if (row.get("HTML图表类型") is not None or row.get("HTML图表") is not None) else ""
-            html_show = str(row.get("HTML生成", row.get("是否生成HTML", "是"))).strip() if (row.get("HTML生成") is not None or row.get("是否生成HTML") is not None) else "是"
-            
             chart_def = {
                 "图表标题": chart_title,
                 "图表类型": str(row.get("图表类型", "column")).strip() if row.get("图表类型") else "column",
@@ -390,8 +387,6 @@ def _group_rows_to_pages(raw_rows):
                 "颜色": str(row.get("颜色", "")).strip() if row.get("颜色") is not None else "",
                 "区块名": str(row.get("区块名", "")).strip() if row.get("区块名") is not None else "",
                 "结论模板": str(row.get("结论模板", "")).strip() if row.get("结论模板") is not None else "",
-                "HTML图表类型": html_chart_type,
-                "HTML生成": html_show,
             }
             current_page["charts"].append(chart_def)
 

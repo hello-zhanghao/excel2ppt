@@ -261,6 +261,11 @@ def verify_ppt_features(ppt_path):
     else:
         checks.append(("P1 结尾页", False, "页数不足"))
 
+    # 是否生成=否 的页面被跳过（配置12页，实际11页，"跳过测试页"不应出现）
+    all_texts = [t for slide in slides for t in get_texts(slide)]
+    no_skip_page = not any("跳过测试页" in t or "不应出现" in t for t in all_texts)
+    checks.append(("是否生成跳过(页12)", no_skip_page and len(slides) == 11, f"配置12页→实际{len(slides)}页"))
+
     # 打印结果
     all_ok = True
     for name, ok, detail in checks:
@@ -399,6 +404,7 @@ def verify_theme_config():
     """验证 P0 主题色配置解析（从配置 Excel 到 PptTheme）"""
     print_header("P0 主题色配置解析验证")
     import tempfile
+    sys.path.insert(0, PROJECT_DIR)
     from app.src.excel_reader import read_config
     from app.src.ppt_theme import PptTheme
 

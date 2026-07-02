@@ -304,11 +304,6 @@ def generate_html_report(
         print("[HTML] 从 PPT 配置生成报告结构...")
         
         for page_idx, page in enumerate(ppt_config):
-            html_gen = str(page.get("HTML生成", "是")).strip()
-            if html_gen.lower() in ("否", "no", "false", "0", "不生成", "跳过", "skip"):
-                print(f"    [SKIP] 第{page['页码']}页：HTML生成=否")
-                continue
-            
             page_title_full = page.get("页面标题", "")
             if "|" in page_title_full:
                 title_parts = page_title_full.split("|", 1)
@@ -317,37 +312,28 @@ def generate_html_report(
             else:
                 page_title = page_title_full
                 page_subtitle = ""
-            
+
             if page.get("页面类型") == "封面":
                 continue
-            
+
             charts = page.get("charts", [])
             if not charts:
                 continue
-            
+
             for chart_idx, chart in enumerate(charts):
-                chart_html_gen = str(chart.get("HTML生成", "是")).strip()
-                if chart_html_gen.lower() in ("否", "no", "false", "0", "不生成", "跳过", "skip"):
-                    print(f"    [SKIP] 图表 '{chart['图表标题']}'：HTML生成=否")
-                    continue
-                
                 sheet_name = chart.get("数据Sheet", "")
                 block_name = chart.get("区块名", "")
                 data_sec = _find_data_in_excel(excel_sections, sheet_name, block_name)
-                
+
                 if not data_sec and excel_sections:
                     if page_idx == 0 and chart_idx == 0:
                         print(f"    [警告] 未找到 Sheet '{sheet_name}'，尝试使用第一个可用数据")
                     data_sec = excel_sections[0] if excel_sections else None
-                
+
                 if not data_sec:
                     continue
-                
-                custom_chart_type = chart.get("HTML图表类型", "")
-                if custom_chart_type:
-                    chart_type = custom_chart_type.lower()
-                else:
-                    chart_type = _ppt_chart_type_to_html(chart.get("图表类型", "column"))
+
+                chart_type = _ppt_chart_type_to_html(chart.get("图表类型", "column"))
                 
                 title = chart.get("图表标题", "") or page_title
                 summary = _compute_summary(data_sec["headers"], data_sec["rows"])
