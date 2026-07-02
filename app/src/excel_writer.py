@@ -12,7 +12,7 @@ TOTAL_FILL = PatternFill(start_color="D9E2F3", end_color="D9E2F3", fill_type="so
 
 BLOCK_TITLE_FONT = Font(name="Microsoft YaHei", bold=True, size=11, color="FFFFFF")
 BLOCK_TITLE_FILL = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
-BLOCK_TITLE_ALIGNMENT = Alignment(horizontal="left", vertical="center", indent=1)
+BLOCK_TITLE_ALIGNMENT = Alignment(horizontal="center", vertical="center")
 
 DATA_FONT = Font(name="Microsoft YaHei", size=10)
 DATA_ALIGNMENT = Alignment(horizontal="center", vertical="center")
@@ -171,10 +171,16 @@ def _write_df_block(ws, df, start_row):
         row_num = start_row + 1 + ri
         if isinstance(row_data, pd.core.series.Series):
             for ci, val in enumerate(row_data, 1):
-                cell = ws.cell(row=row_num, column=ci, value=_format_cell_value(val))
+                col_name = headers[ci - 1] if ci <= len(headers) else None
+                cell = ws.cell(row=row_num, column=ci, value=_format_cell_value(val, col_name))
+                if col_name and _is_pct_column(col_name):
+                    cell.number_format = '0.0"%"'
         else:
             for ci, val in enumerate(row_data, 1):
-                cell = ws.cell(row=row_num, column=ci, value=_format_cell_value(val))
+                col_name = headers[ci - 1] if ci <= len(headers) else None
+                cell = ws.cell(row=row_num, column=ci, value=_format_cell_value(val, col_name))
+                if col_name and _is_pct_column(col_name):
+                    cell.number_format = '0.0"%"'
 
         is_total = str(idx) == "合计" or str(idx) == "总计"
         for ci in range(1, len(headers) + 1):
@@ -225,15 +231,35 @@ def _style_header_row(ws, row=1, max_col=None):
         cell.border = THIN_BORDER
 
 
-def _format_cell_value(val):
+PCT_KEYWORDS = ["占比", "率", "pct", "百分比", "比例"]
+
+
+def _is_pct_column(col_name):
+    if col_name is None:
+        return False
+    name = str(col_name)
+    return any(kw in name for kw in PCT_KEYWORDS)
+
+
+def _pct_already_scaled(col_name):
+    return "%" in str(col_name) if col_name else False
+
+
+def _format_cell_value(val, col_name=None):
     if val is None or (isinstance(val, float) and str(val) == "nan"):
         return ""
-    if isinstance(val, float):
-        if abs(val) >= 1000:
-            return round(val, 1)
-        if val == int(val):
-            return int(val)
-        return round(val, 2)
+    if isinstance(val, (int, float)):
+        if col_name and _is_pct_column(col_name):
+            if _pct_already_scaled(col_name):
+                return round(float(val), 1)
+            else:
+                return round(float(val) * 100, 1)
+        if isinstance(val, float):
+            if abs(val) >= 1000:
+                return round(val, 1)
+            if val == int(val):
+                return int(val)
+            return round(val, 2)
     return val
 
 
