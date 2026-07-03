@@ -433,6 +433,24 @@ def verify_excel_output(excel_path):
         checks.append(("无行维度→横向一行", is_single_row, f"data行数={len(data)}"))
         checks.append(("无行维度→列名匹配", has_col_sum and has_col_avg, f"header={header}"))
 
+    # 10. 区块名合并：task1(按地区汇总) + task14(按地区汇总, 同名"简单分组求和") 应合并
+    if "按地区汇总" in actual_sheets:
+        header, data = _read_sheet_data("按地区汇总")
+        # 合并后应有 总销售额 + 总销量 两列（task1 sum销售额 + task14 sum销量，同区块名合并）
+        has_merged_cols = "总销售额" in header and "总销量" in header
+        checks.append(("区块名不连续合并", has_merged_cols, f"header={header}"))
+        # 验证行维度列（地区）头有特殊颜色
+        ws_block = wb["按地区汇总"]
+        # header在第2行（第1行是区块标题），找到"地区"列的位置
+        for ci in range(1, len(header) + 1):
+            cell = ws_block.cell(row=2, column=ci)
+            if str(cell.value) == "地区":
+                dim_fill = cell.fill
+                # 行维度列头颜色应区别于普通列头（HEADER_FILL="4472C4" vs DIM_HEADER_FILL="5B9BD5"）
+                checks.append(("行维度列头区分色", dim_fill.start_color.rgb != "4472C4",
+                               f"地区 fill={dim_fill.start_color.rgb}"))
+                break
+
     wb.close()
 
     # 打印结果

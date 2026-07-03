@@ -18,6 +18,10 @@ BLOCK_TITLE_ALIGNMENT = Alignment(horizontal="center", vertical="center")
 DATA_FONT = Font(name="Microsoft YaHei", size=10)
 DATA_ALIGNMENT = Alignment(horizontal="center", vertical="center")
 
+# 行维度列配色（区分分组维度列与数值列）
+DIM_HEADER_FILL = PatternFill(start_color="5B9BD5", end_color="5B9BD5", fill_type="solid")
+DIM_DATA_FILL = PatternFill(start_color="EBF5FB", end_color="EBF5FB", fill_type="solid")
+
 THIN_BORDER = Border(
     left=Side(style="thin"),
     right=Side(style="thin"),
@@ -59,26 +63,30 @@ def write_results(tasks, results, errors, output_path):
 def _write_multi_result_sheet(wb, sheet_name, group_items):
     ws = wb.create_sheet(sheet_name)
 
-    dim_groups = []
-    current_dim_key = None
+    # 按「区块名」分组（非连续的相同区块名自动合并），按首次出现顺序输出
+    block_groups = []
+    seen_blocks = set()
     for task, result in group_items:
-        row_dims = _get_row_dims(task)
-        dim_key = tuple(row_dims) if row_dims else ()
-        if dim_key != current_dim_key or not dim_groups:
-            dim_groups.append((dim_key, row_dims, []))
-            current_dim_key = dim_key
-        dim_groups[-1][2].append((task, result))
+        block_name = _get_block_title(task)
+        if block_name not in seen_blocks:
+            block_groups.append((block_name, []))
+            seen_blocks.add(block_name)
+        for name, items in block_groups:
+            if name == block_name:
+                items.append((task, result))
+                break
 
     current_row = 1
-    for dim_key, row_dims, items in dim_groups:
+    for block_name, items in block_groups:
+        row_dims = _get_row_dims(items[0][0])
+
         if not isinstance(items[0][1], dict):
             for task, result in items:
                 if current_row > 1:
                     current_row += 1
-                title = _get_block_title(task)
-                _write_block_title(ws, title, current_row, 2)
+                _write_block_title(ws, block_name, current_row, 2)
                 current_row += 1
-                _write_scalar_block(ws, task, result, task.get("区块名", ""), current_row, task.get("_pct_columns", []))
+                _write_scalar_block(ws, task, result, block_name, current_row, task.get("_pct_columns", []))
                 current_row = ws.max_row + 1
             continue
 
@@ -89,10 +97,9 @@ def _write_multi_result_sheet(wb, sheet_name, group_items):
             merged_df, merged_pct_cols = _merge_same_dim_results(items, row_dims)
             if merged_df is None:
                 continue
-            title = _get_block_title(items[0][0])
-            _write_block_title(ws, title, current_row, len(merged_df.columns))
+            _write_block_title(ws, block_name, current_row, len(merged_df.columns))
             current_row += 1
-            _write_df_block(ws, merged_df, current_row, merged_pct_cols)
+            _write_df_block(ws, merged_df, current_row, merged_pct_cols, row_dims)
             current_row = ws.max_row + 1
         else:
             task, result = items[0]
@@ -100,10 +107,9 @@ def _write_multi_result_sheet(wb, sheet_name, group_items):
             for key, df in result.items():
                 if current_row > 1:
                     current_row += 1
-                title = _get_block_title(task)
-                _write_block_title(ws, title, current_row, len(df.columns))
+                _write_block_title(ws, block_name, current_row, len(df.columns))
                 current_row += 1
-                _write_df_block(ws, df, current_row, pct_cols)
+                _write_df_block(ws, df, current_row, pct_cols, row_dims)
                 current_row = ws.max_row + 1
 
     if ws.max_column and ws.max_row:
@@ -172,12 +178,13 @@ def _merge_same_dim_results(items, row_dims):
     return merged, list(merged_pct_cols)
 
 
-def _write_df_block(ws, df, start_row, pct_columns=None):
+def _write_df_block(ws, df, start_row, pct_columns=None, row_dims=None):
     pct_columns = set(pct_columns or [])
+    row_dims = set(row_dims or [])
     headers = list(df.columns)
     for ci, h in enumerate(headers, 1):
         c = ws.cell(row=start_row, column=ci, value=str(h))
-    _style_header_row(ws, start_row, len(headers))
+    _style_header_row(ws, start_row, len(headers), row_dims)
 
     for ri, (idx, row_data) in enumerate(df.iterrows()):
         row_num = start_row + 1 + ri
@@ -190,10 +197,17 @@ def _write_df_block(ws, df, start_row, pct_columns=None):
 
         is_total = str(idx) == "合计" or str(idx) == "总计"
         for ci in range(1, len(headers) + 1):
+            col_name = headers[ci - 1] if ci <= len(headers) else ""
+            is_dim = col_name in row_dims
             cell = ws.cell(row=row_num, column=ci)
             cell.alignment = DATA_ALIGNMENT
             cell.font = TOTAL_FONT if is_total else DATA_FONT
-            cell.fill = TOTAL_FILL if is_total else PatternFill()
+            if is_total:
+                cell.fill = TOTAL_FILL
+            elif is_dim:
+                cell.fill = DIM_DATA_FILL
+            else:
+                cell.fill = PatternFill()
             cell.border = THIN_BORDER
 
 
@@ -225,18 +239,21 @@ def _safe_sheet_name(name):
     return name[:31]
 
 
-def _style_header_row(ws, row=1, max_col=None):
+def _style_header_row(ws, row=1, max_col=None, dim_cols=None):
+    dim_cols = set(dim_cols or [])
     if max_col is None:
         for cell in ws[row]:
+            col_name = str(cell.value) if cell.value else ""
             cell.font = HEADER_FONT
-            cell.fill = HEADER_FILL
+            cell.fill = DIM_HEADER_FILL if col_name in dim_cols else HEADER_FILL
             cell.alignment = HEADER_ALIGNMENT
             cell.border = THIN_BORDER
         return
     for ci in range(1, max_col + 1):
         cell = ws.cell(row=row, column=ci)
+        col_name = str(cell.value) if cell.value else ""
         cell.font = HEADER_FONT
-        cell.fill = HEADER_FILL
+        cell.fill = DIM_HEADER_FILL if col_name in dim_cols else HEADER_FILL
         cell.alignment = HEADER_ALIGNMENT
         cell.border = THIN_BORDER
 
