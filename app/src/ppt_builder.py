@@ -224,7 +224,7 @@ def _add_native_chart(slide, chart_info, theme, left, top, width, height, color_
             series = chart_data.add_series(s_name)
             for i in range(min(len(categories), len(s_vals))):
                 try:
-                    x_val = float(i + 1)
+                    x_val = float(categories[i])
                     y_val = float(s_vals[i])
                     series.add_data_point(x_val, y_val)
                 except (ValueError, TypeError):

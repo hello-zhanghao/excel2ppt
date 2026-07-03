@@ -191,8 +191,8 @@ def verify_ppt_features(ppt_path):
     prs = Presentation(ppt_path)
     slides = list(prs.slides)
 
-    # 检查页数（期望11页）
-    checks.append(("总页数=11", len(slides) == 11, f"实际{len(slides)}页"))
+    # 检查页数（期望21页配置→20页实际，页21跳过）
+    checks.append(("总页数=20", len(slides) == 20, f"实际{len(slides)}页"))
 
     def get_texts(slide):
         return [s.text_frame.text for s in slide.shapes if s.has_text_frame]
@@ -261,10 +261,10 @@ def verify_ppt_features(ppt_path):
     else:
         checks.append(("P1 结尾页", False, "页数不足"))
 
-    # 是否生成=否 的页面被跳过（配置12页，实际11页，"跳过测试页"不应出现）
+    # 是否生成=否 的页面被跳过（配置21页，实际20页，"跳过测试页"不应出现）
     all_texts = [t for slide in slides for t in get_texts(slide)]
     no_skip_page = not any("跳过测试页" in t or "不应出现" in t for t in all_texts)
-    checks.append(("是否生成跳过(页12)", no_skip_page and len(slides) == 11, f"配置12页→实际{len(slides)}页"))
+    checks.append(("是否生成跳过(页21)", no_skip_page and len(slides) == 20, f"配置21页→实际{len(slides)}页"))
 
     # P0: 百分比饼图数据为 0~1 小数（第5页饼图，引用占比透视结果）
     # 验证 PPT 拿到的是 0~1 小数，未被 Excel 的 0.0% 格式 ×100 影响
@@ -302,6 +302,80 @@ def verify_ppt_features(ppt_path):
         checks.append(("主题色_珊瑚活力", theme_ok, "dark=#2F3C7E"))
     else:
         checks.append(("主题色_珊瑚活力", False, "页数不足"))
+
+    # === 新增图表类型和布局验证 ===
+
+    def _count_charts(slide):
+        return sum(1 for s in slide.shapes if s.has_chart)
+    from pptx.enum.chart import XL_CHART_TYPE
+
+    # 2图上下布局（页13→0-indexed 12）：应含area + column 两种图表
+    if len(slides) >= 13:
+        n = _count_charts(slides[12])
+        types = set()
+        for s in slides[12].shapes:
+            if s.has_chart:
+                types.add(s.chart.chart_type)
+        has_area = XL_CHART_TYPE.AREA in types
+        has_column = XL_CHART_TYPE.COLUMN_CLUSTERED in types
+        checks.append(("2图上下(area+column)", n == 2 and has_area and has_column,
+                       f"charts={n}, area={has_area}, col={has_column}"))
+    else:
+        checks.append(("2图上下(area+column)", False, "页数不足"))
+
+    # 4图布局（页14→0-indexed 13）：应含4个图表
+    if len(slides) >= 14:
+        n = _count_charts(slides[13])
+        checks.append(("4图网格", n == 4, f"charts={n}"))
+    else:
+        checks.append(("4图网格", False, "页数不足"))
+
+    # 上文下图（页15→0-indexed 14）：应有文字区+1个图表
+    if len(slides) >= 15:
+        n = _count_charts(slides[14])
+        has_top_text = any("布局说明" in t for t in get_texts(slides[14]))
+        checks.append(("上文下图", n == 1 and has_top_text, f"charts={n}, text={has_top_text}"))
+    else:
+        checks.append(("上文下图", False, "页数不足"))
+
+    # 散点图（页16→0-indexed 15）
+    if len(slides) >= 16:
+        has_scatter = any(s.has_chart and s.chart.chart_type == XL_CHART_TYPE.XY_SCATTER
+                          for s in slides[15].shapes)
+        checks.append(("散点图(scatter)", has_scatter, ""))
+    else:
+        checks.append(("散点图(scatter)", False, "页数不足"))
+
+    # 环形图（页17→0-indexed 16）
+    if len(slides) >= 17:
+        has_doughnut = any(s.has_chart and s.chart.chart_type == XL_CHART_TYPE.DOUGHNUT
+                           for s in slides[16].shapes)
+        checks.append(("环形图(doughnut)", has_doughnut, ""))
+    else:
+        checks.append(("环形图(doughnut)", False, "页数不足"))
+
+    # 面积图（页18→0-indexed 17）
+    if len(slides) >= 18:
+        has_area2 = any(s.has_chart and s.chart.chart_type == XL_CHART_TYPE.AREA
+                        for s in slides[17].shapes)
+        checks.append(("面积图(area)", has_area2, ""))
+    else:
+        checks.append(("面积图(area)", False, "页数不足"))
+
+    # 组合图（页19→0-indexed 18）
+    if len(slides) >= 19:
+        has_combo = any("柱+折" in t for t in get_texts(slides[18]))
+        checks.append(("组合图(combo)", has_combo, ""))
+    else:
+        checks.append(("组合图(combo)", False, "页数不足"))
+
+    # 结束页2（页20→0-indexed 19）
+    if len(slides) >= 20:
+        texts = get_texts(slides[19])
+        has_ending2 = any("全特性" in t for t in texts)
+        checks.append(("结束页2", has_ending2, f"text={texts[:2]}"))
+    else:
+        checks.append(("结束页2", False, "页数不足"))
 
     # 打印结果
     all_ok = True
