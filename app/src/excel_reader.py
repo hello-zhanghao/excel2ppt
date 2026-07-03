@@ -237,9 +237,15 @@ def _find_or_get_sheet(wb, sheet_name, keywords):
         return wb[sheet_name]
     for name in wb.sheetnames:
         ws = wb[name]
-        row = [str(c.value).strip() if c.value is not None else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
-        if len(keywords & set(row)) >= 2:
-            return ws
+        # 支持键值配置行在表头之上，检查前 3 行
+        for check_row in range(1, 4):
+            try:
+                row_data = [str(c.value).strip() if c.value is not None else ""
+                            for c in next(ws.iter_rows(min_row=check_row, max_row=check_row))]
+            except StopIteration:
+                break
+            if len(keywords & set(row_data)) >= 2:
+                return ws
     return wb[wb.sheetnames[0]]
 
 

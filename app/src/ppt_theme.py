@@ -51,6 +51,88 @@ HUAWEI_PALETTE = [
 
 DEFAULT_FOOTER = "数据分析报告"
 
+# ==================== 预设主题库（基于 PPT Generator Skill 配色方案） ====================
+
+THEME_PRESETS = {
+    "默认": {
+        "primary": "#C8102E", "dark": "#182B49", "gray": "#8C8C8C",
+        "light": "#F7F8FA", "border": "#E5E7EB",
+        "palette": ["#C8102E", "#182B49", "#5B9BD5", "#ED7D31", "#70AD47", "#A5A5A5", "#FFC000", "#4472C4"],
+        "name": "华为商务红",
+        "conclusion_bg": "#FFF8E7", "conclusion_border": "#E0C060",
+    },
+    "午夜商务": {
+        "primary": "#1E2761", "dark": "#0D1333", "gray": "#8890A0",
+        "light": "#F2F4F8", "border": "#D0D5DD",
+        "palette": ["#1E2761", "#CADCFC", "#3B82F6", "#10B981", "#F59E0B", "#94A3B8", "#6366F1", "#EC4899"],
+        "name": "午夜商务蓝",
+        "conclusion_bg": "#EEF2FF", "conclusion_border": "#A5B4FC",
+    },
+    "科技深空": {
+        "primary": "#58A6FF", "dark": "#0D1117", "gray": "#6E7681",
+        "light": "#161B22", "border": "#30363D",
+        "palette": ["#58A6FF", "#3FB950", "#D29922", "#F778BA", "#79C0FF", "#7EE787", "#A5D6FF", "#FFA198"],
+        "name": "GitHub 深色科技",
+        "conclusion_bg": "#1A2332", "conclusion_border": "#58A6FF",
+    },
+    "珊瑚活力": {
+        "primary": "#F96167", "dark": "#2F3C7E", "gray": "#8890A0",
+        "light": "#FFF5F5", "border": "#FECDD3",
+        "palette": ["#F96167", "#2F3C7E", "#F9E795", "#3B82F6", "#10B981", "#F59E0B", "#D946EF", "#6366F1"],
+        "name": "珊瑚活力",
+        "conclusion_bg": "#FFF0F0", "conclusion_border": "#FCA5A5",
+    },
+    "暖陶简约": {
+        "primary": "#B85042", "dark": "#3D2C2A", "gray": "#978E8C",
+        "light": "#FCFAF7", "border": "#E7D8CF",
+        "palette": ["#B85042", "#A7BEAE", "#E7E8D1", "#D4A574", "#6B9080", "#A4B465", "#CB997E", "#8C6B5A"],
+        "name": "暖陶简约",
+        "conclusion_bg": "#FDF2EE", "conclusion_border": "#D4A574",
+    },
+    "海洋渐变": {
+        "primary": "#065A82", "dark": "#1C2957", "gray": "#7B8DA0",
+        "light": "#F0F6FA", "border": "#C4D6E4",
+        "palette": ["#065A82", "#1C7293", "#21295C", "#3B82F6", "#10B981", "#06B6D4", "#0EA5E9", "#6366F1"],
+        "name": "海洋渐变",
+        "conclusion_bg": "#E8F4FA", "conclusion_border": "#7DD3FC",
+    },
+    "炭灰极简": {
+        "primary": "#212121", "dark": "#36454F", "gray": "#9CA3AF",
+        "light": "#F2F2F2", "border": "#D6D6D6",
+        "palette": ["#36454F", "#212121", "#6B7280", "#4B5563", "#9CA3AF", "#D1D5DB", "#1F2937", "#78716C"],
+        "name": "炭灰极简",
+        "conclusion_bg": "#F5F5F5", "conclusion_border": "#AAAAAA",
+    },
+    "青绿信任": {
+        "primary": "#028090", "dark": "#1B3A3A", "gray": "#7B9898",
+        "light": "#F2FAFA", "border": "#C4E4E4",
+        "palette": ["#028090", "#00A896", "#02C39A", "#05668D", "#02C39A", "#10B981", "#14B8A6", "#0D9488"],
+        "name": "青绿信任",
+        "conclusion_bg": "#E6F7F5", "conclusion_border": "#5EEAD4",
+    },
+    "莓果奶油": {
+        "primary": "#6D2E46", "dark": "#3D1C2A", "gray": "#A08090",
+        "light": "#FDF8FA", "border": "#EFD5DF",
+        "palette": ["#6D2E46", "#A26769", "#ECE2D0", "#D4A5A5", "#C6878F", "#8E4D5C", "#BF7B87", "#E8D5D8"],
+        "name": "莓果奶油",
+        "conclusion_bg": "#FDF0F4", "conclusion_border": "#F9A8D4",
+    },
+    "鼠尾草静": {
+        "primary": "#50808E", "dark": "#2D4A4F", "gray": "#8BA0A5",
+        "light": "#F5F9F8", "border": "#D0E0DE",
+        "palette": ["#84B59F", "#69A297", "#50808E", "#3B6B6B", "#A7C4B5", "#6B9080", "#B7D3C7", "#52796F"],
+        "name": "鼠尾草静",
+        "conclusion_bg": "#EEF6F2", "conclusion_border": "#86EFAC",
+    },
+    "樱桃大胆": {
+        "primary": "#990011", "dark": "#1A0002", "gray": "#9C8880",
+        "light": "#FFFBF5", "border": "#F2DFD7",
+        "palette": ["#990011", "#FCF6F5", "#2F3C7E", "#D32F2F", "#C2185B", "#7B1FA2", "#E64A19", "#455A64"],
+        "name": "樱桃大胆",
+        "conclusion_bg": "#FFF0F0", "conclusion_border": "#FCA5A5",
+    },
+}
+
 # 各布局对应的图表坐标（左, 上, 宽, 高），单位 Inches
 LAYOUT_POSITIONS = {
     "1图": [
@@ -79,6 +161,23 @@ LAYOUT_POSITIONS = {
 }
 
 
+def get_theme_preset(name):
+    """根据主题名查找预设配置（模糊匹配，找不到返回 None）。"""
+    name = str(name).strip()
+    if name in THEME_PRESETS:
+        return dict(THEME_PRESETS[name])
+    lower = name.lower()
+    for k, v in THEME_PRESETS.items():
+        if k.lower() == lower or v.get("name", "").lower() == lower:
+            return dict(v)
+    return None
+
+
+def list_theme_names():
+    """返回所有预设主题名列表。"""
+    return list(THEME_PRESETS.keys())
+
+
 class PptTheme:
     """PPT 美化主题。
 
@@ -99,25 +198,31 @@ class PptTheme:
         layout_positions: 各布局的图表坐标定义
     """
 
-    def __init__(self, theme_config=None):
+    def __init__(self, theme_config=None, theme_name=None):
         cfg = theme_config or {}
-        self.primary = cfg.get("primary") or HW_RED
-        self.dark = cfg.get("dark") or HW_DARK
-        self.gray = cfg.get("gray") or HW_GRAY
-        self.light = cfg.get("light") or HW_LIGHT
-        self.border = cfg.get("border") or HW_BORDER
-        self.palette = cfg.get("palette") or list(HUAWEI_PALETTE)
+        preset = {}
+        if theme_name:
+            preset = get_theme_preset(theme_name) or {}
+        self.primary = cfg.get("primary") or preset.get("primary") or HW_RED
+        self.dark = cfg.get("dark") or preset.get("dark") or HW_DARK
+        self.gray = cfg.get("gray") or preset.get("gray") or HW_GRAY
+        self.light = cfg.get("light") or preset.get("light") or HW_LIGHT
+        self.border = cfg.get("border") or preset.get("border") or HW_BORDER
+        self.palette = cfg.get("palette") or preset.get("palette") or list(HUAWEI_PALETTE)
         self.accent_colors = cfg.get("accent_colors") or []
         self.font_name = cfg.get("font_name") or FONT_NAME
         self.footer_text = cfg.get("footer_text") or DEFAULT_FOOTER
         self.layout_positions = cfg.get("layout_positions") or LAYOUT_POSITIONS
+        self.conclusion_bg = cfg.get("conclusion_bg") or preset.get("conclusion_bg") or "#FFF8E7"
+        self.conclusion_border = cfg.get("conclusion_border") or preset.get("conclusion_border") or "#E0C060"
 
     @classmethod
-    def from_config(cls, colors=None, general=None):
+    def from_config(cls, colors=None, general=None, theme_name=None):
         """从 PPT 配置的 colors / general 字典构建主题。
-
-        目前 config 中 colors / general 可能为空（配置解析尚未实现时走默认），
-        后续完善配置解析后即可自动生效，实现换肤。
+        
+        theme_name 优先级低于 colors/general 中的显式配置，即：
+        若配置了 theme_name="科技深空" 但 colors 里也有 primary="#xxx"，
+        则 colors 中的显式配置会覆盖预设值。
         """
         colors = colors or {}
         general = general or {}
@@ -141,7 +246,7 @@ class PptTheme:
             "accent_colors": accent_colors,
             "font_name": pick("font_name", "字体"),
             "footer_text": pick("页脚", "footer"),
-        })
+        }, theme_name=theme_name)
 
     # ==================== 工具方法 ====================
 
@@ -279,10 +384,30 @@ class PptTheme:
         fp.alignment = PP_ALIGN.LEFT
         self.set_font_name(fp)
 
+        # 右侧装饰几何元素
+        for i, (cx, cy, r, color_hex) in enumerate([
+            (Inches(10.5), Inches(5.8), Inches(0.15), self.primary),
+            (Inches(11.2), Inches(5.5), Inches(0.10), self.gray),
+            (Inches(11.8), Inches(5.9), Inches(0.12), self.dark),
+            (Inches(10.8), Inches(6.2), Inches(0.08), self.gray),
+        ]):
+            circle = slide.shapes.add_shape(MSO_SHAPE.OVAL, cx, cy, r, r)
+            circle.fill.solid()
+            circle.fill.fore_color.rgb = self.hex_to_rgb(color_hex)
+            circle.line.fill.background()
+
+        # 底部装饰条
+        bottom_bar = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE, Inches(5.0), Inches(6.9), Inches(7.5), Inches(0.03)
+        )
+        bottom_bar.fill.solid()
+        bottom_bar.fill.fore_color.rgb = self.hex_to_rgb(self.border)
+        bottom_bar.line.fill.background()
+
     def add_page_title(self, slide, title, subtitle):
-        # 左侧装饰色块
+        # 页面标题：左侧强调色竖条 + 标题 + 副标题
         deco_block = slide.shapes.add_shape(
-            MSO_SHAPE.RECTANGLE, Inches(0.6), Inches(0.28), Inches(0.08), Inches(0.5)
+            MSO_SHAPE.RECTANGLE, Inches(0.6), Inches(0.28), Inches(0.10), Inches(0.5)
         )
         deco_block.fill.solid()
         deco_block.fill.fore_color.rgb = self.hex_to_rgb(self.primary)
@@ -495,12 +620,21 @@ class PptTheme:
                 self.set_font_name(p)
 
     def add_section_slide(self, prs, title, subtitle=""):
-        """章节分隔页：大号居中标题 + 深色背景"""
+        """章节分隔页：深色背景 + 装饰元素 + 居中标题"""
         slide_layout = prs.slide_layouts[6]
         slide = prs.slides.add_slide(slide_layout)
         self.set_slide_bg(slide, self.dark)
 
-        # 顶部红色装饰条
+        # 左上角小型强调色装饰方块
+        for (dx, dy, dw) in [(1.0, 1.0, 0.06), (1.25, 1.0, 0.06)]:
+            deco = slide.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE, Inches(dx), Inches(dy), Inches(dw), Inches(0.8)
+            )
+            deco.fill.solid()
+            deco.fill.fore_color.rgb = self.hex_to_rgb(self.primary)
+            deco.line.fill.background()
+
+        # 中央装饰短线
         top_bar = slide.shapes.add_shape(
             MSO_SHAPE.RECTANGLE, Inches(5.5), Inches(2.8), Inches(2.3), Inches(0.06)
         )
@@ -534,13 +668,27 @@ class PptTheme:
             sp.alignment = PP_ALIGN.CENTER
             self.set_font_name(sp)
 
+        # 右下角微小组装饰圆点
+        for (dx, dy, r) in [(12.0, 6.8, 0.08), (12.3, 6.6, 0.05)]:
+            dot = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(dx), Inches(dy), Inches(r), Inches(r))
+            dot.fill.solid()
+            dot.fill.fore_color.rgb = self.hex_to_rgb(self.primary)
+            dot.line.fill.background()
+
     def add_ending_slide(self, prs, title="谢谢", subtitle=""):
-        """结尾页：深色背景 + 居中致谢文字"""
+        """结尾页：深色背景 + 居中致谢文字 + 装饰元素"""
         slide_layout = prs.slide_layouts[6]
         slide = prs.slides.add_slide(slide_layout)
         self.set_slide_bg(slide, self.dark)
 
-        # 中央红色装饰短线
+        # 顶部装饰元素：左上角和右上角各一组强调色圆点
+        for (dx, dy, r) in [(1.0, 1.0, 0.06), (1.3, 1.0, 0.04), (11.6, 1.0, 0.06), (11.9, 1.0, 0.04)]:
+            dot = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(dx), Inches(dy), Inches(r), Inches(r))
+            dot.fill.solid()
+            dot.fill.fore_color.rgb = self.hex_to_rgb(self.primary)
+            dot.line.fill.background()
+
+        # 中央装饰短线
         deco = slide.shapes.add_shape(
             MSO_SHAPE.RECTANGLE, Inches(6.2), Inches(2.8), Inches(0.9), Inches(0.06)
         )
@@ -901,8 +1049,8 @@ class PptTheme:
             left, conc_top, width, card_height
         )
         bg.fill.solid()
-        bg.fill.fore_color.rgb = self.hex_to_rgb("#FFF8E7")
-        bg.line.color.rgb = self.hex_to_rgb("#E0C060")
+        bg.fill.fore_color.rgb = self.hex_to_rgb(self.conclusion_bg)
+        bg.line.color.rgb = self.hex_to_rgb(self.conclusion_border)
         bg.line.width = Pt(0.5)
         try:
             bg.adjustments[0] = 0.15

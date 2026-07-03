@@ -287,6 +287,22 @@ def verify_ppt_features(ppt_path):
                     pct_detail = f"异常: {e}"
         checks.append(("P0 百分比饼图0~1小数", pct_ok, pct_detail))
 
+    # P0: 主题色验证 — 配置"珊瑚活力"主题，封面左侧块的填充色应为 dark=#2F3C7E
+    if len(slides) >= 1:
+        theme_ok = False
+        for shape in slides[0].shapes:
+            try:
+                if shape.fill.type is not None:
+                    rgb = str(shape.fill.fore_color.rgb)
+                    if rgb == "2F3C7E":
+                        theme_ok = True
+                        break
+            except Exception:
+                pass
+        checks.append(("主题色_珊瑚活力", theme_ok, "dark=#2F3C7E"))
+    else:
+        checks.append(("主题色_珊瑚活力", False, "页数不足"))
+
     # 打印结果
     all_ok = True
     for name, ok, detail in checks:
@@ -342,14 +358,21 @@ def verify_excel_output(excel_path):
             checks.append((f"区块名[{sname}]", first_cell == expected_title, f"期望'{expected_title}', 实际'{first_cell}'"))
 
     def _read_sheet_data(sname):
-        """读取 Sheet 数据（跳过区块标题行，返回表头+数据行）"""
+        """读取 Sheet 数据（跳过区块标题行，返回表头+第一个区块的数据行）"""
         ws = wb[sname]
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
             return [], []
         # 第1行是区块标题，第2行是表头
         header = [str(c).strip() if c is not None else "" for c in rows[1]]
-        data = rows[2:]
+        data = []
+        for r in rows[2:]:
+            if r[0] is None and all(c is None for c in r):
+                break
+            if r[0] is not None:
+                data.append(r)
+            else:
+                break
         return header, data
 
     # 3. 按地区汇总 - 验证数据值
@@ -454,22 +477,44 @@ def verify_excel_output(excel_path):
     # 11. 历史标量引用：任务15生产"总销售额"→任务16公式"销量/总销售额=销量占比"
     if "历史标量" in actual_sheets:
         _, data = _read_sheet_data("历史标量")
-        total_sales = float(data.iloc[0]["总销售额"]) if not data.empty and "总销售额" in data.columns else None
+        if data and "总销售额" in _read_sheet_data("历史标量")[0]:
+            total_sales = float(data[0][0]) if len(data) > 0 else None
+        else:
+            total_sales = None
         checks.append(("标量生产者_总销售额", total_sales is not None and total_sales > 0,
                        f"total_sales={total_sales}"))
         
         if "按地区汇总" in actual_sheets:
-            header2, data2 = _read_sheet_data("按地区汇总")
+            # 任务16的"标量消费者"区块在第二个区块位置（行8-12），需要跳过第一个区块
+            ws_block = wb["按地区汇总"]
+            all_rows = list(ws_block.iter_rows(values_only=True))
+            # 找到第二个区块标题行（特征：单元格值=="标量消费者"）
+            block2_start = None
+            for ri, row in enumerate(all_rows):
+                if row[0] and str(row[0]).strip() == "标量消费者":
+                    block2_start = ri
+                    break
+            if block2_start is not None and block2_start + 2 < len(all_rows):
+                header2 = [str(c).strip() if c is not None else "" for c in all_rows[block2_start + 1]]
+                data2 = all_rows[block2_start + 2:]
+                # 只取到空白行为止
+                data2 = [r for r in data2 if r[0] is not None]
+            else:
+                header2 = []
+                data2 = []
             has_ratio_col = "销量占比" in header2
             checks.append(("标量消费者_销量占比列", has_ratio_col, f"header={header2}"))
             if has_ratio_col and total_sales:
-                # 华北 销量=270，华东=390，华南=370
+                import pandas as pd
+                df2 = pd.DataFrame(data2, columns=header2)
+                region_idx = header2.index("地区") if "地区" in header2 else -1
+                ratio_idx = header2.index("销量占比") if "销量占比" in header2 else -1
                 expected_ratios = {"华北": 270/total_sales, "华东": 390/total_sales, "华南": 370/total_sales}
                 ratio_ok = True
-                for idx, row in data2.iterrows():
-                    region = str(row["地区"]) if "地区" in data2.columns else ""
+                for row in data2:
+                    region = str(row[region_idx]) if region_idx >= 0 else ""
                     if region in expected_ratios:
-                        actual_ratio = float(row["销量占比"])
+                        actual_ratio = float(row[ratio_idx])
                         if abs(actual_ratio - expected_ratios[region]) > 0.001:
                             ratio_ok = False
                             break

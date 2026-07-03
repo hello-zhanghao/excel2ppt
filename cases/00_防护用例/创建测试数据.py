@@ -92,16 +92,16 @@ def create_config_file():
     data_font = Font(name="微软雅黑", size=10)
     data_align = Alignment(vertical="center", wrap_text=True)
 
-    def style_header(ws, ncols):
+    def style_header(ws, ncols, start_row=1):
         for col in range(1, ncols + 1):
-            cell = ws.cell(row=1, column=col)
+            cell = ws.cell(row=start_row, column=col)
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = header_align
             cell.border = thin_border
 
-    def style_data(ws, nrows, ncols):
-        for row in range(2, nrows + 2):
+    def style_data(ws, nrows, ncols, start_row=2):
+        for row in range(start_row, nrows + start_row):
             for col in range(1, ncols + 1):
                 cell = ws.cell(row=row, column=col)
                 cell.font = data_font
@@ -319,18 +319,22 @@ def create_config_file():
          "否", ""],
     ]
 
+    # 主题名（键值配置行，写在表头之上，自动被 _parse_kv_block 解析）
+    ws_ppt.cell(row=1, column=1, value="主题")
+    ws_ppt.cell(row=1, column=2, value="珊瑚活力")
+
     # 写入表头
     for col, header in enumerate(ppt_headers, 1):
-        ws_ppt.cell(row=1, column=col, value=header)
+        ws_ppt.cell(row=2, column=col, value=header)
     # 写入数据
-    for row_idx, row_data in enumerate(ppt_rows, 2):
+    for row_idx, row_data in enumerate(ppt_rows, 3):
         for col_idx, val in enumerate(row_data, 1):
             ws_ppt.cell(row=row_idx, column=col_idx, value=val)
 
-    style_header(ws_ppt, len(ppt_headers))
-    style_data(ws_ppt, len(ppt_rows), len(ppt_headers))
+    style_header(ws_ppt, len(ppt_headers), start_row=2)
+    style_data(ws_ppt, len(ppt_rows), len(ppt_headers), start_row=3)
     auto_width(ws_ppt, len(ppt_headers))
-    ws_ppt.freeze_panes = "A2"
+    ws_ppt.freeze_panes = "A3"
 
     # 保存
     wb.save(config_path)

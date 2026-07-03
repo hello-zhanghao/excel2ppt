@@ -781,29 +781,28 @@ def run_analysis(task, config_dir, scalar_context=None):
         result = _group_aggregate(df, 行维度, 值字段, 聚合函数, task)
 
     # 聚合后应用列名映射
-    # 值映射配置是按值字段顺序的，按顺序映射到聚合后的值列
     raw_val_maps = [m.strip() for m in val_map_str.split(",") if m.strip()] if val_map_str else []
     
     if result and raw_val_maps:
-        map_idx = 0  # 值映射的索引
+        map_idx = 0
         for key, df in result.items():
             if isinstance(df, pd.DataFrame):
                 rename = {}
                 for c in df.columns:
-                    if c in 行维度:  # 行维度是分组列
+                    if c in 行维度:
                         continue
                     if map_idx < len(raw_val_maps):
                         rename[c] = raw_val_maps[map_idx]
                         map_idx += 1
                     else:
-                        break  # 没有更多映射了
+                        break
                 
                 if rename:
                     df.rename(columns=rename, inplace=True)
 
     val_calc = task.get("值计算", "")
     if val_calc and result:
-        result = _apply_value_calc(result, val_calc, 值字段, 聚合函数, scalar_context)
+        result = _apply_value_calc(result, val_calc, 值字段, 聚合函数, scalar_context, raw_val_maps, 值字段)
 
     if 行维度:
         task["行维度"] = ",".join(行维度)
@@ -1201,10 +1200,9 @@ def _parse_mapping(mapping_str, row_map_str, col_map_str, val_map_str, 行维度
         return _parse_old_new_mapping(parts_legacy)
 
     col_map = {}
-    if row_map_str or col_map_str or val_map_str:
+    if row_map_str or col_map_str:
         col_map = _map_fields(row_map_str, 行维度, col_map)
         col_map = _map_fields(col_map_str, 列维度, col_map)
-        col_map = _map_fields(val_map_str, 值字段, col_map)
     elif parts_legacy:
         all_fields = 行维度 + 列维度 + 值字段
         for i, new_name in enumerate(parts_legacy):
@@ -1339,7 +1337,7 @@ def _fmt_num(val):
     return f"{val:.1f}"
 
 
-def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=None):
+def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=None, raw_val_maps=None, orig_value_cols=None):
     """
     值计算：支持单列与常数运算，以及多列组合运算。
     
@@ -1354,6 +1352,8 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
     - 表达式列："销售额/销量=单价"
     """
     scalar_context = scalar_context or {}
+    raw_val_maps = raw_val_maps or []
+    orig_value_cols = orig_value_cols or list(value_cols)
     calcs = [c.strip() for c in val_calc.split(",")]
     calc_map = {}
     for i, expr in enumerate(calcs):
@@ -1371,7 +1371,7 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
         for col in df.columns:
             if not pd.api.types.is_numeric_dtype(df[col]):
                 continue
-            expr = _find_matching_calc(col, calc_map, value_cols)
+            expr = _find_matching_calc(col, calc_map, value_cols, raw_val_maps)
             if expr:
                 result_col_name = None
                 if "=" in expr:
@@ -1395,7 +1395,19 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                                 safe_name = vcol.replace("(", "_").replace(")", "_").replace("%", "")
                                 col_mapping[safe_name] = vcol
                                 expr_safe = expr_safe.replace(vcol, safe_name)
-                                if safe_name != vcol and vcol in calc_df.columns:
+                                # 优先用原始列名，若已被值映射重命名则找映射后的列名
+                                if vcol in calc_df.columns:
+                                    calc_df[safe_name] = calc_df[vcol]
+                                elif raw_val_maps and len(raw_val_maps) > value_cols.index(vcol):
+                                    mapped_name = raw_val_maps[value_cols.index(vcol)]
+                                    if mapped_name in calc_df.columns:
+                                        calc_df[safe_name] = calc_df[mapped_name]
+                                    elif safe_name not in scalar_context:
+                                        safe_name = mapped_name.replace("(", "_").replace(")", "_").replace("%", "")
+                                        expr_safe = expr_safe.replace(vcol, safe_name)
+                                        if mapped_name in calc_df.columns:
+                                            calc_df[safe_name] = calc_df[mapped_name]
+                                elif safe_name != vcol and vcol in calc_df.columns:
                                     calc_df[safe_name] = calc_df[vcol]
                         
                         # 注入历史标量：表达式中的变量名优先匹配列名，匹配不到则查找 scalar_context
@@ -1443,10 +1455,22 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
     return result
 
 
-def _find_matching_calc(col, calc_map, value_cols):
+def _find_matching_calc(col, calc_map, value_cols, raw_val_maps=None):
+    """匹配值计算表达式。
+    
+    优先精确匹配列名，其次按值字段前缀匹配（含聚合后缀如"销售额_求和"），
+    最后按值映射后的列名反向查找原始字段。
+    """
     for vcol, expr in calc_map.items():
         if col == vcol or col.startswith(vcol + "_"):
             return expr
+    # 反查：当前列名是值映射后的名称，查找对应原始字段
+    if raw_val_maps:
+        for vcol, expr in calc_map.items():
+            if col in raw_val_maps:
+                map_idx = raw_val_maps.index(col)
+                if map_idx < len(value_cols) and value_cols[map_idx] == vcol:
+                    return expr
     return None
 
 
@@ -1469,8 +1493,11 @@ def collect_task_scalars(result):
                 continue
             try:
                 val = df[col].iloc[0]
-                if isinstance(val, (int, float, bool)):
-                    scalars[str(col)] = float(val)
-            except (ValueError, TypeError):
+                try:
+                    float_val = float(val)
+                    scalars[str(col)] = float_val
+                except (ValueError, TypeError):
+                    pass
+            except (ValueError, TypeError, IndexError):
                 pass
     return scalars

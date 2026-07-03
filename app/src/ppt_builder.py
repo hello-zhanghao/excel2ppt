@@ -18,8 +18,9 @@ def build_ppt(config, chart_map, output_path):
     pages = config.get("pages", [])
     colors = config.get("colors", {})
     general = config.get("general", {})
-    # 美化主题：从 config 的 colors/general 构建，目前可为空走默认主题
-    theme = PptTheme.from_config(colors, general)
+    # 美化主题：从 config 的 colors/general 构建，支持主题名
+    theme_name = general.get("主题") or general.get("theme") or config.get("theme_name")
+    theme = PptTheme.from_config(colors, general, theme_name=theme_name)
 
     if not pages:
         pages = _generate_auto_pages(config, chart_map)
