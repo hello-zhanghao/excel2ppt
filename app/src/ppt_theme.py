@@ -777,8 +777,9 @@ class PptTheme:
             series = plot.series[0]
             for idx, point in enumerate(series.points):
                 point_color = pie_colors[idx % len(pie_colors)]
-                light = self._hex_lighten(point_color, 0.40)
-                self._set_chart_point_gradient(point, light, point_color)
+                light = self._hex_lighten(point_color, 0.60)
+                mid = self._hex_lighten(point_color, 0.25)
+                self._set_chart_point_gradient(point, light, mid)
             plot.has_data_labels = True
             data_labels = plot.data_labels
             data_labels.show_percentage = True
@@ -803,8 +804,9 @@ class PptTheme:
             palette = self.get_color_list()
             for idx, series in enumerate(chart.series):
                 raw_color = palette[idx % len(palette)] if num_series > 1 else color_hex
-                light = self._hex_lighten(raw_color, 0.40)
-                self._set_chart_series_gradient(series, light, raw_color)
+                light = self._hex_lighten(raw_color, 0.60)
+                mid = self._hex_lighten(raw_color, 0.25)
+                self._set_chart_series_gradient(series, light, mid)
 
     def _set_chart_series_gradient(self, series, top_hex, bottom_hex):
         """在图表系列上设置从上到下的双色渐变填充"""
@@ -881,8 +883,9 @@ class PptTheme:
                     spPr = ser.find(qn('c:spPr'))
                     if spPr is None:
                         spPr = etree.SubElement(ser, qn('c:spPr'))
-                    light = self._hex_lighten(raw_color, 0.40)
-                    self.__class__._set_spPr_gradient(spPr, light, raw_color)
+                    light = self._hex_lighten(raw_color, 0.60)
+                    mid = self._hex_lighten(raw_color, 0.25)
+                    self.__class__._set_spPr_gradient(spPr, light, mid)
                     ln = spPr.find(qn('a:ln'))
                     if ln is not None:
                         try:
