@@ -693,7 +693,7 @@ class PptTheme:
         except Exception as e:
             print(f"[警告] 组合图颜色应用失败: {e}")
 
-    def style_chart(self, chart, chart_type):
+    def style_chart(self, chart, chart_type, is_pct=False):
         try:
             num_series = len(chart.series)
             chart.has_legend = (chart_type == "pie" or num_series > 1)
@@ -743,6 +743,9 @@ class PptTheme:
                 value_axis.tick_labels.font.size = Pt(9)
                 value_axis.tick_labels.font.color.rgb = self.hex_to_rgb(self.gray)
                 value_axis.has_major_gridlines = True
+                # 百分比图：值轴刻度也显示 % 符号（数据已 ×100，格式 0.0"%"）
+                if is_pct:
+                    value_axis.tick_labels.number_format = '0.0"%"'
                 if chart.has_legend:
                     value_axis.visible = True
                 cat_axis = chart.category_axis
@@ -775,6 +778,14 @@ class PptTheme:
                     data_labels.show_legend_key = False
                     if chart_type in ("pie", "doughnut"):
                         data_labels.number_format = '0.0%'
+                    elif is_pct:
+                        # 百分比柱/线图：值已 ×100，用 0.0"%" 显示带%号
+                        data_labels.show_value = True
+                        data_labels.number_format = '0.0"%"'
+                        if chart_type in ("line", "area"):
+                            data_labels.position = XL_LABEL_POSITION.CENTER
+                        else:
+                            data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
                     else:
                         data_labels.show_value = True
                         # 千分位 + 负数红色（商务报表风格）

@@ -810,7 +810,33 @@ def run_analysis(task, config_dir):
     if 列维度:
         task["列维度"] = ",".join(列维度)
 
+    # 记录百分比列（pct/count_pct 产生的列），供 excel_writer 精确识别，避免靠列名猜测
+    # pct/count_pct 结果的数值列均为 0~1 小数，所有非分组数值列都属于百分比列
+    if any(af in ("pct", "count_pct") for af in 聚合函数):
+        pct_cols = _collect_pct_columns(result, 行维度)
+        if pct_cols:
+            task["_pct_columns"] = pct_cols
+
     return result, None
+
+
+def _collect_pct_columns(result, row_dims):
+    """收集 pct/count_pct 产生的最终列名（值映射/值计算后的列名）。
+    规则：结果 DataFrame 中所有非分组维度列、非合计列、非指标列的数值列。
+    """
+    pct_cols = set()
+    if not isinstance(result, dict):
+        return []
+    for key, df in result.items():
+        if not isinstance(df, pd.DataFrame):
+            continue
+        skip = set(row_dims) | {"合计", "总计", "指标", "值"}
+        for col in df.columns:
+            if col in skip:
+                continue
+            # 交叉表的列可能是数值型列名（如产品A的销量），需排除分组维度
+            pct_cols.add(str(col))
+    return list(pct_cols)
 
 
 def _cross_pivot(df, row_dims, col_dims, value_cols, agg_funcs, task):

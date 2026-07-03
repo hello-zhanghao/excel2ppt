@@ -180,14 +180,12 @@ def _add_native_chart(slide, chart_info, theme, left, top, width, height, color_
         _add_map_slide(slide, chart_info, left, top, width, height)
         return
 
-    # auto：按图表序号从调色板循环取色，让每页图表颜色自动错开
-    if color.lower() == "auto":
+    # auto 或空：按图表序号从调色板循环取色，让每页图表颜色自动错开
+    if not color or color.lower() == "auto":
         if color_counter is None:
             color_counter = [0]
         color = theme.palette[color_counter[0] % len(theme.palette)]
         color_counter[0] += 1
-    elif not color:
-        color = theme.primary
     if not categories:
         return
 
@@ -212,9 +210,16 @@ def _add_native_chart(slide, chart_info, theme, left, top, width, height, color_
     if not series_list:
         return
 
+    # 判断是否为百分比数据（系列名含占比/pct等关键词，且值为 0~1 小数）
+    # 百分比列：柱/线图把值 ×100 让柱高合理，数据标签用 0.0% 格式
+    is_pct_chart = _is_pct_series(series_list) and chart_type not in ("pie", "doughnut", "scatter")
+    plot_values = series_list
+    if is_pct_chart:
+        plot_values = [(s_name, [v * 100 if isinstance(v, (int, float)) and v <= 1 else v for v in s_vals]) for s_name, s_vals in series_list]
+
     if is_scatter:
         chart_data = XyChartData()
-        for s_name, s_vals in series_list:
+        for s_name, s_vals in plot_values:
             series = chart_data.add_series(s_name)
             for i in range(min(len(categories), len(s_vals))):
                 try:
@@ -226,7 +231,7 @@ def _add_native_chart(slide, chart_info, theme, left, top, width, height, color_
     else:
         chart_data = CategoryChartData()
         chart_data.categories = [str(c) for c in categories]
-        for s_name, s_vals in series_list:
+        for s_name, s_vals in plot_values:
             chart_data.add_series(s_name, s_vals)
 
     chart_shape = slide.shapes.add_chart(
@@ -244,8 +249,35 @@ def _add_native_chart(slide, chart_info, theme, left, top, width, height, color_
                 run.font.color.rgb = theme.hex_to_rgb(theme.dark)
 
     theme.apply_series_color(chart, color, chart_type)
-    theme.style_chart(chart, chart_type)
+    theme.style_chart(chart, chart_type, is_pct=is_pct_chart)
     theme.render_conclusion(slide, chart_info, left, top, width, height)
+
+
+# 百分比列名兜底关键词（与 excel_writer 保持一致，"率"已移除避免误伤）
+_PCT_KEYWORDS = ["占比", "pct", "百分比", "比例"]
+
+
+def _is_pct_name(name):
+    if not name:
+        return False
+    name = str(name)
+    return any(kw in name for kw in _PCT_KEYWORDS)
+
+
+def _is_pct_series(series_list):
+    """判断系列是否为百分比数据：系列名含占比关键词，且值域在 0~1 之间"""
+    for s_name, s_vals in series_list:
+        if not _is_pct_name(s_name):
+            return False
+    # 所有系列名都含占比关键词，再验证值域
+    all_vals = []
+    for _, s_vals in series_list:
+        for v in s_vals:
+            if isinstance(v, (int, float)):
+                all_vals.append(float(v))
+    if not all_vals:
+        return False
+    return all(0 <= v <= 1 for v in all_vals)
 
 
 def _is_combo_chart_type(chart_type):

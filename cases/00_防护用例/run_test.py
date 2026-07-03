@@ -266,6 +266,27 @@ def verify_ppt_features(ppt_path):
     no_skip_page = not any("跳过测试页" in t or "不应出现" in t for t in all_texts)
     checks.append(("是否生成跳过(页12)", no_skip_page and len(slides) == 11, f"配置12页→实际{len(slides)}页"))
 
+    # P0: 百分比饼图数据为 0~1 小数（第5页饼图，引用占比透视结果）
+    # 验证 PPT 拿到的是 0~1 小数，未被 Excel 的 0.0% 格式 ×100 影响
+    if len(slides) >= 5:
+        pct_ok = False
+        pct_detail = "无饼图"
+        from pptx.enum.chart import XL_CHART_TYPE
+        for shape in slides[4].shapes:
+            if shape.has_chart:
+                chart = shape.chart
+                try:
+                    if chart.chart_type == XL_CHART_TYPE.PIE:
+                        plot = chart.plots[0]
+                        vals = list(plot.series[0].values)
+                        # 饼图占比值应为 0~1 小数（如 0.376）
+                        pct_ok = all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in vals)
+                        pct_detail = f"饼图值={vals}"
+                        break
+                except Exception as e:
+                    pct_detail = f"异常: {e}"
+        checks.append(("P0 百分比饼图0~1小数", pct_ok, pct_detail))
+
     # 打印结果
     all_ok = True
     for name, ok, detail in checks:
@@ -366,12 +387,28 @@ def verify_excel_output(excel_path):
             total_idx = header.index("合计")
             checks.append(("华东合计=4800", hd_row[total_idx] == 4800, str(hd_row[total_idx])))
 
-    # 6. 地区占比 - 验证占比值合理（0~100）
+    # 6. 地区占比 - 验证占比值合理（0~1 小数，由 0.0% 格式自动 ×100 显示）
     if "地区占比" in actual_sheets:
         header, data = _read_sheet_data("地区占比")
         pct_vals = [r[1] for r in data if r[0] and r[1] is not None]
-        all_valid = all(isinstance(v, (int, float)) and 0 <= v <= 100 for v in pct_vals)
-        checks.append(("占比值0~100", all_valid, str(pct_vals)))
+        all_valid = all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in pct_vals)
+        checks.append(("占比值0~1小数", all_valid, str(pct_vals)))
+        # 验证 Excel 单元格 number_format 是百分比格式
+        ws_pct = wb["地区占比"]
+        # 第3行第2列是第一个占比数据单元格（第1行区块标题，第2行表头）
+        pct_cell = ws_pct.cell(row=3, column=2)
+        fmt_ok = "%" in str(pct_cell.number_format)
+        checks.append(("占比列number_format含%", fmt_ok, f"format={pct_cell.number_format}"))
+        # 验证存储值是 0.376 而非 37.6（确认未被 ×100）
+        store_ok = pct_cell.value is not None and 0 < float(pct_cell.value) <= 1
+        checks.append(("占比存储值未×100", store_ok, f"存储值={pct_cell.value}"))
+
+    # 6.1 产品计数占比 - 验证 count_pct 也走 0~1 小数
+    if "产品计数占比" in actual_sheets:
+        header, data = _read_sheet_data("产品计数占比")
+        pct_vals = [r[1] for r in data if r[0] and r[1] is not None]
+        all_valid = all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in pct_vals)
+        checks.append(("计数占比0~1小数", all_valid, str(pct_vals)))
 
     # 7. 销售额分箱 - 验证分箱区间存在
     if "销售额分箱" in actual_sheets:

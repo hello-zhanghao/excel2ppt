@@ -1,4 +1,5 @@
 import openpyxl
+import pandas as pd
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill, numbers
 from openpyxl.utils import get_column_letter
 
@@ -77,7 +78,7 @@ def _write_multi_result_sheet(wb, sheet_name, group_items):
                 title = _get_block_title(task)
                 _write_block_title(ws, title, current_row, 2)
                 current_row += 1
-                _write_scalar_block(ws, task, result, task.get("区块名", ""), current_row)
+                _write_scalar_block(ws, task, result, task.get("区块名", ""), current_row, task.get("_pct_columns", []))
                 current_row = ws.max_row + 1
             continue
 
@@ -85,23 +86,24 @@ def _write_multi_result_sheet(wb, sheet_name, group_items):
             current_row += 1
 
         if len(items) > 1:
-            merged_df = _merge_same_dim_results(items, row_dims)
+            merged_df, merged_pct_cols = _merge_same_dim_results(items, row_dims)
             if merged_df is None:
                 continue
             title = _get_block_title(items[0][0])
             _write_block_title(ws, title, current_row, len(merged_df.columns))
             current_row += 1
-            _write_df_block(ws, merged_df, current_row)
+            _write_df_block(ws, merged_df, current_row, merged_pct_cols)
             current_row = ws.max_row + 1
         else:
             task, result = items[0]
+            pct_cols = task.get("_pct_columns", [])
             for key, df in result.items():
                 if current_row > 1:
                     current_row += 1
                 title = _get_block_title(task)
                 _write_block_title(ws, title, current_row, len(df.columns))
                 current_row += 1
-                _write_df_block(ws, df, current_row)
+                _write_df_block(ws, df, current_row, pct_cols)
                 current_row = ws.max_row + 1
 
     if ws.max_column and ws.max_row:
@@ -142,10 +144,12 @@ def _get_row_dims(task):
 
 def _merge_same_dim_results(items, row_dims):
     merged = None
+    merged_pct_cols = set()
 
     for task, result in items:
         if not isinstance(result, dict):
             continue
+        task_pct_cols = set(task.get("_pct_columns", []))
         for key, df in result.items():
             if df is None:
                 continue
@@ -153,15 +157,23 @@ def _merge_same_dim_results(items, row_dims):
 
             if merged is None:
                 merged = df
+                # 记录本 df 中属于 pct 的列
+                for c in df.columns:
+                    if str(c) in task_pct_cols:
+                        merged_pct_cols.add(str(c))
             else:
                 dup = [c for c in df.columns if c in merged.columns]
                 df_rest = df.drop(columns=dup, errors="ignore")
+                for c in df_rest.columns:
+                    if str(c) in task_pct_cols:
+                        merged_pct_cols.add(str(c))
                 merged = pd.concat([merged.reset_index(drop=True), df_rest.reset_index(drop=True)], axis=1)
 
-    return merged
+    return merged, list(merged_pct_cols)
 
 
-def _write_df_block(ws, df, start_row):
+def _write_df_block(ws, df, start_row, pct_columns=None):
+    pct_columns = set(pct_columns or [])
     headers = list(df.columns)
     for ci, h in enumerate(headers, 1):
         c = ws.cell(row=start_row, column=ci, value=str(h))
@@ -169,18 +181,12 @@ def _write_df_block(ws, df, start_row):
 
     for ri, (idx, row_data) in enumerate(df.iterrows()):
         row_num = start_row + 1 + ri
-        if isinstance(row_data, pd.core.series.Series):
-            for ci, val in enumerate(row_data, 1):
-                col_name = headers[ci - 1] if ci <= len(headers) else None
-                cell = ws.cell(row=row_num, column=ci, value=_format_cell_value(val, col_name))
-                if col_name and _is_pct_column(col_name):
-                    cell.number_format = '0.0"%"'
-        else:
-            for ci, val in enumerate(row_data, 1):
-                col_name = headers[ci - 1] if ci <= len(headers) else None
-                cell = ws.cell(row=row_num, column=ci, value=_format_cell_value(val, col_name))
-                if col_name and _is_pct_column(col_name):
-                    cell.number_format = '0.0"%"'
+        for ci, val in enumerate(row_data, 1):
+            col_name = headers[ci - 1] if ci <= len(headers) else None
+            is_pct = _is_pct_col(col_name, pct_columns)
+            cell = ws.cell(row=row_num, column=ci, value=_format_cell_value(val, col_name, is_pct))
+            if is_pct:
+                cell.number_format = '0.0%'
 
         is_total = str(idx) == "合计" or str(idx) == "总计"
         for ci in range(1, len(headers) + 1):
@@ -191,7 +197,8 @@ def _write_df_block(ws, df, start_row):
             cell.border = THIN_BORDER
 
 
-def _write_scalar_block(ws, task, result, remark, start_row):
+def _write_scalar_block(ws, task, result, remark, start_row, pct_columns=None):
+    pct_columns = set(pct_columns or [])
     ws.cell(row=start_row, column=1, value="指标")
     ws.cell(row=start_row, column=2, value="值")
     _style_header_row(ws, start_row, 2)
@@ -199,7 +206,10 @@ def _write_scalar_block(ws, task, result, remark, start_row):
     row = start_row + 1
     for key, val in result.items():
         c1 = ws.cell(row=row, column=1, value=key)
-        c2 = ws.cell(row=row, column=2, value=_format_cell_value(val))
+        is_pct = _is_pct_col(key, pct_columns)
+        c2 = ws.cell(row=row, column=2, value=_format_cell_value(val, key, is_pct))
+        if is_pct:
+            c2.number_format = '0.0%'
         c1.alignment = DATA_ALIGNMENT
         c2.alignment = DATA_ALIGNMENT
         c1.border = THIN_BORDER
@@ -231,29 +241,31 @@ def _style_header_row(ws, row=1, max_col=None):
         cell.border = THIN_BORDER
 
 
-PCT_KEYWORDS = ["占比", "率", "pct", "百分比", "比例"]
+# 百分比列名兜底关键词（仅当 task 未携带 _pct_columns 时使用）
+# 注意："率"过于宽泛（功率/速率/频率等非百分比字段），已移除
+PCT_KEYWORDS = ["占比", "pct", "百分比", "比例"]
 
 
-def _is_pct_column(col_name):
+def _is_pct_col(col_name, pct_columns=None):
+    """判断列是否为百分比列。
+    优先用 task 携带的 pct_columns 元信息（精确），列名关键词仅作兜底。
+    """
     if col_name is None:
         return False
     name = str(col_name)
+    if pct_columns and name in pct_columns:
+        return True
     return any(kw in name for kw in PCT_KEYWORDS)
 
 
-def _pct_already_scaled(col_name):
-    return "%" in str(col_name) if col_name else False
-
-
-def _format_cell_value(val, col_name=None):
+def _format_cell_value(val, col_name=None, is_pct=False):
     if val is None or (isinstance(val, float) and str(val) == "nan"):
         return ""
     if isinstance(val, (int, float)):
-        if col_name and _is_pct_column(col_name):
-            if _pct_already_scaled(col_name):
-                return round(float(val), 1)
-            else:
-                return round(float(val) * 100, 1)
+        # 百分比列：值保持 0~1 小数，由 Excel 的 0.0% 格式自动 ×100 显示
+        # 这样 PPT 读取到的也是 0~1 小数，Excel 与 PPT 数据解读一致
+        if is_pct:
+            return round(float(val), 4)
         if isinstance(val, float):
             if abs(val) >= 1000:
                 return round(val, 1)
@@ -281,6 +293,3 @@ def _auto_fit_columns(ws):
                 max_length = max(max_length, length)
         adjusted = min(max_length + 3, 40)
         ws.column_dimensions[col_letter].width = max(adjusted, 8)
-
-
-import pandas as pd
