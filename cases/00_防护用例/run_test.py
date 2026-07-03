@@ -451,6 +451,31 @@ def verify_excel_output(excel_path):
                                f"地区 fill={dim_fill.start_color.rgb}"))
                 break
 
+    # 11. 历史标量引用：任务15生产"总销售额"→任务16公式"销量/总销售额=销量占比"
+    if "历史标量" in actual_sheets:
+        _, data = _read_sheet_data("历史标量")
+        total_sales = float(data.iloc[0]["总销售额"]) if not data.empty and "总销售额" in data.columns else None
+        checks.append(("标量生产者_总销售额", total_sales is not None and total_sales > 0,
+                       f"total_sales={total_sales}"))
+        
+        if "按地区汇总" in actual_sheets:
+            header2, data2 = _read_sheet_data("按地区汇总")
+            has_ratio_col = "销量占比" in header2
+            checks.append(("标量消费者_销量占比列", has_ratio_col, f"header={header2}"))
+            if has_ratio_col and total_sales:
+                # 华北 销量=270，华东=390，华南=370
+                expected_ratios = {"华北": 270/total_sales, "华东": 390/total_sales, "华南": 370/total_sales}
+                ratio_ok = True
+                for idx, row in data2.iterrows():
+                    region = str(row["地区"]) if "地区" in data2.columns else ""
+                    if region in expected_ratios:
+                        actual_ratio = float(row["销量占比"])
+                        if abs(actual_ratio - expected_ratios[region]) > 0.001:
+                            ratio_ok = False
+                            break
+                checks.append(("标量消费者_占比正确", ratio_ok,
+                               f"expected={expected_ratios}"))
+
     wb.close()
 
     # 打印结果
@@ -564,6 +589,7 @@ def generate_html_report(excel_path, ppt_path, output_dir):
     from app.src.excel_reader import read_config
     
     config_path = os.path.join(SCRIPT_DIR, "项目配置.xlsx")
+    data_path = os.path.join(SCRIPT_DIR, "测试数据.xlsx")
     ppt_pages = []
     try:
         config = read_config(config_path)

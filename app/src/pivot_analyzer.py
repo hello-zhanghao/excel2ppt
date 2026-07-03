@@ -701,7 +701,7 @@ def print_validation_results(results):
     return error_count == 0
 
 
-def run_analysis(task, config_dir):
+def run_analysis(task, config_dir, scalar_context=None):
     序号 = task.get("序号", "?")
     data_source = task.get("数据源", "")
     行维度_str = task.get("行维度", "")
@@ -803,7 +803,7 @@ def run_analysis(task, config_dir):
 
     val_calc = task.get("值计算", "")
     if val_calc and result:
-        result = _apply_value_calc(result, val_calc, 值字段, 聚合函数)
+        result = _apply_value_calc(result, val_calc, 值字段, 聚合函数, scalar_context)
 
     if 行维度:
         task["行维度"] = ",".join(行维度)
@@ -1339,7 +1339,7 @@ def _fmt_num(val):
     return f"{val:.1f}"
 
 
-def _apply_value_calc(result, val_calc, value_cols, agg_funcs):
+def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=None):
     """
     值计算：支持单列与常数运算，以及多列组合运算。
     
@@ -1347,11 +1347,13 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs):
     1. 单列与常数：*100, /1000, +10, -5
     2. 多列组合：销售额/销量, 利润/销售额*100
     3. 指定结果列名：销售额/销量=单价
+    4. 引用历史标量：销售额/总销售额（总销售额来自之前的无行维度任务）
     
     示例：
     - 值计算="销售额,销量"
     - 表达式列："销售额/销量=单价"
     """
+    scalar_context = scalar_context or {}
     calcs = [c.strip() for c in val_calc.split(",")]
     calc_map = {}
     for i, expr in enumerate(calcs):
@@ -1371,14 +1373,12 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs):
                 continue
             expr = _find_matching_calc(col, calc_map, value_cols)
             if expr:
-                # 解析表达式
                 result_col_name = None
                 if "=" in expr:
                     expr_part, result_col_name = expr.split("=", 1)
                     expr = expr_part.strip()
                     result_col_name = result_col_name.strip()
                 
-                # 检查是否包含多列运算
                 has_multi_col = False
                 for vcol in value_cols:
                     if vcol in expr:
@@ -1387,9 +1387,7 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs):
                 
                 try:
                     if has_multi_col:
-                        # 多列组合运算
                         calc_df = df.copy()
-                        # 替换列名为有效的变量名（处理特殊字符）
                         expr_safe = expr
                         col_mapping = {}
                         for vcol in value_cols:
@@ -1400,7 +1398,11 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs):
                                 if safe_name != vcol and vcol in calc_df.columns:
                                     calc_df[safe_name] = calc_df[vcol]
                         
-                        # 使用 pandas eval 进行计算
+                        # 注入历史标量：表达式中的变量名优先匹配列名，匹配不到则查找 scalar_context
+                        for scalar_name, scalar_val in scalar_context.items():
+                            if scalar_name in expr_safe and scalar_name not in calc_df.columns:
+                                calc_df[scalar_name] = float(scalar_val)
+                        
                         calc_result = calc_df.eval(expr_safe)
                         
                         if result_col_name:
@@ -1446,3 +1448,29 @@ def _find_matching_calc(col, calc_map, value_cols):
         if col == vcol or col.startswith(vcol + "_"):
             return expr
     return None
+
+
+def collect_task_scalars(result):
+    """从无行维度任务的横向一行结果中收集标量值。
+    
+    返回 {列名: 值} 字典，供后续任务的值计算公式引用。
+    有行维度的任务（多行分组结果）不产生标量。
+    """
+    scalars = {}
+    if not isinstance(result, dict):
+        return scalars
+    for key, df in result.items():
+        if not isinstance(df, pd.DataFrame):
+            continue
+        if len(df) != 1:
+            continue
+        for col in df.columns:
+            if col in ("合计", "总计", "指标", "值"):
+                continue
+            try:
+                val = df[col].iloc[0]
+                if isinstance(val, (int, float, bool)):
+                    scalars[str(col)] = float(val)
+            except (ValueError, TypeError):
+                pass
+    return scalars

@@ -18,7 +18,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.11.0"
+__VERSION__ = "2.12.0"
 __UPDATE_DATE__ = "2026-07-03"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -336,7 +336,8 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_
 def _run_pivot_mode(config_path, output_path=None, validate_only=False):
     from src.pivot_analyzer import (
         read_pivot_config, run_analysis, find_data_files,
-        validate_pivot_config, print_validation_results
+        validate_pivot_config, print_validation_results,
+        collect_task_scalars
     )
     from src.excel_writer import write_results
 
@@ -370,12 +371,12 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False):
     results = []
     errors = []
     skipped = 0
+    scalar_context: dict = {}
 
     for task in tasks:
         seq = task.get("序号", "?")
         sheet_name = task.get("结果Sheet", f"结果{seq}")
         
-        # 检查是否计算
         should_calc = str(task.get("是否计算", "是")).strip()
         if should_calc.lower() in ("否", "no", "false", "0", "不计算", "跳过", "skip"):
             print(f"    [SKIP] [任务{seq}] 已设置为不计算，跳过")
@@ -384,7 +385,7 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False):
             continue
         
         try:
-            result, error = run_analysis(task, config_dir)
+            result, error = run_analysis(task, config_dir, scalar_context)
             if error:
                 print(f"    [FAIL] [任务{seq}] {error}")
                 errors.append({"序号": seq, "错误": error})
@@ -399,6 +400,10 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False):
                 else:
                     print(f"    [OK] [任务{seq}] {sheet_name}")
                 results.append(result)
+                # 收集无行维度任务产生的标量，供后续任务公式引用
+                task_scalars = collect_task_scalars(result)
+                if task_scalars:
+                    scalar_context.update(task_scalars)
         except Exception as e:
             print(f"    [FAIL] [任务{seq}] 异常: {e}")
             errors.append({"序号": seq, "错误": str(e)})
