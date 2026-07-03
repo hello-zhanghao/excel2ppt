@@ -263,6 +263,38 @@ class PptTheme:
         """返回图表配色列表：强调色优先，后接默认调色板"""
         return list(self.accent_colors) + list(self.palette)
 
+    @staticmethod
+    def _hex_lighten(hex_color, factor=0.45):
+        """将 hex 颜色混入白色，返回同格式 hex 字符串（浅色版）"""
+        c = str(hex_color).lstrip("#")
+        r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+        lr = int(r + (255 - r) * factor)
+        lg = int(g + (255 - g) * factor)
+        lb = int(b + (255 - b) * factor)
+        return f"{lr:02X}{lg:02X}{lb:02X}"
+
+    @staticmethod
+    def _set_spPr_gradient(series_spPr, top_hex, bottom_hex):
+        """在 spPr XML 元素上设置双色垂直渐变填充"""
+        from pptx.oxml.ns import qn
+        from lxml import etree
+        for bad in ("a:solidFill", "a:gradFill", "a:noFill", "a:pattFill"):
+            for el in series_spPr.findall(qn(bad)):
+                series_spPr.remove(el)
+
+        gradFill = etree.SubElement(series_spPr, qn("a:gradFill"))
+        gsLst = etree.SubElement(gradFill, qn("a:gsLst"))
+
+        for pos, color in [(0, top_hex), (100000, bottom_hex)]:
+            gs = etree.SubElement(gsLst, qn("a:gs"))
+            gs.set("pos", str(pos))
+            srgb = etree.SubElement(gs, qn("a:srgbClr"))
+            srgb.set("val", color)
+
+        lin = etree.SubElement(gradFill, qn("a:lin"))
+        lin.set("ang", "5400000")
+        lin.set("scaled", "1")
+
     def set_font_name(self, paragraph, font_name=None):
         fname = font_name or self.font_name
         for run in paragraph.runs:
@@ -739,14 +771,14 @@ class PptTheme:
         rgb = self.hex_to_rgb(color_hex)
         num_series = len(chart.series)
 
-        if chart_type == "pie":
+        if chart_type in ("pie", "doughnut"):
             pie_colors = self.get_color_list()
             plot = chart.plots[0]
             series = plot.series[0]
             for idx, point in enumerate(series.points):
                 point_color = pie_colors[idx % len(pie_colors)]
-                point.format.fill.solid()
-                point.format.fill.fore_color.rgb = self.hex_to_rgb(point_color)
+                light = self._hex_lighten(point_color, 0.40)
+                self._set_chart_point_gradient(point, light, point_color)
             plot.has_data_labels = True
             data_labels = plot.data_labels
             data_labels.show_percentage = True
@@ -754,7 +786,7 @@ class PptTheme:
             data_labels.show_value = False
             data_labels.font.size = Pt(8)
             data_labels.font.color.rgb = self.hex_to_rgb(self.dark)
-        else:
+        elif chart_type in ("line", "scatter"):
             palette = self.get_color_list()
             for idx, series in enumerate(chart.series):
                 s_color = self.hex_to_rgb(palette[idx % len(palette)]) if num_series > 1 else rgb
@@ -766,9 +798,34 @@ class PptTheme:
                     series.marker.format.fill.solid()
                     series.marker.format.fill.fore_color.rgb = s_color
                     series.marker.format.line.color.rgb = s_color
-                else:
-                    series.format.fill.solid()
-                    series.format.fill.fore_color.rgb = s_color
+            # scatter — no fill needed
+        else:
+            palette = self.get_color_list()
+            for idx, series in enumerate(chart.series):
+                raw_color = palette[idx % len(palette)] if num_series > 1 else color_hex
+                light = self._hex_lighten(raw_color, 0.40)
+                self._set_chart_series_gradient(series, light, raw_color)
+
+    def _set_chart_series_gradient(self, series, top_hex, bottom_hex):
+        """在图表系列上设置从上到下的双色渐变填充"""
+        from pptx.oxml.ns import qn
+        from lxml import etree
+        ser_el = series._element
+        spPr = ser_el.find(qn("c:spPr"))
+        if spPr is None:
+            spPr = etree.SubElement(ser_el, qn("c:spPr"))
+        PptTheme._set_spPr_gradient(spPr, top_hex, bottom_hex)
+
+    @staticmethod
+    def _set_chart_point_gradient(point, top_hex, bottom_hex):
+        """在饼图/环形图的单个扇区上设置渐变填充"""
+        from pptx.oxml.ns import qn
+        pt_el = point._element
+        spPr = pt_el.find(qn("c:spPr"))
+        if spPr is None:
+            spPr = pt_el.makeelement(qn("c:spPr"), {})
+            pt_el.insert(0, spPr)
+        PptTheme._set_spPr_gradient(spPr, top_hex, bottom_hex)
 
     def apply_combo_series_color(self, chart, chart_type, type_map):
         palette = self.get_color_list()
@@ -820,18 +877,12 @@ class PptTheme:
                         symbol = etree.SubElement(marker, qn('c:symbol'))
                     symbol.set('val', 'circle')
                 else:
+                    raw_color = palette[idx % len(palette)]
                     spPr = ser.find(qn('c:spPr'))
                     if spPr is None:
                         spPr = etree.SubElement(ser, qn('c:spPr'))
-                    solidFill = spPr.find(qn('a:solidFill'))
-                    if solidFill is None:
-                        solidFill = etree.SubElement(spPr, qn('a:solidFill'))
-                    srgb = solidFill.find(qn('a:srgbClr'))
-                    if srgb is None:
-                        for child in list(solidFill):
-                            solidFill.remove(child)
-                        srgb = etree.SubElement(solidFill, qn('a:srgbClr'))
-                    srgb.set('val', '{:02X}{:02X}{:02X}'.format(c[0], c[1], c[2]))
+                    light = self._hex_lighten(raw_color, 0.40)
+                    self.__class__._set_spPr_gradient(spPr, light, raw_color)
                     ln = spPr.find(qn('a:ln'))
                     if ln is not None:
                         try:
