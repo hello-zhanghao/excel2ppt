@@ -913,17 +913,42 @@ def _cross_pivot(df, row_dims, col_dims, value_cols, agg_funcs, task):
 
 def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
     if not group_cols:
-        rows = []
-        for vcol in value_cols:
+        row_data = {}
+        # 按位置 1:1 对应（与有行维度一致）；单值多聚合时全组合
+        if len(value_cols) == 1 and len(agg_funcs) > 1:
+            vcol = value_cols[0]
             for af in agg_funcs:
-                actual_af = "sum" if af in ("pct", "占比", "percentage") else af
-                val = df[vcol].agg(actual_af)
-                if af in ("pct", "占比", "percentage"):
-                    total = float(df[vcol].sum())
-                    val = float(val) / total if total != 0 else 0
-                agg_label = {"sum": "求和", "mean": "均值", "avg": "均值", "count": "计数", "max": "最大值", "min": "最小值", "nunique": "去重计数", "pct": "占比"}.get(af, af)
-                rows.append({"指标": f"{vcol}_{agg_label}", "值": round(float(val), 4) if isinstance(val, (int, float)) else val})
-        result_df = pd.DataFrame(rows)
+                a_mapped = AGG_MAP.get(af, af)
+                if a_mapped in ("pct", "count_pct"):
+                    val = df[vcol].agg("sum" if a_mapped == "pct" else "count")
+                    total = float(df[vcol].agg("sum" if a_mapped == "pct" else "count"))
+                    val = round(float(val) / total, 4) if total != 0 else 0.0
+                elif a_mapped == "nunique":
+                    val = df[vcol].nunique()
+                else:
+                    val = df[vcol].agg(a_mapped)
+                agg_label = _get_agg_label(af)
+                key = f"{vcol}_{agg_label}"
+                row_data[key] = round(float(val), 4) if isinstance(val, (int, float)) else val
+        else:
+            for idx, vcol in enumerate(value_cols):
+                if idx < len(agg_funcs):
+                    af = agg_funcs[idx]
+                else:
+                    af = "sum"
+                a_mapped = AGG_MAP.get(af, af)
+                if a_mapped in ("pct", "count_pct"):
+                    val = df[vcol].agg("sum" if a_mapped == "pct" else "count")
+                    total = float(df[vcol].agg("sum" if a_mapped == "pct" else "count"))
+                    val = round(float(val) / total, 4) if total != 0 else 0.0
+                elif a_mapped == "nunique":
+                    val = df[vcol].nunique()
+                else:
+                    val = df[vcol].agg(a_mapped)
+                agg_label = _get_agg_label(af)
+                key = f"{vcol}_{agg_label}"
+                row_data[key] = round(float(val), 4) if isinstance(val, (int, float)) else val
+        result_df = pd.DataFrame([row_data])
         return {"结果": result_df}
 
     agg_dict = {}
@@ -1131,6 +1156,14 @@ def _get_agg_for_col(col, agg_funcs, value_cols):
     if idx < len(agg_funcs):
         return agg_funcs[idx]
     return agg_funcs[0] if agg_funcs else "sum"
+
+
+def _get_agg_label(af):
+    return {
+        "sum": "求和", "mean": "均值", "avg": "均值", "count": "计数",
+        "max": "最大值", "min": "最小值", "nunique": "去重计数",
+        "pct": "占比", "count_pct": "计数占比",
+    }.get(af, af)
 
 
 def _align_funcs_to_fields(value_cols, agg_funcs):

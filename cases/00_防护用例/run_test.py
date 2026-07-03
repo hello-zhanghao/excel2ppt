@@ -422,6 +422,17 @@ def verify_excel_output(excel_path):
         has_multi_col = "客户数_A" in header and "客户数_B" in header
         checks.append(("block合并双列", has_multi_col, str(header)))
 
+    # 9. 无行维度汇总 - 横向一行输出（位置1:1对应）
+    if "无行维度汇总" in actual_sheets:
+        header, data = _read_sheet_data("无行维度汇总")
+        # 验证列名：位置1:1 → 总销售额_sum, 平均客户数_avg
+        has_col_sum = "总销售额" in header or any("销售额" in h and "求和" in h for h in header)
+        has_col_avg = "平均客户数" in header or any("客户数" in h and ("均值" in h or "avg" in h) for h in header)
+        # 验证只有1行数据（横向一行）
+        is_single_row = len(data) == 1
+        checks.append(("无行维度→横向一行", is_single_row, f"data行数={len(data)}"))
+        checks.append(("无行维度→列名匹配", has_col_sum and has_col_avg, f"header={header}"))
+
     wb.close()
 
     # 打印结果
