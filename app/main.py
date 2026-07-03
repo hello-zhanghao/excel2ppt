@@ -18,7 +18,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.10.4"
+__VERSION__ = "2.10.5"
 __UPDATE_DATE__ = "2026-07-03"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -697,6 +697,18 @@ def _select_folder():
                                   bg="#ffffff", fg="#333333", relief="solid", borderwidth=1)
         file_list_text.pack(fill="x", expand=True)
 
+        # 配置文件选择区域（多配置文件时显示，附加到 file_list_text 供 _scan_and_display 使用）
+        config_select_frame = ttk.Frame(file_frame)
+        config_combo_var = tk.StringVar()
+        ttk.Label(config_select_frame, text="选择配置文件:", style="Info.TLabel").pack(side="left", padx=(0, 6))
+        config_combo = ttk.Combobox(config_select_frame, textvariable=config_combo_var,
+                                    state="readonly", width=45, font=("Microsoft YaHei", 10))
+        config_combo.pack(side="left")
+        file_list_text._config_select_frame = config_select_frame
+        file_list_text._config_combo = config_combo
+        file_list_text._config_combo_var = config_combo_var
+        file_list_text._config_paths = []
+
         # 日志区域
         log_frame = ttk.Frame(main_frame)
         log_frame.pack(fill="both", expand=True, pady=(4, 8))
@@ -726,8 +738,19 @@ def _select_folder():
             run_state["running"] = True
             run_btn.config(state="disabled", text="运行中...")
             log_text.delete("1.0", "end")
+
+            # 读取选中的配置文件（多配置文件时由用户在下拉框选择）
+            raw_args = [folder]
+            selected_idx = getattr(file_list_text, "_config_combo", None)
+            if selected_idx is not None:
+                combo = file_list_text._config_combo
+                idx = combo.current()
+                paths = getattr(file_list_text, "_config_paths", [])
+                if idx >= 0 and idx < len(paths):
+                    raw_args = ["-c", paths[idx]]
+
             threading.Thread(target=_run_analysis_thread,
-                             args=(folder, log_text, run_btn, run_state),
+                             args=(raw_args, log_text, run_btn, run_state),
                              daemon=True).start()
 
         ttk.Button(btn_frame, text="操作指南", style="Guide.TButton",
@@ -781,6 +804,24 @@ def _scan_and_display(folder, file_list_text):
         icon = "[配置]" if r["type"] == "config" else "[数据]"
         file_list_text.insert("end", f"{icon} {r['name']}  —  {r['mode']}\n")
 
+    # 多配置文件时显示下拉选择框
+    config_files = [r for r in results if r["type"] == "config"]
+    config_frame = getattr(file_list_text, "_config_select_frame", None)
+    config_combo = getattr(file_list_text, "_config_combo", None)
+    if config_frame is not None and config_combo is not None:
+        if len(config_files) > 1:
+            file_list_text._config_paths = [r["path"] for r in config_files]
+            config_combo["values"] = [r["name"] for r in config_files]
+            config_combo.current(0)
+            config_frame.pack(fill="x", pady=(6, 0))
+        else:
+            file_list_text._config_paths = []
+            config_combo["values"] = []
+            config_combo_var = getattr(file_list_text, "_config_combo_var", None)
+            if config_combo_var:
+                config_combo_var.set("")
+            config_frame.pack_forget()
+
 
 def _on_drop(event, path_var, file_list_text, root):
     """处理拖拽事件"""
@@ -800,7 +841,7 @@ def _open_guide():
     webbrowser.open(f"file:///{guide_path.replace(os.sep, '/')}")
 
 
-def _run_analysis_thread(folder, log_text, run_btn, run_state):
+def _run_analysis_thread(raw_args, log_text, run_btn, run_state):
     """在子线程中运行分析，不阻塞 GUI"""
     import threading
     redirector = _GuiLogRedirector(log_text)
@@ -808,7 +849,6 @@ def _run_analysis_thread(folder, log_text, run_btn, run_state):
     sys.stdout = redirector
 
     try:
-        raw_args = [folder]
         _dispatch_from_gui(raw_args)
     except SystemExit:
         pass
