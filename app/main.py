@@ -18,7 +18,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.10.3"
+__VERSION__ = "2.10.4"
 __UPDATE_DATE__ = "2026-07-03"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -29,13 +29,53 @@ def find_config_file(folder):
     xlsx_files = [f for f in xlsx_files if not os.path.basename(f).startswith("~$")]
     if not xlsx_files:
         return None
-    for f in xlsx_files:
-        name = os.path.basename(f)
-        if "配置" in name or "config" in name.lower():
-            return f
-    if len(xlsx_files) == 1:
-        return xlsx_files[0]
-    return None
+
+    # 优先：文件名含「配置」/「config」的候选
+    config_candidates = [f for f in xlsx_files
+                         if "配置" in os.path.basename(f) or "config" in os.path.basename(f).lower()]
+
+    # 无「配置」候选时，若只有一个 xlsx 则直接用
+    if not config_candidates:
+        if len(xlsx_files) == 1:
+            return xlsx_files[0]
+        # 多个 xlsx 但都不含「配置」→ 也纳入候选让用户选
+        config_candidates = xlsx_files
+
+    # 只有一个候选，直接返回
+    if len(config_candidates) == 1:
+        return config_candidates[0]
+
+    # 多个候选：交互式选择
+    return _prompt_select_config(config_candidates)
+
+
+def _prompt_select_config(candidates):
+    """多个配置文件时让用户选择。非交互环境取第一个并警告。"""
+    # 非交互式（管道/重定向），不能 input()，取第一个并警告
+    if not sys.stdin.isatty():
+        chosen = candidates[0]
+        print(f"[警告] 检测到 {len(candidates)} 个配置文件，非交互环境自动选择: {os.path.basename(chosen)}")
+        print(f"        其他配置文件: {', '.join(os.path.basename(f) for f in candidates[1:])}")
+        return chosen
+
+    print(f"\n[信息] 检测到 {len(candidates)} 个配置文件，请选择:")
+    for i, f in enumerate(candidates, 1):
+        print(f"  {i}. {os.path.basename(f)}")
+
+    while True:
+        try:
+            choice = input(f"请输入序号 (1-{len(candidates)})，回车默认选 1: ").strip()
+            if not choice:
+                return candidates[0]
+            idx = int(choice)
+            if 1 <= idx <= len(candidates):
+                return candidates[idx - 1]
+            print(f"[错误] 序号超出范围，请输入 1-{len(candidates)}")
+        except ValueError:
+            print("[错误] 请输入数字")
+        except (EOFError, KeyboardInterrupt):
+            print("\n[信息] 已取消选择")
+            return None
 
 
 def _auto_find_data_file(config_dir, config_path):
@@ -62,7 +102,7 @@ def _resolve_config_path(args):
         if os.path.isdir(folder_or_config):
             config_path = find_config_file(folder_or_config)
             if config_path:
-                print(f"[信息] 自动找到配置文件: {os.path.basename(config_path)}")
+                print(f"[信息] 使用配置文件: {os.path.basename(config_path)}")
             else:
                 print(f"[错误] 在 {folder_or_config} 里没找到 Excel 文件")
                 sys.exit(1)

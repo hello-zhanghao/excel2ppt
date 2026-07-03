@@ -14,7 +14,21 @@ python main.py 项目配置.xlsx          # 自动检测 → 依次执行 PPT + 
 python main.py ppt 项目配置.xlsx      # 只生成 PPT
 python main.py pivot 项目配置.xlsx    # 只跑透视分析
 python main.py html 项目配置.xlsx     # 从配置生成 HTML 报告
+
+# 传文件夹（自动查找配置文件）
+python main.py ppt /path/to/folder
 ```
+
+**多配置文件选择**：文件夹下有多个 `.xlsx` 时，文件名含「配置」/「config」的优先列为候选；有多个候选时进入交互选择：
+
+```
+[信息] 检测到 2 个配置文件，请选择:
+  1. 测试配置.xlsx
+  2. 项目配置.xlsx
+请输入序号 (1-2)，回车默认选 1:
+```
+
+非交互环境（管道/重定向）自动选第一个并警告。也可用 `-c 文件名` 直接指定跳过选择。
 
 ### 配置格式（统一 Excel）
 
