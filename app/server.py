@@ -12,7 +12,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify, send_file, render_template_string, Response
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from main import _run_pivot_mode, _run_ppt_mode, _detect_mode, __VERSION__
+from main import _run_pivot_mode, _run_ppt_mode, __VERSION__
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
@@ -131,6 +131,35 @@ def _find_config(work_dir):
     return candidates[0][0] if candidates else None
 
 
+def _detect_mode_web(config_path):
+    """检测配置类型（Web 版本，内联避免 pyc 缓存问题）"""
+    import openpyxl
+    wb = openpyxl.load_workbook(config_path, read_only=True)
+    ppt_keywords = {"页码", "页面类型", "页面标题", "图表类型"}
+    pivot_keywords = {"数据源", "行维度", "列维度", "值字段", "聚合方式"}
+    ppt_found = False
+    pivot_found = False
+    for name in wb.sheetnames:
+        ws = wb[name]
+        all_texts = set()
+        for row in ws.iter_rows(min_row=1, max_row=5):
+            for cell in row:
+                if cell.value is not None:
+                    all_texts.add(str(cell.value).strip())
+        if len(ppt_keywords & all_texts) >= 2:
+            ppt_found = True
+        if len(pivot_keywords & all_texts) >= 2:
+            pivot_found = True
+    wb.close()
+    if ppt_found and pivot_found:
+        return "all"
+    elif ppt_found:
+        return "ppt"
+    elif pivot_found:
+        return "pivot"
+    return "unknown"
+
+
 def _run_analysis_web(sid, config_path):
     s = _get_or_create_session(sid)
 
@@ -144,35 +173,42 @@ def _run_analysis_web(sid, config_path):
     old_stdout = sys.stdout
     sys.stdout = WebLogRedirector()
 
-    try:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = os.path.basename(config_path).rsplit(".", 1)[0]
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = os.path.basename(config_path).rsplit(".", 1)[0]
 
-        # 检测配置类型
-        detected = _detect_mode(config_path)
-        _push_log(sid, f"配置类型: {detected}")
+    detected = _detect_mode_web(config_path)
+    _push_log(sid, f"配置类型: {detected}")
 
-        if detected in ("pivot", "all"):
+    # pivot 分析
+    if detected in ("pivot", "all"):
+        try:
             pivot_out = os.path.join(s["work_dir"], f"{base}_分析_{ts}.xlsx")
             _run_pivot_mode(config_path, pivot_out)
             s["output"]["pivot"] = pivot_out
+        except SystemExit:
+            pass
+        except Exception as e:
+            _push_log(sid, f"透视分析失败: {e}")
 
-        if detected in ("ppt", "all"):
+    # ppt 生成
+    if detected in ("ppt", "all"):
+        try:
             ppt_out = os.path.join(s["work_dir"], f"{base}_报告_{ts}.pptx")
             pivot_src = s["output"].get("pivot")
             _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_src)
             s["output"]["ppt"] = ppt_out
+        except SystemExit:
+            _push_log(sid, "⚠ PPT 生成未完成（数据可能不完整）")
+        except Exception as e:
+            _push_log(sid, f"PPT 生成失败: {e}")
+            import traceback
+            for line in traceback.format_exc().split("\n")[:3]:
+                if line.strip():
+                    _push_log(sid, line)
 
-        _push_log(sid, "✅ 分析完成！")
-    except Exception as e:
-        _push_log(sid, f"❌ 错误: {e}")
-        import traceback
-        for line in traceback.format_exc().split("\n"):
-            if line.strip():
-                _push_log(sid, line)
-    finally:
-        sys.stdout = old_stdout
-        s["status"] = "done"
+    _push_log(sid, "✅ 分析完成！" if s["output"] else "⚠ 无输出文件")
+    sys.stdout = old_stdout
+    s["status"] = "done"
 
 
 @app.route("/api/logs")
