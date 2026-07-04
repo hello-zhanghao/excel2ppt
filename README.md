@@ -57,6 +57,12 @@ pip install -r requirements.txt
 | matplotlib | 地图/图表渲染 |
 | cartopy | 地理地图底图 |
 
+## 效果展示
+
+![GUI 界面截图](app/static/gui_screenshot.png)
+
+> ⬆️ GUI 界面：选择文件夹 → 扫描文件 → 一键生成 PPT + 透视分析 + HTML 报告
+
 ## 功能概览
 
 ### 1. PPT 报告生成 (`ppt`)
