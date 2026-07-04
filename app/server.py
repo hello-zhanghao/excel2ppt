@@ -63,20 +63,26 @@ def api_upload():
     uploaded = []
 
     for key in request.files:
-        file = request.files[key]
-        if file.filename == "":
-            continue
-        safe_name = os.path.basename(file.filename)
-        # 过滤掉无关文件（只保留 xlsx）
-        if not safe_name.endswith(".xlsx"):
-            continue
-        # 跳过 Excel 临时文件
-        if safe_name.startswith("~$"):
-            continue
-        dst = os.path.join(s["work_dir"], safe_name)
-        file.save(dst)
-        s["files"][safe_name] = dst
-        uploaded.append(safe_name)
+        for file in request.files.getlist(key):
+            if file.filename == "":
+                continue
+            safe_name = os.path.basename(file.filename)
+            # 过滤掉无关文件（只保留 xlsx）
+            if not safe_name.endswith(".xlsx"):
+                continue
+            # 跳过 Excel 临时文件
+            if safe_name.startswith("~$"):
+                continue
+            # 同名冲突处理：用上级目录名作前缀
+            original_base = safe_name
+            if safe_name in s["files"]:
+                parent = os.path.basename(os.path.dirname(file.filename.replace("\\", "/")))
+                if parent:
+                    safe_name = f"{parent}_{original_base}"
+            dst = os.path.join(s["work_dir"], safe_name)
+            file.save(dst)
+            s["files"][safe_name] = dst
+            uploaded.append(safe_name)
 
     _push_log(sid, f"上传完成: {', '.join(uploaded)}")
 
