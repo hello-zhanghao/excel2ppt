@@ -130,14 +130,16 @@ def _detect_mode(config_path):
     pivot_found = False
     for name in wb.sheetnames:
         ws = wb[name]
-        try:
-            row = [str(c.value).strip() if c.value is not None else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
-        except StopIteration:
-            continue
-        row_set = set(row)
-        if len(ppt_keywords & row_set) >= 2:
+        # 检查前 5 行（PPT 配置第一行可能是主题设置行）
+        all_texts = set()
+        for row in ws.iter_rows(min_row=1, max_row=5):
+            for cell in row:
+                v = cell.value
+                if v is not None:
+                    all_texts.add(str(v).strip())
+        if len(ppt_keywords & all_texts) >= 2:
             ppt_found = True
-        if len(pivot_keywords & row_set) >= 2:
+        if len(pivot_keywords & all_texts) >= 2:
             pivot_found = True
     wb.close()
     if ppt_found and pivot_found:
