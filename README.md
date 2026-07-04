@@ -7,8 +7,14 @@
 ```bash
 cd app
 
+# 🆕 Web 模式（推荐）：浏览器界面，支持拖拽上传 + 在线预览
+python server.py                # 自动打开 http://localhost:8899
+
+# GUI 模式：点击「在浏览器中打开」可切换到 Web 界面
+python main.py                  # 启动 Tkinter GUI
+
 # 统一配置（一个 Excel 含多个 Sheet）
-python main.py 项目配置.xlsx          # 自动检测 → 依次执行 PPT + 透视 + HTML
+python main.py 项目配置.xlsx    # 自动检测 → 依次执行 PPT + 透视 + HTML
 
 # 子命令方式
 python main.py ppt 项目配置.xlsx      # 只生成 PPT
@@ -169,8 +175,13 @@ python main.py cases/02_网络指标/项目配置.xlsx
 ```
 excel2ppt/
 ├── app/
-│   ├── main.py              # 统一入口
-│   ├── requirements.txt
+│   ├── main.py              # 统一入口 (CLI + GUI)
+│   ├── server.py            # 🆕 Web 服务入口
+│   ├── static/
+│   │   ├── guide.html       # 操作指南
+│   │   ├── gui_screenshot.png
+│   │   └── web/
+│   │       └── index.html   # 🆕 Web 前端界面
 │   └── src/
 │       ├── excel_reader.py   # 配置+数据+地理数据读取
 │       ├── ppt_theme.py      # PPT 美化主题（配色/布局/字体/页面元素）
@@ -186,6 +197,24 @@ excel2ppt/
 ```
 
 ## 版本变更
+
+### v2.13.0 (2026-07-04)
+
+**🆕 Web 模式（浏览器界面）**
+- 新增 `server.py` Flask Web 服务，`python server.py` 启动
+- Web 前端：拖拽上传 Excel → 一键执行 → 实时日志 SSE 推送 → 在线预览 + 下载
+- Excel 预览：后台读取 openpyxl 转 HTML 表格，带样式
+- PPT 预览：Pillow 逐页渲染为 PNG，左右翻页浏览
+- 新增依赖：`flask>=3.0`, `Pillow>=10.0`
+
+**🎨 GUI 美化**
+- 标题栏改为深蓝渐变 Canvas 横幅（`#182B49`→`#2E75B6`）
+- 各功能区添加白色卡片包裹（圆角边框 + emoji 图标标签）
+- 新增「🌐 在浏览器中打开」按钮，一键启动 Web 模式
+- 路径输入框改为浅灰底色原生 Entry
+
+**📝 其他**
+- requirements.txt 新增 Flask / Pillow
 
 ### v2.12.2 (2026-07-03)
 

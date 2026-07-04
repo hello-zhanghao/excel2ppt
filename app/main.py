@@ -18,8 +18,8 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.12.3"
-__UPDATE_DATE__ = "2026-07-03"
+__VERSION__ = "2.13.0"
+__UPDATE_DATE__ = "2026-07-04"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -636,6 +636,44 @@ def _scan_files(folder):
     return results
 
 
+def _draw_gradient_banner(canvas, height, top_hex, bottom_hex):
+    """在 Canvas 上绘制从上到下的渐变矩形"""
+    r1, g1, b1 = int(top_hex[1:3], 16), int(top_hex[3:5], 16), int(top_hex[5:7], 16)
+    r2, g2, b2 = int(bottom_hex[1:3], 16), int(bottom_hex[3:5], 16), int(bottom_hex[5:7], 16)
+    w = canvas.winfo_reqwidth() or 900
+    for i in range(height):
+        t = i / max(height - 1, 1)
+        r = int(r1 + (r2 - r1) * t)
+        g = int(g1 + (g2 - g1) * t)
+        b = int(b1 + (b2 - b1) * t)
+        color = f"#{r:02x}{g:02x}{b:02x}"
+        canvas.create_rectangle(0, i, w + 200, i + 1, fill=color, outline="")
+    canvas.bind("<Configure>", lambda e: _redraw_gradient(canvas, height, top_hex, bottom_hex))
+
+
+def _redraw_gradient(canvas, height, top_hex, bottom_hex):
+    canvas.delete("all")
+    _draw_gradient_banner_content(canvas, height, top_hex, bottom_hex)
+
+
+def _draw_gradient_banner_content(canvas, height, top_hex, bottom_hex):
+    from main import __VERSION__, __UPDATE_DATE__
+    w = canvas.winfo_width() or 900
+    for i in range(height):
+        r1, g1, b1 = int(top_hex[1:3], 16), int(top_hex[3:5], 16), int(top_hex[5:7], 16)
+        r2, g2, b2 = int(bottom_hex[1:3], 16), int(bottom_hex[3:5], 16), int(bottom_hex[5:7], 16)
+        t = i / max(height - 1, 1)
+        r = int(r1 + (r2 - r1) * t)
+        g = int(g1 + (g2 - g1) * t)
+        b = int(b1 + (b2 - b1) * t)
+        color = f"#{r:02x}{g:02x}{b:02x}"
+        canvas.create_rectangle(0, i, w + 200, i + 1, fill=color, outline="")
+    canvas.create_text(16, 18, text="Excel 统一分析工具", anchor="w",
+                       font=("Microsoft YaHei", 15, "bold"), fill="#FFFFFF")
+    canvas.create_text(16, 38, text=f"PPT 报告生成 + 透视分析  |  v{__VERSION__}  |  更新: {__UPDATE_DATE__}",
+                       anchor="w", font=("Microsoft YaHei", 8), fill="#C0D4F0")
+
+
 def _select_folder():
     try:
         import tkinter as tk
@@ -660,50 +698,54 @@ def _select_folder():
         style.configure("Pick.TButton", font=("Microsoft YaHei", 10), padding=6)
         style.configure("Scan.TButton", font=("Microsoft YaHei", 10), padding=6)
 
-        # 主容器（用 tk.Frame 确保背景色生效，避免 ttk 主题在 Win11 下渲染异常）
+        # 主容器
         main_frame = tk.Frame(root, bg="#f7f8fa", padx=16, pady=12)
         main_frame.pack(fill="both", expand=True)
 
-        # 标题行（用 tk.Label 确保文字渲染，不受 ttk 主题影响）
-        title_frame = tk.Frame(main_frame, bg="#f7f8fa")
-        title_frame.pack(anchor="w", fill="x", pady=(0, 4))
-        tk.Label(title_frame, text="Excel 统一分析工具", font=("Microsoft YaHei", 16, "bold"),
-                 fg="#182B49", bg="#f7f8fa").pack(side="left")
-        tk.Label(title_frame, text=f"v{__VERSION__}", font=("Microsoft YaHei", 9),
-                 fg="#666666", bg="#f7f8fa").pack(side="left", padx=(8, 0), pady=(10, 0))
+        # 渐变色标题横幅（Canvas 绘制）
+        header_canvas = tk.Canvas(main_frame, height=56, bg="#f7f8fa", highlightthickness=0)
+        header_canvas.pack(fill="x", pady=(0, 8))
+        _draw_gradient_banner(header_canvas, 56, "#182B49", "#2E75B6")
+        header_canvas.create_text(16, 18, text="Excel 统一分析工具", anchor="w",
+                                  font=("Microsoft YaHei", 15, "bold"), fill="#FFFFFF")
+        header_canvas.create_text(16, 38, text=f"PPT 报告生成 + 透视分析  |  v{__VERSION__}  |  更新: {__UPDATE_DATE__}",
+                                  anchor="w", font=("Microsoft YaHei", 8), fill="#C0D4F0")
 
-        # 副标题和版本信息
-        sub_frame = tk.Frame(main_frame, bg="#f7f8fa")
-        sub_frame.pack(anchor="w", fill="x", pady=(0, 12))
-        tk.Label(sub_frame, text="PPT 报告生成 + 透视分析", font=("Microsoft YaHei", 9),
-                 fg="#666666", bg="#f7f8fa").pack(side="left")
-        tk.Label(sub_frame, text=f"| 更新日期: {__UPDATE_DATE__}", font=("Microsoft YaHei", 9),
-                 fg="#999999", bg="#f7f8fa").pack(side="left", padx=(12, 0))
+        # 路径选择行（卡片内）
+        path_outer = tk.Frame(main_frame, bg="#ffffff", highlightbackground="#e0e4ea", highlightthickness=1, padx=10, pady=10)
+        path_outer.pack(fill="x", pady=(0, 8))
+        path_frame = tk.Frame(path_outer, bg="#ffffff")
+        path_frame.pack(fill="x")
 
-        # 路径选择行
-        path_frame = ttk.Frame(main_frame)
-        path_frame.pack(fill="x", pady=(0, 8))
+        tk.Label(path_frame, text="📁 选择文件夹", font=("Microsoft YaHei", 11, "bold"),
+                 fg="#182B49", bg="#ffffff").pack(anchor="w", pady=(0, 4))
 
+        path_row = tk.Frame(path_frame, bg="#ffffff")
+        path_row.pack(fill="x")
         path_var = tk.StringVar(value="")
-        path_entry = ttk.Entry(path_frame, textvariable=path_var, font=("Microsoft YaHei", 10), state="readonly")
-        path_entry.pack(side="left", fill="x", expand=True, ipady=2)
+        path_entry = tk.Entry(path_row, textvariable=path_var, font=("Microsoft YaHei", 10), state="readonly",
+                              relief="solid", borderwidth=1, bg="#f5f7fa")
+        path_entry.pack(side="left", fill="x", expand=True, ipady=4)
 
-        ttk.Button(path_frame, text="选择文件夹", style="Pick.TButton",
+        ttk.Button(path_row, text="选择文件夹", style="Pick.TButton",
                    command=lambda: _browse_folder(path_var, file_list_text, root)).pack(side="left", padx=(8, 0))
-        ttk.Button(path_frame, text="扫描文件", style="Scan.TButton",
+        ttk.Button(path_row, text="扫描文件", style="Scan.TButton",
                    command=lambda: _scan_and_display(path_var.get(), file_list_text)).pack(side="left", padx=(6, 0))
 
-        # 检测到的文件区域
-        file_frame = ttk.Frame(main_frame)
-        file_frame.pack(fill="x", pady=(4, 8))
-        ttk.Label(file_frame, text="检测到的文件", style="Sub.TLabel").pack(anchor="w", pady=(0, 4))
+        # 检测到的文件区域（卡片内）
+        file_outer = tk.Frame(main_frame, bg="#ffffff", highlightbackground="#e0e4ea", highlightthickness=1, padx=10, pady=10)
+        file_outer.pack(fill="x", pady=(0, 8))
+        file_frame = tk.Frame(file_outer, bg="#ffffff")
+        file_frame.pack(fill="x")
+        tk.Label(file_frame, text="📄 检测到的文件", font=("Microsoft YaHei", 11, "bold"),
+                 fg="#182B49", bg="#ffffff").pack(anchor="w", pady=(0, 4))
 
         file_list_text = tk.Text(file_frame, height=6, wrap="word", font=("Microsoft YaHei", 10),
                                   bg="#ffffff", fg="#333333", relief="solid", borderwidth=1)
         file_list_text.pack(fill="x", expand=True)
 
-        # 配置文件选择区域（多配置文件时显示，附加到 file_list_text 供 _scan_and_display 使用）
-        config_select_frame = ttk.Frame(file_frame)
+        # 配置文件选择区域
+        config_select_frame = tk.Frame(file_frame, bg="#ffffff")
         config_combo_var = tk.StringVar()
         ttk.Label(config_select_frame, text="选择配置文件:", style="Info.TLabel").pack(side="left", padx=(0, 6))
         config_combo = ttk.Combobox(config_select_frame, textvariable=config_combo_var,
@@ -714,9 +756,13 @@ def _select_folder():
         file_list_text._config_combo_var = config_combo_var
         file_list_text._config_paths = []
 
-        # 按钮行（放在日志区域之前 pack，确保始终可见）
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill="x", pady=(4, 0))
+        # 按钮行（放在日志区域之前 pack，确保始终可见）——卡片包裹
+        btn_outer = tk.Frame(main_frame, bg="#ffffff", highlightbackground="#e0e4ea", highlightthickness=1, padx=10, pady=10)
+        btn_outer.pack(fill="x", pady=(4, 0))
+        tk.Label(btn_outer, text="🎯 操作", font=("Microsoft YaHei", 11, "bold"),
+                 fg="#182B49", bg="#ffffff").pack(anchor="w", pady=(0, 6))
+        btn_frame = tk.Frame(btn_outer, bg="#ffffff")
+        btn_frame.pack(fill="x")
 
         run_state = {"running": False}
 
@@ -754,13 +800,19 @@ def _select_folder():
         run_btn = ttk.Button(btn_frame, text="开始分析", style="Run.TButton", command=do_run)
         run_btn.pack(side="left", fill="x", expand=True, padx=(8, 0))
 
+        ttk.Button(btn_frame, text="🌐 在浏览器中打开", style="Guide.TButton",
+                   command=_open_web).pack(side="left", padx=(8, 0))
+
         ttk.Label(main_frame, text="提示：选择文件夹后点击「扫描文件」检测合规文件，再点击「开始分析」",
                   style="Info.TLabel").pack(anchor="w", pady=(8, 0))
 
-        # 日志区域（放在最后 pack，expand=True 填满剩余空间）
-        log_frame = ttk.Frame(main_frame)
-        log_frame.pack(fill="both", expand=True, pady=(4, 0))
-        ttk.Label(log_frame, text="运行日志", style="Sub.TLabel").pack(anchor="w", pady=(0, 4))
+        # 日志区域（放在最后 pack，expand=True 填满剩余空间）——卡片包裹
+        log_outer = tk.Frame(main_frame, bg="#ffffff", highlightbackground="#e0e4ea", highlightthickness=1, padx=10, pady=10)
+        log_outer.pack(fill="both", expand=True, pady=(8, 0))
+        tk.Label(log_outer, text="📋 运行日志", font=("Microsoft YaHei", 11, "bold"),
+                 fg="#182B49", bg="#ffffff").pack(anchor="w", pady=(0, 4))
+        log_frame = tk.Frame(log_outer, bg="#ffffff")
+        log_frame.pack(fill="both", expand=True)
 
         log_text = scrolledtext.ScrolledText(log_frame, wrap="word", font=("Consolas", 10),
                                               bg="#1d2b3a", fg="#c9d1d9", insertbackground="#fff",
@@ -844,6 +896,18 @@ def _open_guide():
     import webbrowser
     guide_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "guide.html")
     webbrowser.open(f"file:///{guide_path.replace(os.sep, '/')}")
+
+
+def _open_web():
+    import webbrowser, subprocess, threading
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    server_path = os.path.join(base_dir, "server.py")
+    if not os.path.exists(server_path):
+        print("Web 服务文件不存在")
+        return
+    def launch():
+        subprocess.run([sys.executable, server_path], cwd=base_dir)
+    threading.Thread(target=launch, daemon=True).start()
 
 
 def _run_analysis_thread(raw_args, log_text, run_btn, run_state):

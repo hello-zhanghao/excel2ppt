@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Excel 统一分析工具 — Web</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Microsoft YaHei',sans-serif; background:#f0f2f5; color:#333; min-height:100vh; }
+.header { background:linear-gradient(135deg, #182B49 0%, #2E75B6 100%); color:#fff; padding:18px 28px; }
+.header h1 { font-size:22px; }
+.header span { font-size:13px; opacity:.7; margin-left:10px; }
+.main { max-width:1100px; margin:0 auto; padding:20px; display:flex; gap:20px; }
+.left { flex:1; min-width:0; }
+.right { width:320px; display:flex; flex-direction:column; gap:16px; }
+
+.card { background:#fff; border-radius:10px; padding:20px; box-shadow:0 2px 12px rgba(0,0,0,.06); }
+.card h2 { font-size:15px; color:#182B49; margin-bottom:14px; display:flex; align-items:center; gap:6px; }
+
+.dropzone { border:2px dashed #c0c8d4; border-radius:10px; padding:36px; text-align:center; color:#8890a0; cursor:pointer; transition:.2s; }
+.dropzone:hover, .dropzone.dragover { border-color:#2E75B6; color:#2E75B6; background:#f5f8fd; }
+.dropzone .icon { font-size:40px; margin-bottom:8px; }
+
+.file-list { font-size:13px; color:#555; }
+.file-list .file { padding:6px 10px; background:#f5f7fa; border-radius:6px; margin:4px 0; display:flex; align-items:center; gap:6px; }
+.file-list .badge { font-size:10px; padding:2px 6px; border-radius:4px; font-weight:bold; }
+.badge-config { background:#e8f0fe; color:#2E75B6; }
+.badge-data { background:#e6f7e6; color:#2a8a3a; }
+
+.btn-row { display:flex; gap:10px; margin-top:14px; }
+.btn { padding:10px 20px; border:none; border-radius:8px; font-size:14px; cursor:pointer; font-weight:bold; transition:.2s; }
+.btn-primary { background:linear-gradient(135deg, #182B49, #2E75B6); color:#fff; flex:1; }
+.btn-primary:hover { opacity:.9; transform:translateY(-1px); }
+.btn-primary:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+.btn-outline { background:#fff; color:#182B49; border:1.5px solid #182B49; }
+.btn-outline:hover { background:#f0f4ff; }
+
+.log { background:#1d2b3a; color:#c9d1d9; font-family:Consolas,monospace; font-size:12px; border-radius:8px; padding:12px; height:200px; overflow-y:auto; white-space:pre-wrap; word-break:break-all; }
+.log .ok { color:#5ec26a; }
+.log .err { color:#f16167; }
+.log .warn { color:#f0c040; }
+
+.tabs { display:flex; gap:4px; margin-bottom:12px; }
+.tabs button { padding:6px 14px; border:1px solid #ddd; background:#f7f8fa; border-radius:6px 6px 0 0; cursor:pointer; font-size:13px; border-bottom:none; }
+.tabs button.active { background:#fff; color:#182B49; font-weight:bold; }
+.preview-box { background:#fff; border-radius:8px; border:1px solid #eee; min-height:200px; overflow:auto; }
+.preview-box iframe, .preview-box img { width:100%; border:none; display:block; }
+#ppt-preview img { max-width:100%; border-radius:6px; }
+
+.ppt-nav { display:flex; align-items:center; gap:10px; margin-bottom:12px; font-size:13px; }
+.ppt-nav button { padding:6px 12px; border:1px solid #ccc; background:#fff; border-radius:6px; cursor:pointer; }
+.ppt-nav button:hover { background:#f0f4ff; }
+.loading { text-align:center; padding:40px; color:#8890a0; }
+.empty-state { text-align:center; padding:40px; color:#8890a0; font-size:14px; }
+
+@media (max-width:800px) { .main { flex-direction:column; } .right { width:100%; } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📊 Excel 统一分析工具 <span>v{{ version }}</span></h1>
+  <div style="font-size:13px;opacity:.7;margin-top:4px;">PPT 报告生成 + 透视分析 + Excel/PPT 在线预览</div>
+</div>
+
+<div class="main">
+  <!-- 左侧: 上传 + 预览 -->
+  <div class="left">
+    <!-- 上传区 -->
+    <div class="card">
+      <h2>📁 上传文件</h2>
+      <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+        <div class="icon">📂</div>
+        <div>拖拽 Excel 文件到此处 或 点击上传</div>
+        <div style="font-size:12px;margin-top:4px;opacity:.7;">支持 .xlsx 格式（配置文件 + 数据文件）</div>
+      </div>
+      <input type="file" id="fileInput" multiple accept=".xlsx" style="display:none" onchange="handleFiles(this.files)">
+      <div class="file-list" id="fileList"></div>
+      <div class="btn-row">
+        <button class="btn btn-outline" onclick="document.getElementById('fileInput').click()">📎 添加文件</button>
+        <button class="btn btn-primary" id="btnRun" onclick="startAnalyze()">▶ 一键执行</button>
+      </div>
+    </div>
+
+    <!-- 预览区 -->
+    <div class="card">
+      <div class="tabs">
+        <button id="tabExcel" class="active" onclick="switchTab('excel')">📊 Excel 预览</button>
+        <button id="tabPpt" onclick="switchTab('ppt')">📽️ PPT 预览</button>
+      </div>
+      <div class="preview-box" id="previewBox">
+        <div class="empty-state">分析完成后在此查看结果</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右侧: 日志 + 下载 -->
+  <div class="right">
+    <div class="card" style="flex:1;display:flex;flex-direction:column;">
+      <h2>📋 运行日志 <span id="statusBadge" style="font-size:12px;opacity:.6;">就绪</span></h2>
+      <div class="log" id="logBox" style="flex:1;">等待操作...</div>
+    </div>
+    <div class="card">
+      <h2>⬇ 下载结果</h2>
+      <div id="downloadArea" style="font-size:13px;color:#8890a0;">分析完成后可下载</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SID = 'default';
+let pptPage = 1;
+let pptTotal = 0;
+
+// ========== 拖拽上传 ==========
+const dz = document.getElementById('dropzone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+dz.addEventListener('drop', e => {
+  e.preventDefault();
+  dz.classList.remove('dragover');
+  handleFiles(e.dataTransfer.files);
+});
+
+function handleFiles(files) {
+  const fd = new FormData();
+  fd.append('sid', SID);
+  for (let f of files) {
+    if (f.name.endsWith('.xlsx')) fd.append('files', f);
+  }
+  if (!fd.has('files')) return;
+  fetch('/api/upload', { method:'POST', body:fd })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) updateFileList(data);
+    });
+}
+
+function updateFileList(data) {
+  const el = document.getElementById('fileList');
+  el.innerHTML = data.uploaded.map(f => {
+    const isConfig = data.configs.includes(f);
+    const cls = isConfig ? 'badge-config' : 'badge-data';
+    const label = isConfig ? '配置' : '数据';
+    return `<div class="file"><span class="badge ${cls}">${label}</span> ${f}</div>`;
+  }).join('');
+  if (data.uploaded.length === 0) el.innerHTML = '';
+}
+
+// ========== 一键执行 ==========
+function startAnalyze() {
+  const btn = document.getElementById('btnRun');
+  btn.disabled = true;
+  btn.textContent = '⏳ 分析中...';
+  document.getElementById('statusBadge').innerHTML = '<span style="color:#f0c040;">● 运行中</span>';
+  document.getElementById('logBox').textContent = '';
+
+  // 启动 SSE 日志
+  const evtSource = new EventSource('/api/logs?sid=' + SID);
+  evtSource.onmessage = e => {
+    const data = JSON.parse(e.data);
+    if (data.msg) appendLog(data.msg);
+    if (data.status === 'done') {
+      evtSource.close();
+      onAnalysisDone();
+    }
+  };
+
+  fetch('/api/analyze', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({sid:SID})
+  }).then(r => r.json()).then(d => {
+    if (!d.ok) { appendLog('[错误] ' + d.error); resetBtn(); }
+  });
+}
+
+function appendLog(msg) {
+  const box = document.getElementById('logBox');
+  let cls = '';
+  if (msg.startsWith('[OK]') || msg.includes('✓') || msg.includes('✅')) cls = 'ok';
+  else if (msg.includes('错误') || msg.includes('❌')) cls = 'err';
+  else if (msg.includes('警告') || msg.includes('⚠')) cls = 'warn';
+  const span = cls ? `<span class="${cls}">${msg}</span>` : msg;
+  box.innerHTML += span + '\n';
+  box.scrollTop = box.scrollHeight;
+}
+
+function resetBtn() {
+  const btn = document.getElementById('btnRun');
+  btn.disabled = false;
+  btn.textContent = '▶ 一键执行';
+  document.getElementById('statusBadge').textContent = '就绪';
+}
+
+function onAnalysisDone() {
+  resetBtn();
+  document.getElementById('statusBadge').innerHTML = '<span style="color:#5ec26a;">● 完成</span>';
+  // 刷新下载 + 自动加载 Excel 预览
+  fetch('/api/status?sid=' + SID).then(r => r.json()).then(d => {
+    const area = document.getElementById('downloadArea');
+    const links = [];
+    if (d.output.pivot) links.push(`<a href="/api/download/pivot?sid=${SID}">📥 ${d.output.pivot}</a>`);
+    if (d.output.ppt) links.push(`<a href="/api/download/ppt?sid=${SID}">📥 ${d.output.ppt}</a>`);
+    area.innerHTML = links.length ? links.join(' &nbsp;|&nbsp; ') : '无输出文件';
+  });
+  switchTab('excel');
+}
+
+// ========== 预览切换 ==========
+let currentTab = 'excel';
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.getElementById('tabExcel').className = tab === 'excel' ? 'active' : '';
+  document.getElementById('tabPpt').className = tab === 'ppt' ? 'active' : '';
+  if (tab === 'excel') loadExcelPreview();
+  else loadPptPreview();
+}
+
+function loadExcelPreview() {
+  const box = document.getElementById('previewBox');
+  box.innerHTML = '<div class="loading">加载中...</div>';
+  fetch('/api/preview/excel?sid=' + SID + '&file=pivot').then(r => r.text()).then(html => {
+    box.innerHTML = html || '<div class="empty-state">Excel 文件尚未生成</div>';
+  }).catch(() => { box.innerHTML = '<div class="empty-state">加载失败</div>'; });
+}
+
+function loadPptPreview() {
+  fetch('/api/preview/ppt/info?sid=' + SID).then(r => r.json()).then(d => {
+    pptTotal = d.pages;
+    pptPage = pptTotal > 0 ? 1 : 0;
+    renderPptView();
+  });
+}
+
+function renderPptView() {
+  const box = document.getElementById('previewBox');
+  let nav = '';
+  if (pptTotal > 0) {
+    nav = `<div class="ppt-nav">
+      <button onclick="pptPage=Math.max(1,pptPage-1);loadPptImage()">◀ 上一页</button>
+      <span>${pptPage} / ${pptTotal}</span>
+      <button onclick="pptPage=Math.min(pptTotal,pptPage+1);loadPptImage()">下一页 ▶</button>
+    </div><div id="ppt-preview"><div class="loading">加载中...</div></div>`;
+    box.innerHTML = nav;
+    loadPptImage();
+  } else {
+    box.innerHTML = '<div class="empty-state">PPT 文件尚未生成</div>';
+  }
+}
+
+function loadPptImage() {
+  const el = document.getElementById('ppt-preview');
+  if (!el) return;
+  el.innerHTML = '<div class="loading">加载中...</div>';
+  const img = document.createElement('img');
+  img.src = '/api/preview/ppt/' + pptPage + '?sid=' + SID;
+  img.onload = () => { el.innerHTML = ''; el.appendChild(img); };
+  img.onerror = () => { el.innerHTML = '<div class="empty-state">无法渲染此页</div>'; };
+}
+</script>
+</body>
+</html>
