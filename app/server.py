@@ -275,7 +275,6 @@ def api_preview_ppt_page(page):
         return "<p>PPT 文件尚未生成</p>", 404
 
     from pptx import Presentation
-    from PIL import Image, ImageDraw, ImageFont
     import io
 
     prs = Presentation(filepath)
@@ -283,97 +282,147 @@ def api_preview_ppt_page(page):
     if page < 1 or page > len(slides):
         return "<p>页码超出范围</p>", 404
 
-    slide = slides[page - 1]
-    width = int(prs.slide_width / 12700)
-    height = int(prs.slide_height / 12700)
-
-    # 用 pptx 的 slide export 把每张 slide 的 shapes 绘制到 Pillow
-    try:
-        from pptx.util import Inches, Pt, Emu
-        img = _render_slide_to_png(slide, width, height, prs)
-    except Exception:
-        img = _render_slide_simple(slide, width, height)
-
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
+    # 优先用 PowerPoint COM 导出（Windows 原生，完美渲染）
+    buf = _export_slide_via_com(filepath, page)
+    if buf is None:
+        # COM 不可用时回退到 Pillow 绘制
+        img = _render_slide_pillow(slides[page - 1], prs)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
     return send_file(buf, mimetype="image/png")
 
 
-def _render_slide_to_png(slide, width, height, prs):
-    """将 PPT 单页渲染为 Pillow Image（基于文本+形状绘制）"""
-    from PIL import Image, ImageDraw, ImageFont
+def _export_slide_via_com(pptx_path, page):
+    try:
+        import pythoncom
+        pythoncom.CoInitialize()
+    except Exception:
+        pass
+    try:
+        import win32com.client
+        import tempfile
+        app = win32com.client.Dispatch("PowerPoint.Application")
+        app.Visible = False
+        pres = app.Presentations.Open(pptx_path, WithWindow=False)
+        tmp = tempfile.mktemp(suffix=".png")
+        pres.Slides(page).Export(tmp, "PNG")
+        pres.Close()
+        app.Quit()
+        with open(tmp, "rb") as f:
+            data = f.read()
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+        buf = io.BytesIO(data)
+        buf.seek(0)
+        return buf
+    except Exception:
+        return None
+    finally:
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
 
-    img = Image.new("RGB", (width, height), "#FFFFFF")
+
+def _render_slide_pillow(slide, prs):
+    from PIL import Image, ImageDraw, ImageFont
+    from pptx.oxml.ns import qn
+    from lxml import etree
+
+    width = int(prs.slide_width / 12700)
+    height = int(prs.slide_height / 12700)
+
+    # 读取幻灯片背景色（从 XML）
+    bg_color = "#FFFFFF"
+    try:
+        cSld = slide._element.find(qn("p:cSld"))
+        if cSld is not None:
+            bg_el = cSld.find(qn("p:bg"))
+            if bg_el is not None:
+                srgb = bg_el.find(".//" + qn("a:srgbClr"))
+                if srgb is not None:
+                    bg_color = f"#{srgb.get('val')}"
+    except Exception:
+        pass
+
+    img = Image.new("RGB", (width, height), bg_color)
     draw = ImageDraw.Draw(img)
 
     try:
-        font_large = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", 24)
-        font_small = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", 14)
-        font_mid = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", 18)
+        font_large = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", 22)
+        font_mid = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", 16)
+        font_small = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", 12)
+        font_tiny = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", 9)
     except Exception:
-        font_large = ImageFont.load_default()
-        font_small = ImageFont.load_default()
-        font_mid = ImageFont.load_default()
+        font_large = font_mid = font_small = font_tiny = ImageFont.load_default()
 
     for shape in slide.shapes:
-        left = int(shape.left / 12700)
-        top = int(shape.top / 12700)
+        l = int(shape.left / 12700)
+        t = int(shape.top / 12700)
         w = int(shape.width / 12700)
         h = int(shape.height / 12700)
 
-        if hasattr(shape, "fill") and shape.fill.type is not None:
-            try:
-                rgb = str(shape.fill.fore_color.rgb)
-                if len(rgb) == 6:
-                    r, g, b = int(rgb[0:2], 16), int(rgb[2:4], 16), int(rgb[4:6], 16)
-                    draw.rectangle([left, top, left + w, top + h], fill=(r, g, b))
-            except Exception:
-                pass
+        # 绘制形状背景
+        try:
+            if hasattr(shape, "fill"):
+                ft = shape.fill.type
+                if ft is not None and ft != 0:
+                    try:
+                        rgb = str(shape.fill.fore_color.rgb)
+                        if len(rgb) == 6:
+                            r, g, b = int(rgb[0:2], 16), int(rgb[2:4], 16), int(rgb[4:6], 16)
+                            draw.rectangle([l, t, l + w, t + h], fill=(r, g, b))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
+        # 绘制文本
         if shape.has_text_frame:
-            for para in shape.text_frame.paragraphs:
+            tf = shape.text_frame
+            for pi, para in enumerate(tf.paragraphs):
                 text = para.text.strip()
                 if not text:
                     continue
                 try:
                     sz = para.font.size
+                    color = para.font.color
+                    is_bold = para.font.bold
+
+                    # 选择字体
                     if sz:
                         pt = int(sz / 12700)
-                        ft = font_mid if pt > 16 else font_small
+                        if pt >= 20:
+                            ft = font_large
+                        elif pt >= 14:
+                            ft = font_mid
+                        elif pt >= 10:
+                            ft = font_small
+                        else:
+                            ft = font_tiny
                     else:
                         ft = font_small
-                    draw.text((left + 4, top + 4), text, fill="#182B49", font=ft)
-                    top += int(ft.size * 1.3)
+
+                    # 字体颜色
+                    try:
+                        if color and color.rgb:
+                            col = str(color.rgb)
+                            if len(col) == 6:
+                                txt_color = f"#{col}"
+                            else:
+                                txt_color = "#333333"
+                        else:
+                            txt_color = "#333333"
+                    except Exception:
+                        txt_color = "#333333"
+
+                    y_offset = t + pi * int(ft.size * 1.35)
+                    draw.text((l + 6, y_offset + 4), text, fill=txt_color, font=ft)
                 except Exception:
-                    draw.text((left + 4, top + 4), text, fill="#182B49")
-
-    return img
-
-
-def _render_slide_simple(slide, width, height):
-    """简化版：只提取文字"""
-    from PIL import Image, ImageDraw
-
-    img = Image.new("RGB", (width, height), "#FFFFFF")
-    draw = ImageDraw.Draw(img)
-
-    texts = []
-    for shape in slide.shapes:
-        if shape.has_text_frame:
-            text = shape.text_frame.text.strip()
-            if text:
-                texts.append(text)
-
-    try:
-        font = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", 16)
-    except Exception:
-        font = ImageFont.load_default()
-
-    y = 20
-    for t in texts:
-        draw.text((20, y), t, fill="#182B49", font=font)
-        y += int(font.size * 1.5)
+                    draw.text((l + 6, t + pi * 18 + 4), text, fill="#333333")
 
     return img
 
