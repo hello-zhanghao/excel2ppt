@@ -714,17 +714,7 @@ def _select_folder():
         file_list_text._config_combo_var = config_combo_var
         file_list_text._config_paths = []
 
-        # 日志区域
-        log_frame = ttk.Frame(main_frame)
-        log_frame.pack(fill="both", expand=True, pady=(4, 8))
-        ttk.Label(log_frame, text="运行日志", style="Sub.TLabel").pack(anchor="w", pady=(0, 4))
-
-        log_text = scrolledtext.ScrolledText(log_frame, wrap="word", font=("Consolas", 10),
-                                              bg="#1d2b3a", fg="#c9d1d9", insertbackground="#fff",
-                                              relief="solid", borderwidth=1)
-        log_text.pack(fill="both", expand=True)
-
-        # 按钮行
+        # 按钮行（放在日志区域之前 pack，确保始终可见）
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill="x", pady=(4, 0))
 
@@ -766,6 +756,16 @@ def _select_folder():
 
         ttk.Label(main_frame, text="提示：选择文件夹后点击「扫描文件」检测合规文件，再点击「开始分析」",
                   style="Info.TLabel").pack(anchor="w", pady=(8, 0))
+
+        # 日志区域（放在最后 pack，expand=True 填满剩余空间）
+        log_frame = ttk.Frame(main_frame)
+        log_frame.pack(fill="both", expand=True, pady=(4, 0))
+        ttk.Label(log_frame, text="运行日志", style="Sub.TLabel").pack(anchor="w", pady=(0, 4))
+
+        log_text = scrolledtext.ScrolledText(log_frame, wrap="word", font=("Consolas", 10),
+                                              bg="#1d2b3a", fg="#c9d1d9", insertbackground="#fff",
+                                              relief="solid", borderwidth=1)
+        log_text.pack(fill="both", expand=True)
 
         # 尝试绑定拖拽（需要 tkinterdnd2，非必需）
         try:
