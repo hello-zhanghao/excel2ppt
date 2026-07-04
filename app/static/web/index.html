@@ -69,15 +69,17 @@ body { font-family:'Microsoft YaHei',sans-serif; background:#f0f2f5; color:#333;
     <!-- 上传区 -->
     <div class="card">
       <h2>📁 上传文件</h2>
-      <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+      <div class="dropzone" id="dropzone">
         <div class="icon">📂</div>
-        <div>拖拽 Excel 文件到此处 或 点击上传</div>
+        <div>拖拽 Excel 文件<span style="color:#2E75B6;font-weight:bold">或整个文件夹</span>到此处</div>
         <div style="font-size:12px;margin-top:4px;opacity:.7;">支持 .xlsx 格式（配置文件 + 数据文件）</div>
       </div>
       <input type="file" id="fileInput" multiple accept=".xlsx" style="display:none" onchange="handleFiles(this.files)">
+      <input type="file" id="folderInput" webkitdirectory style="display:none" onchange="handleFiles(this.files)">
       <div class="file-list" id="fileList"></div>
       <div class="btn-row">
-        <button class="btn btn-outline" onclick="document.getElementById('fileInput').click()">📎 添加文件</button>
+        <button class="btn btn-outline" onclick="document.getElementById('fileInput').click()">📎 选择文件</button>
+        <button class="btn btn-outline" onclick="document.getElementById('folderInput').click()">📁 选择文件夹</button>
         <button class="btn btn-primary" id="btnRun" onclick="startAnalyze()">▶ 一键执行</button>
       </div>
     </div>
@@ -119,8 +121,39 @@ dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
 dz.addEventListener('drop', e => {
   e.preventDefault();
   dz.classList.remove('dragover');
-  handleFiles(e.dataTransfer.files);
+  collectFilesFromDrop(e.dataTransfer).then(files => handleFiles(files));
 });
+
+async function collectFilesFromDrop(dt) {
+  const files = [];
+  const items = dt.items;
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.kind !== 'file') continue;
+    const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+    if (entry && entry.isDirectory) {
+      await traverseEntry(entry, files);
+    } else {
+      const f = item.getAsFile();
+      if (f) files.push(f);
+    }
+  }
+  return files;
+}
+
+function traverseEntry(entry, files) {
+  return new Promise(resolve => {
+    if (entry.isFile) {
+      entry.file(f => { files.push(f); resolve(); });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      reader.readEntries(entries => {
+        const promises = entries.map(e => traverseEntry(e, files));
+        Promise.all(promises).then(resolve);
+      });
+    } else { resolve(); }
+  });
+}
 
 function handleFiles(files) {
   const fd = new FormData();

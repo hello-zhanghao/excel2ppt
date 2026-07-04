@@ -67,6 +67,12 @@ def api_upload():
         if file.filename == "":
             continue
         safe_name = os.path.basename(file.filename)
+        # 过滤掉无关文件（只保留 xlsx）
+        if not safe_name.endswith(".xlsx"):
+            continue
+        # 跳过 Excel 临时文件
+        if safe_name.startswith("~$"):
+            continue
         dst = os.path.join(s["work_dir"], safe_name)
         file.save(dst)
         s["files"][safe_name] = dst
