@@ -110,7 +110,7 @@ body { font-family:'Microsoft YaHei',sans-serif; background:#f0f2f5; color:#333;
 </div>
 
 <script>
-const SID = 'default';
+const SID = 'sid_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
 let pptPage = 1;
 let pptTotal = 0;
 
@@ -187,6 +187,9 @@ function startAnalyze() {
   btn.textContent = '⏳ 分析中...';
   document.getElementById('statusBadge').innerHTML = '<span style="color:#f0c040;">● 运行中</span>';
   document.getElementById('logBox').textContent = '';
+  document.getElementById('previewBox').innerHTML = '<div class="empty-state">分析完成后在此查看结果</div>';
+  pptPage = 1;
+  pptTotal = 0;
 
   // 启动 SSE 日志
   const evtSource = new EventSource('/api/logs?sid=' + SID);
@@ -229,7 +232,6 @@ function resetBtn() {
 function onAnalysisDone() {
   resetBtn();
   document.getElementById('statusBadge').innerHTML = '<span style="color:#5ec26a;">● 完成</span>';
-  // 刷新下载 + 自动加载 Excel 预览
   fetch('/api/status?sid=' + SID).then(r => r.json()).then(d => {
     const area = document.getElementById('downloadArea');
     const links = [];
@@ -237,7 +239,8 @@ function onAnalysisDone() {
     if (d.output.ppt) links.push(`<a href="/api/download/ppt?sid=${SID}">📥 ${d.output.ppt}</a>`);
     area.innerHTML = links.length ? links.join(' &nbsp;|&nbsp; ') : '无输出文件';
   });
-  switchTab('excel');
+  if (currentTab === 'excel') loadExcelPreview();
+  else loadPptPreview();
 }
 
 // ========== 预览切换 ==========
