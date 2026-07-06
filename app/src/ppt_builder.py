@@ -574,11 +574,18 @@ def validate_ppt_config(config, config_dir, pivot_data_file=None):
             sheet_columns_cache[key] = None
             return None
 
+    # 跳过「是否生成=否」的页面（与 main.py 中跳过关键词保持一致）
+    skip_keywords = ("否", "no", "false", "0", "不生成", "跳过", "skip")
+
     for page_idx, page in enumerate(pages, 1):
         page_num = page.get("页码", page_idx)
         page_type = str(page.get("页面类型", "内容")).strip().lower()
         layout = str(page.get("布局", "")).strip()
         charts = page.get("charts", [])
+
+        # 跳过不生成的页面，不参与校验
+        if str(page.get("是否生成", "是")).strip().lower() in skip_keywords:
+            continue
 
         # 封面页不校验图表配置
         if page_type in ("cover", "封面"):
