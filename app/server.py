@@ -499,5 +499,9 @@ def start_server(port=8899, open_browser=True):
 
 
 if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8899
-    start_server(port)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("port", nargs="?", type=int, default=8899)
+    parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
+    args = parser.parse_args()
+    start_server(args.port, open_browser=not args.no_browser)

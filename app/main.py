@@ -18,7 +18,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.13.2"
+__VERSION__ = "2.13.3"
 __UPDATE_DATE__ = "2026-07-06"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -905,11 +905,24 @@ def _open_web():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     server_path = os.path.join(base_dir, "server.py")
     if not os.path.exists(server_path):
-        print("Web 服务文件不存在")
+        log_text.insert("end", "[错误] Web 服务文件不存在\n")
+        log_text.see("end")
         return
+
+    log_text.insert("end", "🌐 正在启动 Web 服务...\n")
+    log_text.see("end")
+
     def launch():
-        subprocess.run([sys.executable, server_path], cwd=base_dir)
+        subprocess.run([sys.executable, server_path, "--no-browser"], cwd=base_dir)
     threading.Thread(target=launch, daemon=True).start()
+
+    def open_browser():
+        import time
+        time.sleep(1.5)
+        webbrowser.open("http://localhost:8899")
+        log_text.insert("end", "   → 浏览器已打开，访问 http://localhost:8899\n")
+        log_text.see("end")
+    threading.Thread(target=open_browser, daemon=True).start()
 
 
 def _run_analysis_thread(raw_args, log_text, run_btn, run_state):
