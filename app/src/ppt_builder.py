@@ -546,8 +546,8 @@ def validate_ppt_config(config, config_dir, pivot_data_file=None):
     # 收集数据文件 Sheet 列名缓存，避免重复 IO
     sheet_columns_cache = {}
 
-    def _get_sheet_columns(file_path, sheet_name, skip_title_row=False):
-        key = (file_path, sheet_name, skip_title_row)
+    def _get_sheet_columns(file_path, sheet_name, skip_title_row=False, block_name=None):
+        key = (file_path, sheet_name, skip_title_row, block_name)
         if key in sheet_columns_cache:
             return sheet_columns_cache[key]
         try:
@@ -563,10 +563,26 @@ def validate_ppt_config(config, config_dir, pivot_data_file=None):
                     ws = wb[sheet_name]
                 else:
                     ws = wb[wb.sheetnames[0]]
-                min_row = 2 if skip_title_row else 1
-                rows_iter = ws.iter_rows(min_row=min_row, max_row=min_row, values_only=True)
-                row = next(rows_iter)
-                cols = [str(c).strip() if c is not None else "" for c in row]
+
+                if block_name:
+                    bn = block_name.strip().lower()
+                    found_block = False
+                    cols = []
+                    for row in ws.iter_rows(min_row=1, values_only=True):
+                        if not found_block:
+                            first_cell = str(row[0]).strip().lower() if row and row[0] is not None else ""
+                            if first_cell and (bn == first_cell or bn in first_cell):
+                                found_block = True
+                        else:
+                            cols = [str(c).strip() if c is not None else "" for c in row]
+                            break
+                    if not found_block:
+                        cols = []
+                else:
+                    min_row = 2 if skip_title_row else 1
+                    rows_iter = ws.iter_rows(min_row=min_row, max_row=min_row, values_only=True)
+                    row = next(rows_iter)
+                    cols = [str(c).strip() if c is not None else "" for c in row]
                 wb.close()
             sheet_columns_cache[key] = cols
             return cols
@@ -620,6 +636,7 @@ def validate_ppt_config(config, config_dir, pivot_data_file=None):
             data_source = str(chart.get("数据源", "")).strip()
             x_range = str(chart.get("X轴范围", chart.get("X轴", ""))).strip()
             y_range = str(chart.get("Y轴范围", chart.get("Y轴", ""))).strip()
+            block_name = str(chart.get("区块名", "")).strip()
             chart_id = chart_title or f"第{page_idx}页图表"
 
             # 校验图表标题
@@ -703,7 +720,7 @@ def validate_ppt_config(config, config_dir, pivot_data_file=None):
             # 校验 Sheet 存在性与列名匹配
             # 透视结果文件首行是区块标题，需跳过取第2行表头
             is_pivot_result = is_pivot_ref or "分析" in os.path.basename(str(file_path))
-            cols = _get_sheet_columns(file_path, data_sheet, skip_title_row=is_pivot_result)
+            cols = _get_sheet_columns(file_path, data_sheet, skip_title_row=is_pivot_result, block_name=block_name if block_name else None)
             if cols is None:
                 results.append({
                     "level": "warning",
