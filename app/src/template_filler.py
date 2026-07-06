@@ -1,0 +1,398 @@
+"""
+PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
+
+用法：
+    from src.template_filler import fill_template
+    fill_template("模板.pptx", "透视结果.xlsx", "输出.pptx")
+
+占位符语法：
+    文本占位符（在文本框中）：
+        {{区块名.列名}}              取该列合计值（数值列）或首行值
+        {{区块名.列名.行值}}         精确取某行某列的值
+        {{区块名.行数}}              取该区块的数据行数
+        {{标量.标量名}}              取无行维度标量
+
+    图表占位符（在图表标题或备注中）：
+        {{图表:区块名}}              用该区块数据替换图表数据源
+
+    聚合后缀（可选）：
+        {{区块名.列名.sum}}          求和（默认）
+        {{区块名.列名.avg}}          平均
+        {{区块名.列名.max}}          最大
+        {{区块名.列名.min}}          最小
+
+PPT 备注配置（每页备注区可写）：
+    数据源=透视结果.xlsx
+    区块=按地区汇总                # 声明本页默认区块，占位符可省略前缀
+"""
+import os
+import re
+from typing import Dict, Optional, Tuple, List
+
+import openpyxl
+import pandas as pd
+from pptx import Presentation
+from pptx.util import Pt
+
+
+# 占位符正则：{{...}}
+_PLACEHOLDER_RE = re.compile(r"\{\{([^{}]+)\}\}")
+# 图表占位符正则：{{图表:xxx}}
+_CHART_PLACEHOLDER_RE = re.compile(r"\{\{图表[:：]([^{}]+)\}\}")
+
+
+def load_pivot_results(pivot_data_path: str) -> Dict[str, pd.DataFrame]:
+    """加载透视结果 xlsx，返回 {sheet_name: DataFrame}。
+    首行作为表头，区块标题行（单独一列的标题）会被跳过。
+    """
+    if not os.path.exists(pivot_data_path):
+        raise FileNotFoundError(f"透视结果文件不存在: {pivot_data_path}")
+
+    wb = openpyxl.load_workbook(pivot_data_path, data_only=True)
+    result = {}
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            continue
+
+        # 透视结果每页第一行可能是区块标题（单列有值），第二行才是表头
+        # 判断逻辑：如果第一行只有1个非空单元格，视为标题行
+        first_row = rows[0]
+        non_empty_count = sum(1 for c in first_row if c is not None and str(c).strip())
+        if non_empty_count == 1 and len(rows) > 1:
+            header_row_idx = 1
+        else:
+            header_row_idx = 0
+
+        if header_row_idx >= len(rows):
+            continue
+
+        headers = [str(c).strip() if c is not None else f"col_{i}" for i, c in enumerate(rows[header_row_idx])]
+        data_rows = rows[header_row_idx + 1:]
+        # 过滤空行
+        data_rows = [r for r in data_rows if any(c is not None and str(c).strip() for c in r)]
+        if data_rows:
+            df = pd.DataFrame(data_rows, columns=headers)
+            result[sheet_name] = df
+    wb.close()
+    return result
+
+
+def _parse_value(value, default=""):
+    """将单元格值转换为字符串，数值保留合理精度"""
+    if value is None:
+        return default
+    if isinstance(value, float):
+        if value == int(value):
+            return str(int(value))
+        return f"{value:.2f}"
+    return str(value)
+
+
+def _aggregate_column(df: pd.DataFrame, col: str, agg: str = "sum") -> Optional[float]:
+    """对指定列做聚合"""
+    if col not in df.columns:
+        return None
+    series = df[col]
+    # 尝试转为数值
+    numeric_series = pd.to_numeric(series, errors="coerce")
+    if numeric_series.isna().all():
+        return None
+    agg = agg.lower().strip()
+    if agg == "sum":
+        return float(numeric_series.sum())
+    elif agg in ("avg", "mean"):
+        return float(numeric_series.mean())
+    elif agg == "max":
+        return float(numeric_series.max())
+    elif agg == "min":
+        return float(numeric_series.min())
+    elif agg == "count":
+        return int(numeric_series.count())
+    return float(numeric_series.sum())
+
+
+def _resolve_text_placeholder(expr: str, pivot_data: Dict[str, pd.DataFrame],
+                              default_block: Optional[str] = None) -> str:
+    """解析文本占位符表达式，返回替换值字符串
+
+    支持的格式：
+        区块名.列名
+        区块名.列名.行值
+        区块名.行数
+        区块名.列名.聚合(sum/avg/max/min/count)
+        标量.标量名
+        列名             （使用 default_block）
+        列名.行值        （使用 default_block）
+    """
+    expr = expr.strip()
+    parts = expr.split(".")
+
+    # 标量特殊处理
+    if parts[0] == "标量":
+        if len(parts) < 2:
+            return ""
+        scalar_name = parts[1]
+        # 标量存放在无行维度的结果里（单行），遍历所有 sheet 查找
+        for sheet_name, df in pivot_data.items():
+            if scalar_name in df.columns and len(df) == 1:
+                return _parse_value(df[scalar_name].iloc[0])
+        return ""
+
+    # 解析区块名、列名、行值/聚合
+    if len(parts) == 1:
+        # 只有列名，依赖 default_block
+        if not default_block:
+            return ""
+        col = parts[0]
+        block = default_block
+        row_val = None
+        agg = None
+    elif len(parts) == 2:
+        # 区块名.列名 或 列名.行值/聚合
+        if parts[0] in pivot_data:
+            block, col = parts[0], parts[1]
+            row_val = None
+            agg = None
+        elif default_block and parts[1] in ("sum", "avg", "mean", "max", "min", "count"):
+            block = default_block
+            col = parts[0]
+            row_val = None
+            agg = parts[1]
+        elif default_block:
+            block = default_block
+            col = parts[0]
+            row_val = parts[1]
+            agg = None
+        else:
+            return ""
+    elif len(parts) >= 3:
+        block = parts[0]
+        col = parts[1]
+        third = parts[2]
+        # 判断第三个是聚合还是行值
+        if third in ("sum", "avg", "mean", "max", "min", "count"):
+            agg = third
+            row_val = None
+        else:
+            row_val = third
+            agg = parts[3] if len(parts) > 3 else None
+    else:
+        return ""
+
+    if block not in pivot_data:
+        return ""
+
+    df = pivot_data[block]
+
+    # 特殊列名：行数
+    if col == "行数":
+        return str(len(df))
+
+    if col not in df.columns:
+        return ""
+
+    # 按行值定位
+    if row_val:
+        # 第一列作为行维度
+        row_dim_col = df.columns[0]
+        matched = df[df[row_dim_col].astype(str) == row_val]
+        if len(matched) == 0:
+            return ""
+        value = matched[col].iloc[0]
+        return _parse_value(value)
+
+    # 聚合
+    if agg:
+        result = _aggregate_column(df, col, agg)
+        if result is None:
+            return ""
+        if isinstance(result, float):
+            if result == int(result):
+                return str(int(result))
+            return f"{result:.2f}"
+        return str(result)
+
+    # 默认：数值列求和，非数值列取首行
+    numeric_series = pd.to_numeric(df[col], errors="coerce")
+    if not numeric_series.isna().all():
+        return _parse_value(float(numeric_series.sum()))
+    return _parse_value(df[col].iloc[0])
+
+
+def _parse_slide_notes(notes_text: str) -> Dict[str, str]:
+    """解析幻灯片备注区的配置"""
+    config = {}
+    for line in notes_text.split("\n"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, value = line.split("=", 1)
+            config[key.strip()] = value.strip()
+    return config
+
+
+def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
+                           default_block: Optional[str]) -> int:
+    """替换文本框中的占位符，返回替换次数"""
+    replace_count = 0
+    # 遍历段落
+    for para in text_frame.paragraphs:
+        # 合并所有 run 的文本，做整体替换（占位符可能跨多个 run）
+        full_text = "".join(run.text for run in para.runs)
+        if not _PLACEHOLDER_RE.search(full_text):
+            continue
+
+        def _replacer(m):
+            nonlocal replace_count
+            expr = m.group(1).strip()
+            # 图表占位符不在此处理
+            if expr.startswith("图表") or expr.startswith("图表:"):
+                return m.group(0)
+            value = _resolve_text_placeholder(expr, pivot_data, default_block)
+            if value:
+                replace_count += 1
+            return value
+
+        new_text = _PLACEHOLDER_RE.sub(_replacer, full_text)
+        if new_text != full_text and para.runs:
+            # 把新文本放到第一个 run，清空其他 run
+            para.runs[0].text = new_text
+            for run in para.runs[1:]:
+                run.text = ""
+    return replace_count
+
+
+def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
+                        default_block: Optional[str]) -> int:
+    """替换幻灯片中的图表数据，返回替换次数"""
+    replace_count = 0
+    for shape in slide.shapes:
+        if not shape.has_chart:
+            continue
+
+        chart = shape.chart
+        chart_title_text = ""
+        try:
+            if chart.has_title and chart.chart_title.has_text_frame:
+                chart_title_text = chart.chart_title.text_frame.text
+        except Exception:
+            pass
+
+        # 备注里的图表占位符也支持（由调用方处理 default_block）
+        target_block = None
+        match = _CHART_PLACEHOLDER_RE.search(chart_title_text)
+        if match:
+            target_block = match.group(1).strip()
+        else:
+            # 检查图表形状的 alternative_text 或 name
+            try:
+                shape_name = shape.name or ""
+                m = _CHART_PLACEHOLDER_RE.search(shape_name)
+                if m:
+                    target_block = m.group(1).strip()
+            except Exception:
+                pass
+
+        if not target_block:
+            continue
+
+        if target_block not in pivot_data:
+            print(f"    [警告] 图表数据区块 '{target_block}' 未在透视结果中找到")
+            continue
+
+        df = pivot_data[target_block]
+        if df.empty:
+            continue
+
+        try:
+            _write_chart_data(chart, df)
+            replace_count += 1
+            print(f"    [OK] 图表数据替换: {target_block} ({df.shape[0]}行 x {df.shape[1]}列)")
+        except Exception as e:
+            print(f"    [警告] 图表数据替换失败 [{target_block}]: {e}")
+    return replace_count
+
+
+def _write_chart_data(chart, df: pd.DataFrame):
+    """将 DataFrame 写入图表的内嵌 WorkBook"""
+    from pptx.chart.data import CategoryChartData
+
+    # 第一列作为类别（X轴），其余列作为系列（Y轴）
+    categories = df.iloc[:, 0].astype(str).tolist()
+    series_data = {}
+    for col_idx in range(1, len(df.columns)):
+        col_name = df.columns[col_idx]
+        values = pd.to_numeric(df.iloc[:, col_idx], errors="coerce").fillna(0).tolist()
+        series_data[col_name] = values
+
+    chart_data = CategoryChartData()
+    chart_data.categories = categories
+    for name, values in series_data.items():
+        chart_data.add_series(name, values)
+
+    chart.replace_data(chart_data)
+
+
+def fill_template(template_path: str, pivot_data_path: str, output_path: str) -> Dict:
+    """填充 PPT 模板
+
+    Args:
+        template_path: PPT 模板文件路径
+        pivot_data_path: 透视结果 xlsx 路径
+        output_path: 输出 PPT 路径
+
+    Returns:
+        dict: 替换统计 {slides, text_replacements, chart_replacements}
+    """
+    if not os.path.exists(template_path):
+        raise FileNotFoundError(f"模板文件不存在: {template_path}")
+
+    print(f"[模板/1] 加载透视结果: {os.path.basename(pivot_data_path)}")
+    pivot_data = load_pivot_results(pivot_data_path)
+    print(f"    → 共 {len(pivot_data)} 个数据区块: {', '.join(pivot_data.keys())}")
+
+    print(f"[模板/2] 加载模板: {os.path.basename(template_path)}")
+    prs = Presentation(template_path)
+    print(f"    → 共 {len(prs.slides)} 页")
+
+    total_text = 0
+    total_chart = 0
+
+    for slide_idx, slide in enumerate(prs.slides, 1):
+        # 解析备注配置
+        default_block = None
+        try:
+            if slide.has_notes_slide:
+                notes_text = slide.notes_slide.notes_text_frame.text
+                config = _parse_slide_notes(notes_text)
+                default_block = config.get("区块")
+        except Exception:
+            pass
+
+        # 替换文本占位符
+        text_count = 0
+        for shape in slide.shapes:
+            if not shape.has_text_frame:
+                continue
+            text_count += _replace_in_text_frame(shape.text_frame, pivot_data, default_block)
+
+        # 替换图表数据
+        chart_count = _replace_chart_data(slide, pivot_data, default_block)
+
+        total_text += text_count
+        total_chart += chart_count
+        print(f"    [页{slide_idx}] 文本替换: {text_count}, 图表替换: {chart_count}")
+
+    print(f"[模板/3] 保存: {output_path}")
+    prs.save(output_path)
+
+    stats = {
+        "slides": len(prs.slides),
+        "text_replacements": total_text,
+        "chart_replacements": total_chart,
+    }
+    print(f"\n[OK] 模板填充完成！共 {stats['slides']} 页, 文本替换 {total_text} 处, 图表替换 {total_chart} 处")
+    return stats

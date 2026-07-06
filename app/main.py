@@ -9,6 +9,7 @@ Excel 统一分析工具 — PPT 生成 + 透视分析 + HTML报告
   python main.py pivot -c 配置.xlsx -o out.xlsx
   python main.py html -c 配置.xlsx        ← 生成HTML报告（自动模式）
   python main.py html --pivot-file 分析.xlsx --ppt-file 报告.pptx
+  python main.py template 模板.pptx --pivot 透视结果.xlsx   ← 基于PPT模板填充数据
   python main.py 文件夹路径               ← 自动检测配置类型，分发到对应模式
 """
 import os
@@ -18,7 +19,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.14.0"
+__VERSION__ = "2.15.0"
 __UPDATE_DATE__ = "2026-07-06"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -659,7 +660,6 @@ def _redraw_gradient(canvas, height, top_hex, bottom_hex):
 
 
 def _draw_gradient_banner_content(canvas, height, top_hex, bottom_hex):
-    from main import __VERSION__, __UPDATE_DATE__
     w = canvas.winfo_width() or 900
     for i in range(height):
         r1, g1, b1 = int(top_hex[1:3], 16), int(top_hex[3:5], 16), int(top_hex[5:7], 16)
@@ -980,6 +980,51 @@ def _dispatch_from_gui(raw_args):
         _run_ppt_mode(config_path, args.output)
 
 
+def _run_template_mode(template_path, pivot_file=None, output_path=None):
+    """基于 PPT 模板和透视结果进行数据替换"""
+    from src.template_filler import fill_template
+
+    if not os.path.exists(template_path):
+        print(f"[错误] 模板文件不存在: {template_path}")
+        sys.exit(1)
+
+    template_dir = os.path.dirname(os.path.abspath(template_path))
+
+    # 自动查找透视结果文件
+    if not pivot_file:
+        # 优先查找同目录下 _分析_ 命名的文件
+        candidates = []
+        for f in os.listdir(template_dir):
+            if f.endswith(".xlsx") and "_分析_" in f and not f.startswith("~$"):
+                candidates.append(os.path.join(template_dir, f))
+        if len(candidates) == 1:
+            pivot_file = candidates[0]
+            print(f"[信息] 自动找到透视结果: {os.path.basename(pivot_file)}")
+        elif len(candidates) > 1:
+            print(f"[信息] 找到多个透视结果文件，请用 --pivot 指定:")
+            for c in candidates:
+                print(f"  - {os.path.basename(c)}")
+            sys.exit(1)
+        else:
+            print("[错误] 未找到透视结果文件，请用 --pivot 指定")
+            sys.exit(1)
+    elif not os.path.exists(pivot_file):
+        # 相对路径处理
+        abs_pivot = os.path.join(template_dir, pivot_file) if not os.path.isabs(pivot_file) else pivot_file
+        if os.path.exists(abs_pivot):
+            pivot_file = abs_pivot
+        else:
+            print(f"[错误] 透视结果文件不存在: {pivot_file}")
+            sys.exit(1)
+
+    if not output_path:
+        base_name = os.path.splitext(os.path.basename(template_path))[0]
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(template_dir, f"{base_name}_填充_{ts}.pptx")
+
+    fill_template(template_path, pivot_file, output_path)
+
+
 def main():
     if len(sys.argv) == 1:
         # 无参数：启动 GUI 模式
@@ -989,7 +1034,7 @@ def main():
     raw_args = sys.argv[1:]
     mode = None
 
-    if raw_args and raw_args[0] in ("ppt", "pivot", "html"):
+    if raw_args and raw_args[0] in ("ppt", "pivot", "html", "template"):
         mode = raw_args[0]
         raw_args = raw_args[1:]
     elif raw_args and raw_args[0] in ("-h", "--help"):
@@ -1020,6 +1065,11 @@ def main():
                            help="透视分析结果文件路径")
         html_p.add_argument("--ppt-file", dest="ppt_file", default=None,
                            help="PPT文件路径（可选，用于预览截图）")
+        tpl_p = sub.add_parser("template", help="基于PPT模板填充数据")
+        tpl_p.add_argument("template_path", help="PPT模板文件路径 (.pptx)")
+        tpl_p.add_argument("--pivot", dest="pivot_file", default=None,
+                           help="透视分析结果文件路径 (.xlsx)")
+        tpl_p.add_argument("-o", "--output", default=None, help="输出PPT路径")
         parser.parse_args()
         return
 
@@ -1062,6 +1112,16 @@ def main():
     else:
         args = legacy.parse_args(raw_args)
 
+    # ===== template 模式：独立处理，不走 _resolve_config_path =====
+    if mode == "template":
+        tpl_parser = argparse.ArgumentParser(add_help=False)
+        tpl_parser.add_argument("template_path", help="PPT模板文件路径")
+        tpl_parser.add_argument("--pivot", dest="pivot_file", default=None)
+        tpl_parser.add_argument("-o", "--output", default=None)
+        tpl_args = tpl_parser.parse_args(raw_args)
+        _run_template_mode(tpl_args.template_path, tpl_args.pivot_file, tpl_args.output)
+        return
+
     config_path = _resolve_config_path(args)
     output_path = args.output
     validate_only = getattr(args, 'check', False)
@@ -1069,7 +1129,7 @@ def main():
     if mode == "pivot":
         _run_pivot_mode(config_path, output_path, validate_only=validate_only)
     elif mode == "html":
-        _run_html_mode(config_path, output_path, 
+        _run_html_mode(config_path, output_path,
                        pivot_file=getattr(args, "pivot_file", None),
                        ppt_file=getattr(args, "ppt_file", None))
     else:

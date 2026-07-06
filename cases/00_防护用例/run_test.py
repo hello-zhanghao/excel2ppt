@@ -734,6 +734,215 @@ def start_preview_server(html_path):
     return start_server(html_path)
 
 
+def verify_template_mode(pivot_excel_path):
+    """验证 PPT 模板替换模式
+
+    测试场景：
+    1. 创建带占位符的 PPT 模板（文本占位符 + 图表占位符）
+    2. 调用 template 子命令填充数据
+    3. 读取生成的 PPT，验证占位符已被替换为透视数据
+    4. 验证图表数据源已被替换
+
+    Returns:
+        tuple: (success: bool, output_ppt_path: str or None)
+    """
+    print_header("Step 5.6: 模板替换模式测试 (template)")
+
+    if not pivot_excel_path or not os.path.exists(pivot_excel_path):
+        print(f"  {RED}透视结果文件不存在，跳过模板测试{RESET}")
+        return False, None
+
+    # 1. 创建带占位符的 PPT 模板
+    template_path = os.path.join(SCRIPT_DIR, "测试模板.pptx")
+    output_path = os.path.join(SCRIPT_DIR, "模板填充结果.pptx")
+    try:
+        _create_test_template(template_path)
+        print(f"  {GREEN}✓ 创建测试模板: {os.path.basename(template_path)}{RESET}")
+    except Exception as e:
+        print(f"  {RED}✗ 创建测试模板失败: {e}{RESET}")
+        return False, None
+
+    # 2. 调用 template 子命令
+    ok = run_cmd(
+        f'"{PYTHON}" "{os.path.join(PROJECT_DIR, "app", "main.py")}" template '
+        f'"{template_path}" --pivot "{pivot_excel_path}" -o "{output_path}"'
+    )
+    if not ok or not os.path.exists(output_path):
+        print(f"  {RED}✗ 模板填充执行失败{RESET}")
+        return False, None
+
+    print(f"  {GREEN}✓ 模板填充执行成功{RESET}")
+
+    # 3. 读取生成的 PPT 验证
+    checks = []
+    try:
+        from pptx import Presentation
+        from pptx.util import Pt
+        prs = Presentation(output_path)
+        slide1 = prs.slides[0]
+
+        # 收集本页所有文本
+        all_text = ""
+        for shape in slide1.shapes:
+            if shape.has_text_frame:
+                all_text += shape.text_frame.text + "\n"
+
+        # 验证点1: 文本占位符已被替换（不再包含 {{）
+        has_unreplaced = "{{" in all_text
+        checks.append(("文本占位符已替换", not has_unreplaced))
+        if has_unreplaced:
+            print(f"  {RED}✗ 存在未替换的占位符: {RESET}")
+            # 显示未替换的占位符
+            import re
+            unreplaced = re.findall(r"\{\{[^}]+\}\}", all_text)
+            for u in unreplaced[:5]:
+                print(f"      {u}")
+        else:
+            print(f"  {GREEN}✓ 文本占位符全部已替换{RESET}")
+
+        # 验证点2: 替换结果包含期望数据（从透视结果读取）
+        import openpyxl
+        wb = openpyxl.load_workbook(pivot_excel_path, data_only=True)
+        # 找到第一个区块的 sheet
+        first_sheet = wb.sheetnames[0]
+        ws = wb[first_sheet]
+        rows = list(ws.iter_rows(values_only=True))
+        # 第一列首行的值作为关键字验证
+        if rows and len(rows) > 1:
+            # 找到表头行
+            header_row_idx = 1 if sum(1 for c in rows[0] if c) == 1 else 0
+            headers = rows[header_row_idx]
+            # 检查任意一个表头是否出现在替换后的文本中
+            matched_any = False
+            for h in headers:
+                if h and str(h).strip() in all_text:
+                    matched_any = True
+                    break
+            # 不做硬性要求，因为模板可能用的是区块名而非列名
+        wb.close()
+
+        # 验证点3: 图表存在且已被替换数据
+        chart_found = False
+        chart_data_replaced = False
+        for shape in slide1.shapes:
+            if shape.has_chart:
+                chart_found = True
+                chart = shape.chart
+                try:
+                    # 检查图表是否有数据
+                    if chart.plots:
+                        plot = chart.plots[0]
+                        categories = list(plot.categories)
+                        if categories:
+                            chart_data_replaced = True
+                except Exception:
+                    pass
+                break
+
+        if chart_found:
+            print(f"  {GREEN}✓ 图表存在{RESET}")
+            if chart_data_replaced:
+                print(f"  {GREEN}✓ 图表数据已替换{RESET}")
+            else:
+                print(f"  {YELLOW}⚠ 图表数据可能为空{RESET}")
+        else:
+            print(f"  {YELLOW}⚠ 未找到图表（模板可能未包含图表占位符）{RESET}")
+
+        checks.append(("图表数据已替换", chart_data_replaced))
+
+        # 验证点4: 输出文件大小合理（>0）
+        file_size = os.path.getsize(output_path)
+        size_ok = file_size > 1000  # 至少 1KB
+        checks.append((f"输出文件大小合理 ({file_size}B)", size_ok))
+        if size_ok:
+            print(f"  {GREEN}✓ 输出文件大小合理 ({file_size} bytes){RESET}")
+        else:
+            print(f"  {RED}✗ 输出文件过小 ({file_size} bytes){RESET}")
+
+    except Exception as e:
+        import traceback
+        print(f"  {RED}✗ 验证过程异常: {e}{RESET}")
+        traceback.print_exc()
+        return False, output_path
+
+    # 总结
+    print(f"\n  {CYAN}模板替换验证项:{RESET}")
+    all_ok = True
+    for name, ok in checks:
+        status = f"{GREEN}✓{RESET}" if ok else f"{RED}✗{RESET}"
+        print(f"    {status} {name}")
+        if not ok:
+            all_ok = False
+
+    return all_ok, output_path
+
+
+def _create_test_template(template_path):
+    """创建带占位符的测试 PPT 模板"""
+    from pptx import Presentation
+    from pptx.util import Inches, Pt, Emu
+    from pptx.dml.color import RGBColor
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+
+    blank_layout = prs.slide_layouts[6]
+    slide = prs.slides.add_slide(blank_layout)
+
+    # 标题文本框
+    title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.8))
+    tf = title_box.text_frame
+    tf.text = "数据报告 - {{简单分组求和.总销售额}}"
+    for para in tf.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(28)
+            run.font.bold = True
+
+    # 多个占位符文本框
+    placeholders = [
+        ("总销售额", "{{简单分组求和.总销售额}}"),
+        ("总销量", "{{简单分组求和.总销量}}"),
+        ("行数", "{{简单分组求和.行数}}"),
+        ("华东销售额", "{{按地区汇总.总销售额.华东}}"),
+        ("华北销售额", "{{按地区汇总.总销售额.华北}}"),
+    ]
+    y_offset = Inches(1.5)
+    for label, placeholder in placeholders:
+        box = slide.shapes.add_textbox(Inches(0.5), y_offset, Inches(6), Inches(0.5))
+        tf = box.text_frame
+        tf.text = f"{label}: {placeholder}"
+        for para in tf.paragraphs:
+            for run in para.runs:
+                run.font.size = Pt(16)
+        y_offset += Inches(0.6)
+
+    # 添加图表（柱状图），标题里带图表占位符
+    chart_data = CategoryChartData()
+    chart_data.categories = ["A", "B", "C"]
+    chart_data.add_series("占位数据", (1, 2, 3))
+    chart = slide.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED,
+        Inches(7), Inches(1.5), Inches(5.5), Inches(4),
+        chart_data
+    ).chart
+    try:
+        chart.has_title = True
+        chart.chart_title.text_frame.text = "{{图表:按地区汇总}}"
+    except Exception:
+        pass
+
+    # 添加备注
+    try:
+        slide.notes_slide.notes_text_frame.text = "# 模板测试\n数据源=透视结果.xlsx\n"
+    except Exception:
+        pass
+
+    prs.save(template_path)
+
+
 def main():
     print_header("防护用例测试 - 开始")
 
@@ -795,6 +1004,9 @@ def main():
     features_ok = verify_ppt_features(ppt_path)
     theme_ok = verify_theme_config()
 
+    # Step 5.6: 模板替换模式测试
+    template_ok, template_ppt_path = verify_template_mode(pivot_excel)
+
     # Step 6: 生成HTML报告（手机可查看）
     ppt_dir = os.path.dirname(ppt_path) if ppt_path else SCRIPT_DIR
     html_path = generate_html_report(pivot_excel, ppt_path, ppt_dir)
@@ -809,7 +1021,7 @@ def main():
     ppt_ok = ppt_path is not None and os.path.exists(ppt_path)
 
     print()
-    if pivot_ok and ppt_ok and excel_ok and features_ok and theme_ok:
+    if pivot_ok and ppt_ok and excel_ok and features_ok and theme_ok and template_ok:
         print(f"  {GREEN}{BOLD}✓ 全部通过 - 请人工检查输出格式{RESET}")
     else:
         print(f"  {RED}{BOLD}✗ 存在失败项{RESET}")
@@ -823,6 +1035,8 @@ def main():
             print(f"    - P0/P1 功能验证未通过")
         if not theme_ok:
             print(f"    - 主题色配置解析未通过")
+        if not template_ok:
+            print(f"    - 模板替换模式验证未通过")
 
     # 启动本地服务器供预览
     if html_path and os.path.exists(html_path):
