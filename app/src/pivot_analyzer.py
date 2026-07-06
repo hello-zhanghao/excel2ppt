@@ -1337,6 +1337,21 @@ def _fmt_num(val):
     return f"{val:.1f}"
 
 
+def _resolve_scalar_or_number(text, scalar_context=None):
+    """解析值为数字或标量。先尝试 float，失败则查 scalar_context。
+    返回数值或 None（无法解析）。
+    """
+    try:
+        return float(text.strip())
+    except (ValueError, TypeError):
+        pass
+    scalar_context = scalar_context or {}
+    key = text.strip()
+    if key in scalar_context:
+        return float(scalar_context[key])
+    return None
+
+
 def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=None, raw_val_maps=None, orig_value_cols=None):
     """
     值计算：支持单列与常数运算，以及多列组合运算。
@@ -1426,24 +1441,37 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                         
                         new_cols[new_col_name] = calc_result
                     else:
-                        # 单列与常数运算（保持原有逻辑）
+                        # 单列与常数运算（支持引用标量）
                         if expr.startswith("*"):
-                            factor = float(expr[1:])
+                            factor = _resolve_scalar_or_number(expr[1:], scalar_context)
+                            if factor is None:
+                                print(f"    [警告] 值计算无法解析: {expr}")
+                                continue
                             df[col] = df[col] * factor
                         elif expr.startswith("/"):
-                            divisor = float(expr[1:])
+                            divisor = _resolve_scalar_or_number(expr[1:], scalar_context)
+                            if divisor is None:
+                                print(f"    [警告] 值计算无法解析: {expr}")
+                                continue
                             if divisor == 0:
                                 print(f"    [警告] 值计算除数为0，跳过: {expr}")
                                 continue
                             df[col] = df[col] / divisor
                         elif expr.startswith("+"):
-                            addend = float(expr[1:])
+                            addend = _resolve_scalar_or_number(expr[1:], scalar_context)
+                            if addend is None:
+                                print(f"    [警告] 值计算无法解析: {expr}")
+                                continue
                             df[col] = df[col] + addend
                         elif expr.startswith("-"):
-                            subtrahend = float(expr[1:])
+                            subtrahend = _resolve_scalar_or_number(expr[1:], scalar_context)
+                            if subtrahend is None:
+                                print(f"    [警告] 值计算无法解析: {expr}")
+                                continue
                             df[col] = df[col] - subtrahend
+                        elif _resolve_scalar_or_number(expr, scalar_context) is not None:
+                            df[col] = float(_resolve_scalar_or_number(expr, scalar_context))
                         elif expr.replace(".", "").replace("-", "").isnumeric():
-                            # 纯数字常量替换
                             df[col] = float(expr)
                 except Exception as e:
                     print(f"    [警告] 值计算表达式解析失败: {expr}, 错误: {e}")
