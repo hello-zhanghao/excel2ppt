@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+<title>防护用例测试报告</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif; background: #f0f2f5; color: #333; line-height: 1.6; }
+  .header { background: linear-gradient(135deg, #2E75B6, #1a4a7a); color: #fff; padding: 20px 16px; text-align: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+  .header h1 { font-size: 18px; margin-bottom: 4px; font-weight: 600; }
+  .header p { font-size: 12px; opacity: 0.85; }
+  .nav-bar { display: flex; justify-content: center; gap: 12px; padding: 10px 0; background: #fff; border-bottom: 1px solid #eee; }
+  .nav-btn { padding: 6px 14px; background: #f5f7fa; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; color: #555; cursor: pointer; transition: all 0.2s; }
+  .nav-btn:hover { background: #2E75B6; color: #fff; border-color: #2E75B6; }
+  .main-layout { display: flex; max-width: 1200px; margin: 0 auto; }
+  .sidebar { width: 260px; min-width: 260px; padding: 16px; background: #fff; position: sticky; top: 84px; height: calc(100vh - 84px); overflow-y: auto; }
+  .sidebar h3 { font-size: 14px; color: #2E75B6; margin-bottom: 12px; padding-left: 8px; border-left: 3px solid #2E75B6; }
+  .sidebar ul { list-style: none; padding-left: 8px; }
+  .sidebar li { margin-bottom: 8px; }
+  .sidebar a { text-decoration: none; color: #555; font-size: 13px; transition: color 0.2s; display: block; padding: 4px 8px; border-radius: 4px; }
+  .sidebar a:hover { color: #2E75B6; background: #f0f5ff; }
+  .summary-cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 16px; }
+  .summary-card { background: linear-gradient(135deg, #5B9BD5, #2E75B6); color: #fff; padding: 12px; border-radius: 8px; text-align: center; }
+  .summary-card .card-label { font-size: 11px; opacity: 0.8; margin-bottom: 4px; }
+  .summary-card .card-value { font-size: 16px; font-weight: bold; }
+  .content-area { flex: 1; padding: 20px; }
+  .section { background: #fff; border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); padding: 20px; margin-bottom: 20px; }
+  .section h2 { font-size: 18px; color: #182B49; margin-bottom: 4px; font-weight: 600; }
+  .section .subtitle { font-size: 13px; color: #999; margin-bottom: 12px; }
+  .summary-bar { background: #f5f7fa; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; color: #555; }
+  .summary-bar span { font-weight: 600; color: #2E75B6; }
+  .chart-container { margin-bottom: 20px; }
+  .chart-buttons { display: flex; gap: 8px; margin-bottom: 12px; }
+  .chart-btn { padding: 6px 14px; background: #f5f7fa; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; color: #555; cursor: pointer; transition: all 0.2s; }
+  .chart-btn:hover { background: #e8f0fe; border-color: #2E75B6; color: #2E75B6; }
+  .chart-btn.active { background: #2E75B6; color: #fff; border-color: #2E75B6; }
+  .chart-canvas { height: 350px; }
+  .table-container { border-top: 1px solid #eee; padding-top: 16px; }
+  .table-header { font-size: 14px; font-weight: 600; color: #2E75B6; margin-bottom: 10px; }
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #f8f9fa; color: #495057; font-weight: 600; padding: 10px 12px; text-align: left; border-bottom: 2px solid #dee2e6; position: sticky; top: 0; }
+  td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; }
+  tbody tr:nth-child(even) { background: #fafbfc; }
+  tbody tr:hover { background: #e9f5ff; }
+  tbody tr.total-row { background: #D9E2F3; font-weight: bold; }
+  .slide-card { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 12px; overflow: hidden; }
+  .slide-num { background: #2E75B6; color: #fff; font-size: 12px; padding: 6px 12px; }
+  .slide-card img { width: 100%; display: block; cursor: pointer; }
+  .slide-card img.zoomed { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: contain; background: rgba(0,0,0,0.9); z-index: 1000; }
+  .footer { text-align: center; padding: 24px; color: #999; font-size: 12px; }
+  @media (max-width: 768px) {
+    .main-layout { flex-direction: column; }
+    .sidebar { width: 100%; min-width: 100%; position: static; height: auto; }
+    .summary-cards { grid-template-columns: repeat(3, 1fr); }
+    .chart-canvas { height: 280px; }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>防护用例测试报告</h1>
+  <p>透视分析结果 + PPT预览</p>
+</div>
+<div class="nav-bar">
+  <button class="nav-btn" onclick="scrollToTop()">回到顶部</button>
+  <button class="nav-btn" onclick="window.print()">打印报告</button>
+</div>
+<div class="main-layout">
+  <div class="sidebar">
+    <h3>报告目录</h3>
+    <ul><li><a href="#section_3_0">各地区总销售额</a></li><li><a href="#section_4_0">各地区销售额对比</a></li><li><a href="#section_4_1">各地区销售额占比</a></li><li><a href="#section_5_0">销售额区间客户分布</a></li><li><a href="#section_7_0">block合并测试(列A)</a></li><li><a href="#section_9_0">各城市销售额对比</a></li><li><a href="#section_12_0">季度销售额趋势(面积图)</a></li><li><a href="#section_12_1">各地区销售额(柱状图)</a></li><li><a href="#section_13_0">各地区销售额</a></li><li><a href="#section_13_1">各地区销量</a></li><li><a href="#section_13_2">地区销售额对比</a></li><li><a href="#section_13_3">华东华北对比</a></li><li><a href="#section_14_0">各地区销售额</a></li><li><a href="#section_15_0">销售额 vs 销量(散点图)</a></li><li><a href="#section_16_0">各产品销售额占比</a></li><li><a href="#section_17_0">季度销售额趋势</a></li><li><a href="#section_18_0">销售额(柱) + 销量(折)</a></li><li><a href="#section_20_0">不应出现的图表</a></li><li><a href="#section_21_0">各地区均价(异名映射)</a></li></ul>
+    <h3>数据摘要</h3>
+    <div class="summary-cards"><div class="summary-card"><div class="card-label">总销售额</div><div class="card-value">13780.0</div></div><div class="summary-card"><div class="card-label">平均销售额</div><div class="card-value">3187.5</div></div><div class="summary-card"><div class="card-label">销售额占比</div><div class="card-value">1.0</div></div><div class="summary-card"><div class="card-label">销售额</div><div class="card-value">8800.0</div></div><div class="summary-card"><div class="card-label">金额</div><div class="card-value">12750.0</div></div><div class="summary-card"><div class="card-label">数量</div><div class="card-value">1030.0</div></div></div>
+  </div>
+  <div class="content-area">
+    
+<div id="section_3_0" class="section">
+  <h2>各地区总销售额</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 13780.0 | 平均: 2296.67 | 最大: 4800.0 | 最小: 270.0 | 数量: 6</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn active" onclick="switchChart('section_3_0', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_3_0', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_3_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_3_0', 'table')">表格</button></div>
+    <div id="chart_section_3_0" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>地区</th><th>总销售额</th><th>总销量</th></tr></thead><tbody><tr class=""><td>华东</td><td>4800</td><td>390</td></tr><tr class=""><td>华北</td><td>3300</td><td>270</td></tr><tr class=""><td>华南</td><td>4650</td><td>370</td></tr><tr class=""><td>标量消费者</td><td></td><td></td></tr><tr class=""><td>地区</td><td>地区销量</td><td>销量占比</td></tr><tr class=""><td>华东</td><td>390</td><td>0.0306</td></tr><tr class=""><td>华北</td><td>270</td><td>0.0212</td></tr><tr class=""><td>华南</td><td>370</td><td>0.0290</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_4_0" class="section">
+  <h2>各地区销售额对比</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 12750.0 | 平均: 4250.0 | 最大: 4800.0 | 最小: 3300.0 | 数量: 3 | 合计: 3187.5 | 平均: 1062.5 | 最大: 1200.0 | 最小: 825.0 | 数量: 3</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn active" onclick="switchChart('section_4_0', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_4_0', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_4_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_4_0', 'table')">表格</button></div>
+    <div id="chart_section_4_0" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>地区</th><th>总销售额</th><th>平均销售额</th><th>客户数</th></tr></thead><tbody><tr class=""><td>华东</td><td>4800</td><td>1200</td><td>4</td></tr><tr class=""><td>华北</td><td>3300</td><td>825</td><td>4</td></tr><tr class=""><td>华南</td><td>4650</td><td>1162.5000</td><td>4</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_4_1" class="section">
+  <h2>各地区销售额占比</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 1.0 | 平均: 0.33 | 最大: 0.38 | 最小: 0.26 | 数量: 3</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn " onclick="switchChart('section_4_1', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_4_1', 'line')">折线图</button><button class="chart-btn active" onclick="switchChart('section_4_1', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_4_1', 'table')">表格</button></div>
+    <div id="chart_section_4_1" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>地区</th><th>销售额占比</th></tr></thead><tbody><tr class=""><td>华东</td><td>0.3765</td></tr><tr class=""><td>华北</td><td>0.2588</td></tr><tr class=""><td>华南</td><td>0.3647</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_5_0" class="section">
+  <h2>销售额区间客户分布</h2>
+  <p class="subtitle"></p>
+  
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn " onclick="switchChart('section_5_0', 'bar')">柱状图</button><button class="chart-btn active" onclick="switchChart('section_5_0', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_5_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_5_0', 'table')">表格</button></div>
+    <div id="chart_section_5_0" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>销售额区间</th><th>客户数</th></tr></thead><tbody><tr class=""><td>500~1000</td><td>7</td></tr><tr class=""><td>1000~1500</td><td>3</td></tr><tr class=""><td>1500~2000</td><td>2</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_7_0" class="section">
+  <h2>block合并测试(列A)</h2>
+  <p class="subtitle"></p>
+  
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn active" onclick="switchChart('section_7_0', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_7_0', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_7_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_7_0', 'table')">表格</button></div>
+    <div id="chart_section_7_0" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>销售额区间</th><th>客户数_A</th><th>客户数_B</th></tr></thead><tbody><tr class=""><td>500~1000</td><td>7</td><td>7</td></tr><tr class=""><td>1000~1500</td><td>3</td><td>3</td></tr><tr class=""><td>1500~2000</td><td>2</td><td>2</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_9_0" class="section">
+  <h2>各城市销售额对比</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 13780.0 | 平均: 2296.67 | 最大: 4800.0 | 最小: 270.0 | 数量: 6</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn active" onclick="switchChart('section_9_0', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_9_0', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_9_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_9_0', 'table')">表格</button></div>
+    <div id="chart_section_9_0" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>地区</th><th>总销售额</th><th>总销量</th></tr></thead><tbody><tr class=""><td>华东</td><td>4800</td><td>390</td></tr><tr class=""><td>华北</td><td>3300</td><td>270</td></tr><tr class=""><td>华南</td><td>4650</td><td>370</td></tr><tr class=""><td>标量消费者</td><td></td><td></td></tr><tr class=""><td>地区</td><td>地区销量</td><td>销量占比</td></tr><tr class=""><td>华东</td><td>390</td><td>0.0306</td></tr><tr class=""><td>华北</td><td>270</td><td>0.0212</td></tr><tr class=""><td>华南</td><td>370</td><td>0.0290</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_12_0" class="section">
+  <h2>季度销售额趋势(面积图)</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 12750.0 | 平均: 6375.0 | 最大: 7250.0 | 最小: 5500.0 | 数量: 2</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn " onclick="switchChart('section_12_0', 'bar')">柱状图</button><button class="chart-btn active" onclick="switchChart('section_12_0', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_12_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_12_0', 'table')">表格</button></div>
+    <div id="chart_section_12_0" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>季度</th><th>总销售额</th></tr></thead><tbody><tr class=""><td>Q1</td><td>5500</td></tr><tr class=""><td>Q2</td><td>7250</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_12_1" class="section">
+  <h2>各地区销售额(柱状图)</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 12750.0 | 平均: 4250.0 | 最大: 4800.0 | 最小: 3300.0 | 数量: 3</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn active" onclick="switchChart('section_12_1', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_12_1', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_12_1', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_12_1', 'table')">表格</button></div>
+    <div id="chart_section_12_1" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>地区</th><th>总销售额</th><th>总销量</th></tr></thead><tbody><tr class=""><td>华东</td><td>4800</td><td>390</td></tr><tr class=""><td>华北</td><td>3300</td><td>270</td></tr><tr class=""><td>华南</td><td>4650</td><td>370</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_13_0" class="section">
+  <h2>各地区销售额</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 13780.0 | 平均: 2296.67 | 最大: 4800.0 | 最小: 270.0 | 数量: 6</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn active" onclick="switchChart('section_13_0', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_13_0', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_13_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_13_0', 'table')">表格</button></div>
+    <div id="chart_section_13_0" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>地区</th><th>总销售额</th><th>总销量</th></tr></thead><tbody><tr class=""><td>华东</td><td>4800</td><td>390</td></tr><tr class=""><td>华北</td><td>3300</td><td>270</td></tr><tr class=""><td>华南</td><td>4650</td><td>370</td></tr><tr class=""><td>标量消费者</td><td></td><td></td></tr><tr class=""><td>地区</td><td>地区销量</td><td>销量占比</td></tr><tr class=""><td>华东</td><td>390</td><td>0.0306</td></tr><tr class=""><td>华北</td><td>270</td><td>0.0212</td></tr><tr class=""><td>华南</td><td>370</td><td>0.0290</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_13_1" class="section">
+  <h2>各地区销量</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 13780.0 | 平均: 2296.67 | 最大: 4800.0 | 最小: 270.0 | 数量: 6</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn active" onclick="switchChart('section_13_1', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_13_1', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_13_1', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_13_1', 'table')">表格</button></div>
+    <div id="chart_section_13_1" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>地区</th><th>总销售额</th><th>总销量</th></tr></thead><tbody><tr class=""><td>华东</td><td>4800</td><td>390</td></tr><tr class=""><td>华北</td><td>3300</td><td>270</td></tr><tr class=""><td>华南</td><td>4650</td><td>370</td></tr><tr class=""><td>标量消费者</td><td></td><td></td></tr><tr class=""><td>地区</td><td>地区销量</td><td>销量占比</td></tr><tr class=""><td>华东</td><td>390</td><td>0.0306</td></tr><tr class=""><td>华北</td><td>270</td><td>0.0212</td></tr><tr class=""><td>华南</td><td>370</td><td>0.0290</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_13_2" class="section">
+  <h2>地区销售额对比</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 12750.0 | 平均: 4250.0 | 最大: 4800.0 | 最小: 3300.0 | 数量: 3</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn active" onclick="switchChart('section_13_2', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_13_2', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_13_2', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_13_2', 'table')">表格</button></div>
+    <div id="chart_section_13_2" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>地区</th><th>总销售额</th><th>总销量</th><th>单价(万元/个)</th></tr></thead><tbody><tr class=""><td>华东</td><td>4800</td><td>390</td><td>12.3077</td></tr><tr class=""><td>华北</td><td>3300</td><td>270</td><td>12.2222</td></tr><tr class=""><td>华南</td><td>4650</td><td>370</td><td>12.5676</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_13_3" class="section">
+  <h2>华东华北对比</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 8100.0 | 平均: 4050.0 | 最大: 4800.0 | 最小: 3300.0 | 数量: 2</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn active" onclick="switchChart('section_13_3', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_13_3', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_13_3', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_13_3', 'table')">表格</button></div>
+    <div id="chart_section_13_3" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>地区</th><th>总销售额</th></tr></thead><tbody><tr class=""><td>华东</td><td>4800</td></tr><tr class=""><td>华北</td><td>3300</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_14_0" class="section">
+  <h2>各地区销售额</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 13780.0 | 平均: 2296.67 | 最大: 4800.0 | 最小: 270.0 | 数量: 6</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn active" onclick="switchChart('section_14_0', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_14_0', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_14_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_14_0', 'table')">表格</button></div>
+    <div id="chart_section_14_0" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>地区</th><th>总销售额</th><th>总销量</th></tr></thead><tbody><tr class=""><td>华东</td><td>4800</td><td>390</td></tr><tr class=""><td>华北</td><td>3300</td><td>270</td></tr><tr class=""><td>华南</td><td>4650</td><td>370</td></tr><tr class=""><td>标量消费者</td><td></td><td></td></tr><tr class=""><td>地区</td><td>地区销量</td><td>销量占比</td></tr><tr class=""><td>华东</td><td>390</td><td>0.0306</td></tr><tr class=""><td>华北</td><td>270</td><td>0.0212</td></tr><tr class=""><td>华南</td><td>370</td><td>0.0290</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_15_0" class="section">
+  <h2>销售额 vs 销量(散点图)</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 8800.0 | 平均: 1100.0 | 最大: 1800.0 | 最小: 650.0 | 数量: 8</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn active" onclick="switchChart('section_15_0', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_15_0', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_15_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_15_0', 'table')">表格</button></div>
+    <div id="chart_section_15_0" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>城市</th><th>销售额</th><th>销量</th></tr></thead><tbody><tr class=""><td>东莞市</td><td>1300</td><td>100</td></tr><tr class=""><td>中山市</td><td>700</td><td>55</td></tr><tr class=""><td>佛山市</td><td>1100</td><td>90</td></tr><tr class=""><td>广州市</td><td>1500</td><td>120</td></tr><tr class=""><td>惠州市</td><td>950</td><td>75</td></tr><tr class=""><td>江门市</td><td>650</td><td>50</td></tr><tr class=""><td>深圳市</td><td>1800</td><td>150</td></tr><tr class=""><td>珠海市</td><td>800</td><td>60</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_16_0" class="section">
+  <h2>各产品销售额占比</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 12750.0 | 平均: 6375.0 | 最大: 8500.0 | 最小: 4250.0 | 数量: 2</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn " onclick="switchChart('section_16_0', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_16_0', 'line')">折线图</button><button class="chart-btn active" onclick="switchChart('section_16_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_16_0', 'table')">表格</button></div>
+    <div id="chart_section_16_0" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>产品</th><th>总销售额</th></tr></thead><tbody><tr class=""><td>产品A</td><td>8500</td></tr><tr class=""><td>产品B</td><td>4250</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_17_0" class="section">
+  <h2>季度销售额趋势</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 12750.0 | 平均: 6375.0 | 最大: 7250.0 | 最小: 5500.0 | 数量: 2</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn " onclick="switchChart('section_17_0', 'bar')">柱状图</button><button class="chart-btn active" onclick="switchChart('section_17_0', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_17_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_17_0', 'table')">表格</button></div>
+    <div id="chart_section_17_0" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>季度</th><th>总销售额</th></tr></thead><tbody><tr class=""><td>Q1</td><td>5500</td></tr><tr class=""><td>Q2</td><td>7250</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_18_0" class="section">
+  <h2>销售额(柱) + 销量(折)</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 12750.0 | 平均: 4250.0 | 最大: 4800.0 | 最小: 3300.0 | 数量: 3</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn active" onclick="switchChart('section_18_0', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_18_0', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_18_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_18_0', 'table')">表格</button></div>
+    <div id="chart_section_18_0" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>地区</th><th>总销售额</th><th>总销量</th></tr></thead><tbody><tr class=""><td>华东</td><td>4800</td><td>390</td></tr><tr class=""><td>华北</td><td>3300</td><td>270</td></tr><tr class=""><td>华南</td><td>4650</td><td>370</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_20_0" class="section">
+  <h2>不应出现的图表</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 13780.0 | 平均: 2296.67 | 最大: 4800.0 | 最小: 270.0 | 数量: 6</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn active" onclick="switchChart('section_20_0', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_20_0', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_20_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_20_0', 'table')">表格</button></div>
+    <div id="chart_section_20_0" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>地区</th><th>总销售额</th><th>总销量</th></tr></thead><tbody><tr class=""><td>华东</td><td>4800</td><td>390</td></tr><tr class=""><td>华北</td><td>3300</td><td>270</td></tr><tr class=""><td>华南</td><td>4650</td><td>370</td></tr><tr class=""><td>标量消费者</td><td></td><td></td></tr><tr class=""><td>地区</td><td>地区销量</td><td>销量占比</td></tr><tr class=""><td>华东</td><td>390</td><td>0.0306</td></tr><tr class=""><td>华北</td><td>270</td><td>0.0212</td></tr><tr class=""><td>华南</td><td>370</td><td>0.0290</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+<div id="section_21_0" class="section">
+  <h2>各地区均价(异名映射)</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 12750.0 | 平均: 4250.0 | 最大: 4800.0 | 最小: 3300.0 | 数量: 3 | 合计: 1030.0 | 平均: 343.33 | 最大: 390.0 | 最小: 270.0 | 数量: 3</div>
+  <div class="chart-container">
+    <div class="chart-buttons"><button class="chart-btn active" onclick="switchChart('section_21_0', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_21_0', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_21_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_21_0', 'table')">表格</button></div>
+    <div id="chart_section_21_0" class="chart-canvas"></div>
+  </div>
+  <div class="table-container">
+    <div class="table-header">数据详情</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>地区</th><th>金额</th><th>数量</th><th>均价(万元/个)</th></tr></thead><tbody><tr class=""><td>华东</td><td>4800</td><td>390</td><td>12.3077</td></tr><tr class=""><td>华北</td><td>3300</td><td>270</td><td>12.2222</td></tr><tr class=""><td>华南</td><td>4650</td><td>370</td><td>12.5676</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+    <div class="footer">由 Excel 统一分析工具自动生成 | 2026-07-07 15:31:26</div>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<script>
+  var chartInstances = {};
+  var chartOptions = {};
+    chartOptions['section_21_0_bar'] = {"title": {"text": "\u5404\u5730\u533a\u5747\u4ef7(\u5f02\u540d\u6620\u5c04)", "left": "center", "textStyle": {"fontSize": 14}}, "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}}, "legend": {"data": ["\u91d1\u989d", "\u6570\u91cf", "\u5747\u4ef7(\u4e07\u5143/\u4e2a)"], "bottom": 0}, "grid": {"left": "3%", "right": "4%", "bottom": "15%", "top": "15%", "containLabel": true}, "xAxis": {"type": "category", "data": ["\u534e\u4e1c", "\u534e\u5317", "\u534e\u5357"], "axisLabel": {"rotate": 30}}, "yAxis": {"type": "value"}, "series": [{"name": "\u91d1\u989d", "type": "bar", "data": [4800.0, 3300.0, 4650.0], "barWidth": "50%", "itemStyle": {"color": "#C8102E", "borderRadius": [4, 4, 0, 0]}}, {"name": "\u6570\u91cf", "type": "bar", "data": [390.0, 270.0, 370.0], "barWidth": "50%", "itemStyle": {"color": "#182B49", "borderRadius": [4, 4, 0, 0]}}, {"name": "\u5747\u4ef7(\u4e07\u5143/\u4e2a)", "type": "bar", "data": [12.3077, 12.2222, 12.5676], "barWidth": "50%", "itemStyle": {"color": "#5B9BD5", "borderRadius": [4, 4, 0, 0]}}]};
+  chartOptions['section_21_0_line'] = {"title": {"text": "\u5404\u5730\u533a\u5747\u4ef7(\u5f02\u540d\u6620\u5c04)", "left": "center", "textStyle": {"fontSize": 14}}, "tooltip": {"trigger": "axis"}, "legend": {"data": ["\u91d1\u989d", "\u6570\u91cf", "\u5747\u4ef7(\u4e07\u5143/\u4e2a)"], "bottom": 0}, "grid": {"left": "3%", "right": "4%", "bottom": "15%", "top": "15%", "containLabel": true}, "xAxis": {"type": "category", "data": ["\u534e\u4e1c", "\u534e\u5317", "\u534e\u5357"], "axisLabel": {"rotate": 30}}, "yAxis": {"type": "value"}, "series": [{"name": "\u91d1\u989d", "type": "line", "data": [4800.0, 3300.0, 4650.0], "smooth": true, "symbol": "circle", "symbolSize": 8, "lineStyle": {"width": 3}, "itemStyle": {"color": "#C8102E"}}, {"name": "\u6570\u91cf", "type": "line", "data": [390.0, 270.0, 370.0], "smooth": true, "symbol": "circle", "symbolSize": 8, "lineStyle": {"width": 3}, "itemStyle": {"color": "#182B49"}}, {"name": "\u5747\u4ef7(\u4e07\u5143/\u4e2a)", "type": "line", "data": [12.3077, 12.2222, 12.5676], "smooth": true, "symbol": "circle", "symbolSize": 8, "lineStyle": {"width": 3}, "itemStyle": {"color": "#5B9BD5"}}]};
+  chartOptions['section_21_0_pie'] = {"title": {"text": "\u5404\u5730\u533a\u5747\u4ef7(\u5f02\u540d\u6620\u5c04)", "left": "center", "textStyle": {"fontSize": 14}}, "tooltip": {"trigger": "item", "formatter": "{b}: {c} ({d}%)"}, "legend": {"orient": "vertical", "left": "left"}, "series": [{"name": "\u5404\u5730\u533a\u5747\u4ef7(\u5f02\u540d\u6620\u5c04)", "type": "pie", "radius": ["40%", "70%"], "center": ["50%", "55%"], "avoidLabelOverlap": true, "itemStyle": {"borderRadius": 4, "borderColor": "#fff", "borderWidth": 2}, "label": {"show": true}, "data": [{"name": "\u534e\u4e1c", "value": 4800.0}, {"name": "\u534e\u5317", "value": 3300.0}, {"name": "\u534e\u5357", "value": 4650.0}], "color": ["#C8102E", "#182B49", "#5B9BD5", "#ED7D31", "#70AD47", "#A5A5A5", "#FFC000", "#4472C4"]}]};
+
+  
+  function initCharts() {
+    Object.keys(chartOptions).forEach(function(key) {
+      var parts = key.split('_');
+      var sectionId = parts[0];
+      var chartType = parts[1];
+      var container = document.getElementById('chart_' + sectionId);
+      if (container && chartType === getDefaultChart(sectionId)) {
+        renderChart(sectionId, chartType);
+      }
+    });
+  }
+  
+  function getDefaultChart(sectionId) {
+    var btns = document.querySelectorAll('#' + sectionId + ' .chart-btn');
+    for (var i = 0; i < btns.length; i++) {
+      if (btns[i].classList.contains('active')) {
+        return btns[i].getAttribute('onclick').match(/'([^']+)'/g)[1].replace(/'/g, '');
+      }
+    }
+    return 'bar';
+  }
+  
+  function renderChart(sectionId, chartType) {
+    var container = document.getElementById('chart_' + sectionId);
+    if (!container) return;
+    
+    if (chartType === 'table') {
+      container.style.display = 'none';
+      return;
+    }
+    
+    container.style.display = 'block';
+    
+    if (chartInstances[sectionId]) {
+      chartInstances[sectionId].dispose();
+    }
+    
+    var chart = echarts.init(container);
+    var options = chartOptions[sectionId + '_' + chartType];
+    if (options) {
+      chart.setOption(options);
+      chartInstances[sectionId] = chart;
+    }
+  }
+  
+  function switchChart(sectionId, chartType) {
+    var btns = document.querySelectorAll('#' + sectionId + ' .chart-btn');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.remove('active');
+    }
+    event.target.classList.add('active');
+    renderChart(sectionId, chartType);
+  }
+  
+  function toggleZoom(img) {
+    img.classList.toggle('zoomed');
+    document.body.style.overflow = img.classList.contains('zoomed') ? 'hidden' : '';
+  }
+  
+  function scrollToTop() {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  
+  window.addEventListener('resize', function() {
+    Object.keys(chartInstances).forEach(function(key) {
+      chartInstances[key].resize();
+    });
+  });
+  
+  document.addEventListener('DOMContentLoaded', initCharts);
+</script>
+</body>
+</html>
