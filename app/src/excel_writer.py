@@ -193,7 +193,9 @@ def _write_df_block(ws, df, start_row, pct_columns=None, row_dims=None):
             is_pct = _is_pct_col(col_name, pct_columns)
             cell = ws.cell(row=row_num, column=ci, value=_format_cell_value(val, col_name, is_pct))
             if is_pct:
-                cell.number_format = '0.0%'
+                cell.number_format = PCT_NUMBER_FORMAT
+            elif isinstance(val, (int, float)):
+                cell.number_format = VALID_NUMBER_FORMAT
 
         is_total = str(idx) == "合计" or str(idx) == "总计"
         for ci in range(1, len(headers) + 1):
@@ -223,7 +225,9 @@ def _write_scalar_block(ws, task, result, remark, start_row, pct_columns=None):
         is_pct = _is_pct_col(key, pct_columns)
         c2 = ws.cell(row=row, column=2, value=_format_cell_value(val, key, is_pct))
         if is_pct:
-            c2.number_format = '0.0%'
+            c2.number_format = PCT_NUMBER_FORMAT
+        elif isinstance(val, (int, float)):
+            c2.number_format = VALID_NUMBER_FORMAT
         c1.alignment = DATA_ALIGNMENT
         c2.alignment = DATA_ALIGNMENT
         c1.border = THIN_BORDER
@@ -278,16 +282,12 @@ def _is_pct_col(col_name, pct_columns=None):
 def _format_cell_value(val, col_name=None, is_pct=False):
     if val is None or (isinstance(val, float) and str(val) == "nan"):
         return ""
-    if isinstance(val, (int, float)):
-        if is_pct:
-            return round(float(val), 4)
-        if isinstance(val, float):
-            if abs(val) >= 1000:
-                return round(val, 1)
-            if val == int(val):
-                return int(val)
-            return round(val, 4)
+    if isinstance(val, float) and val == int(val):
+        return int(val)
     return val
+
+VALID_NUMBER_FORMAT = '0.00'
+PCT_NUMBER_FORMAT = '0.0%'
 
 
 def _auto_fit_columns(ws):
