@@ -279,8 +279,6 @@ def _format_cell_value(val, col_name=None, is_pct=False):
     if val is None or (isinstance(val, float) and str(val) == "nan"):
         return ""
     if isinstance(val, (int, float)):
-        # 百分比列：值保持 0~1 小数，由 Excel 的 0.0% 格式自动 ×100 显示
-        # 这样 PPT 读取到的也是 0~1 小数，Excel 与 PPT 数据解读一致
         if is_pct:
             return round(float(val), 4)
         if isinstance(val, float):
@@ -288,7 +286,7 @@ def _format_cell_value(val, col_name=None, is_pct=False):
                 return round(val, 1)
             if val == int(val):
                 return int(val)
-            return round(val, 2)
+            return round(val, 4)
     return val
 
 
