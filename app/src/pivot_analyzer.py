@@ -1382,12 +1382,17 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
             continue
         
         new_cols = {}
+        processed_expressions = set()
         
         for col in df.columns:
             if not pd.api.types.is_numeric_dtype(df[col]):
                 continue
             expr = _find_matching_calc(col, calc_map, value_cols, raw_val_maps)
             if expr:
+                expr_key = expr.split("=")[0].strip()
+                if expr_key in processed_expressions:
+                    continue
+                processed_expressions.add(expr_key)
                 result_col_name = None
                 if "=" in expr:
                     expr_part, result_col_name = expr.split("=", 1)
@@ -1418,16 +1423,17 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                         # 构建列名映射：找到表达式中每个标识符对应的 DataFrame 实际列名
                         # 优先级：直接匹配 → 值映射名匹配 → 值字段原始名反查 → 聚合后缀 → 隐式标量
                         col_mapping = {}
+                        unmatched_tokens = []
                         expr_tokens = re.findall(r'[A-Za-z_]\w*|[^\s+\-*/()=]+', expr)
+                        # 过滤纯数字和纯符号（这些是字面量，不是列名/标量引用）
+                        expr_tokens = [t for t in expr_tokens if not re.match(r'^\d+(\.\d+)?$', t)]
                         for token in expr_tokens:
                             if token in calc_df.columns:
                                 col_mapping[token] = token
                                 continue
-                            # 检查是否是值映射后的列名
                             if raw_val_maps and token in raw_val_maps and token in calc_df.columns:
                                 col_mapping[token] = token
                                 continue
-                            # 检查是否是值字段原始名（需要映射到值映射名或聚合后缀）
                             if token in value_cols:
                                 if raw_val_maps:
                                     idx = value_cols.index(token)
@@ -1440,19 +1446,34 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                                     if c.startswith(token + "_"):
                                         col_mapping[token] = c
                                         break
+                                if token not in col_mapping:
+                                    unmatched_tokens.append(token)
                                 continue
-                            # 检查聚合后缀匹配
                             for c in calc_df.columns:
                                 if c.startswith(token + "_"):
                                     col_mapping[token] = c
                                     break
-                            # 隐式标量
                             if token not in col_mapping and scalar_context and token in scalar_context:
                                 col_mapping[token] = "__SCALAR__"
+                            if token not in col_mapping:
+                                unmatched_tokens.append(token)
 
-                        if not col_mapping:
-                            print(f"    [警告] 值计算表达式解析失败: {expr}, 无法匹配列名")
-                            continue
+                        if not col_mapping or unmatched_tokens:
+                            print(f"    [警告] 值计算表达式'{expr}'解析失败:" if unmatched_tokens
+                                  else f"    [警告] 值计算表达式'{expr}'无法匹配任何列名")
+                            if unmatched_tokens:
+                                print(f"           未识别标识符: {unmatched_tokens}")
+                            print(f"           可用列名: {list(calc_df.columns)}")
+                            print(f"           值字段原始名: {value_cols}")
+                            if raw_val_maps:
+                                print(f"           值映射: {raw_val_maps}")
+                            if scalar_context:
+                                print(f"           可用标量: {list(scalar_context.keys())}")
+                            if not unmatched_tokens and not col_mapping:
+                                continue
+                            elif unmatched_tokens:
+                                # 部分匹配失败也跳过，避免表达式不完整
+                                continue
 
                         # 逐行计算：将每行列值注入表达式命名空间
                         safe_expr = expr
@@ -1544,21 +1565,20 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
 
 
 def _find_matching_calc(col, calc_map, value_cols, raw_val_maps=None):
-    """匹配值计算表达式。
-    
-    优先精确匹配列名，其次按值字段前缀匹配（含聚合后缀如"销售额_求和"），
-    最后按值映射后的列名反向查找原始字段。
-    """
     for vcol, expr in calc_map.items():
         if col == vcol or col.startswith(vcol + "_"):
             return expr
-    # 反查：当前列名是值映射后的名称，查找对应原始字段
     if raw_val_maps:
         for vcol, expr in calc_map.items():
             if col in raw_val_maps:
                 map_idx = raw_val_maps.index(col)
                 if map_idx < len(value_cols) and value_cols[map_idx] == vcol:
                     return expr
+    # 多列表达式兜底：非运算符开头的表达式，只要当前列是数值列就返回
+    # （多列分支的入口不依赖某个特定列，只需要任意数值列作为触发）
+    for vcol, expr in calc_map.items():
+        if not re.match(r"^[+\-*/]", expr.split("=")[0].strip()):
+            return expr
     return None
 
 
