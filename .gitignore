@@ -30,6 +30,9 @@ dist/
 # 输出目录
 output_*/
 
+# 日志
+logs/
+
 # 系统文件
 Thumbs.db
 .DS_Store

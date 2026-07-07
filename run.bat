@@ -1,11 +1,8 @@
 @echo off
 cd /d "%~dp0"
-title Excel Tool
-
-echo ========================================
-echo   Excel Analysis Tool
-echo ========================================
-echo.
+set LOGFILE=%~dp0logs\run_%date:~0,4%%date:~5,2%%date:~8,2%_%time:~0,2%%time:~3,2%%time:~6,2%.log
+set LOGFILE=%LOGFILE: =0%
+if not exist "%~dp0logs" mkdir "%~dp0logs"
 
 where python >nul 2>&1
 if errorlevel 1 (
@@ -33,11 +30,9 @@ if errorlevel 1 (
 )
 
 echo [START] Launching GUI...
-python app\main.py
-echo.
-echo [DONE] Program exited.
+echo Log: %LOGFILE%
+python app\main.py >> "%LOGFILE%" 2>&1
+echo [DONE] Program exited. >> "%LOGFILE%"
 
 :end
-echo.
-echo Press any key to close...
 pause >nul
