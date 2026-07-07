@@ -19,7 +19,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.16.4"
+__VERSION__ = "2.16.5"
 __UPDATE_DATE__ = "2026-07-07"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -559,6 +559,63 @@ class _GuiLogRedirector:
         pass
 
 
+class _StdoutTee:
+    """把 stdout/stderr 同时写到原流和日志文件，方便远程排查问题。
+
+    CLI 模式下安装：所有 print / traceback 都会同时写入 logs/last_run.log。
+    GUI 模式下不安装（GUI 用 _GuiLogRedirector 写到日志框）。
+    """
+    def __init__(self, original, log_file):
+        self.original = original
+        self.log_file = log_file
+
+    def write(self, s):
+        try:
+            self.original.write(s)
+        except Exception:
+            pass
+        if s:
+            try:
+                self.log_file.write(s)
+                self.log_file.flush()
+            except Exception:
+                pass
+
+    def flush(self):
+        try:
+            self.original.flush()
+        except Exception:
+            pass
+        try:
+            self.log_file.flush()
+        except Exception:
+            pass
+
+
+def _install_cli_log_tee():
+    """安装 CLI 日志 Tee，返回 (old_stdout, old_stderr) 或 None。"""
+    try:
+        project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        logs_dir = os.path.join(project_dir, "logs")
+        if not os.path.exists(logs_dir):
+            os.makedirs(logs_dir, exist_ok=True)
+        log_path = os.path.join(logs_dir, "last_run.log")
+        # 用 utf-8 编码，避免中文/特殊字符乱码
+        log_file = open(log_path, "w", encoding="utf-8", buffering=1)
+        log_file.write(f"===== excel2ppt 运行日志 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+        log_file.write(f"版本: {__VERSION__}\n")
+        log_file.write(f"参数: {' '.join(sys.argv[1:])}\n")
+        log_file.write("=" * 60 + "\n\n")
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = _StdoutTee(old_stdout, log_file)
+        sys.stderr = _StdoutTee(old_stderr, log_file)
+        return old_stdout, old_stderr
+    except Exception as e:
+        print(f"[警告] 无法安装日志 Tee: {e}")
+        return None
+
+
 def _scan_files(folder):
     """扫描文件夹，返回检测到的配置和数据文件信息"""
     if not folder or not os.path.isdir(folder):
@@ -1030,6 +1087,9 @@ def main():
         # 无参数：启动 GUI 模式
         _select_folder()
         return
+
+    # CLI 模式：安装日志 Tee，所有输出同时写入 logs/last_run.log，方便远程排查
+    _install_cli_log_tee()
 
     raw_args = sys.argv[1:]
     mode = None
