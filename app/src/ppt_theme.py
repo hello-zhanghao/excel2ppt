@@ -990,9 +990,7 @@ class PptTheme:
                             data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
                     else:
                         data_labels.show_value = True
-                        # 千分位 + 负数红色（商务报表风格）
-                        data_labels.number_format = '#,##0;[Red]-#,##0'
-                        # line/area 图表不支持 OUTSIDE_END，Office 会报文件损坏
+                        data_labels.number_format = '0.00'
                         if chart_type in ("line", "area"):
                             data_labels.position = XL_LABEL_POSITION.CENTER
                         else:
@@ -1082,7 +1080,10 @@ class PptTheme:
         try:
             text = tmpl
             for key, val in ctx.items():
-                text = text.replace("{" + key + "}", str(val))
+                if isinstance(val, float):
+                    text = text.replace("{" + key + "}", f"{val:.2f}")
+                else:
+                    text = text.replace("{" + key + "}", str(val))
         except Exception:
             text = tmpl
 
