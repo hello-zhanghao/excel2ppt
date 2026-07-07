@@ -1352,6 +1352,11 @@ def _resolve_scalar_or_number(text, scalar_context=None):
     return None
 
 
+def _mask_token(working_expr, token):
+    """将 working_expr[0] 中 token 替换为等长空格，防止后续短token子串误匹配"""
+    working_expr[0] = working_expr[0].replace(token, " " * len(token))
+
+
 def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=None, raw_val_maps=None, orig_value_cols=None):
     """
     值计算：支持单列与常数运算，以及多列组合运算。
@@ -1420,27 +1425,36 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                                 print(f"    [警告] 值计算引用的标量不存在: @{scalar_key}（可用标量: {list(scalar_context.keys())}）")
                                 expr = expr.replace(m.group(0), "0")
 
-                        # 构建列名映射：找到表达式中每个标识符对应的 DataFrame 实际列名
-                        # 优先级：直接匹配 → 值映射名匹配 → 值字段原始名反查 → 聚合后缀 → 隐式标量
+                        # 构建列名映射：从已知列名/值字段/标量中查找表达式内出现的完整标识符
+                        # 不使用正则token拆分，避免括号等特殊字符破坏列名完整性
+                        # 使用渐进式占位替换防止子串误匹配（如 销售额 误匹配 总销售额 的子串）
                         col_mapping = {}
                         unmatched_tokens = []
-                        expr_tokens = re.findall(r'[A-Za-z_]\w*|[^\s+\-*/()=]+', expr)
-                        # 过滤纯数字和纯符号（这些是字面量，不是列名/标量引用）
-                        expr_tokens = [t for t in expr_tokens if not re.match(r'^\d+(\.\d+)?$', t)]
-                        for token in expr_tokens:
+
+                        candidates = list(calc_df.columns)
+                        candidates.extend(value_cols)
+                        if raw_val_maps:
+                            candidates.extend(raw_val_maps)
+                        if scalar_context:
+                            candidates.extend(scalar_context.keys())
+                        candidates = sorted(set(str(c) for c in candidates), key=len, reverse=True)
+
+                        working_expr = [expr]  # 用列表包装实现可变引用
+                        for token in candidates:
+                            if token not in working_expr[0]:
+                                continue
                             if token in calc_df.columns:
                                 col_mapping[token] = token
-                                continue
-                            if raw_val_maps and token in raw_val_maps and token in calc_df.columns:
+                            elif raw_val_maps and token in raw_val_maps and token in calc_df.columns:
                                 col_mapping[token] = token
-                                continue
-                            if token in value_cols:
+                            elif token in value_cols:
                                 if raw_val_maps:
                                     idx = value_cols.index(token)
                                     if idx < len(raw_val_maps):
                                         mapped = raw_val_maps[idx]
                                         if mapped in calc_df.columns:
                                             col_mapping[token] = mapped
+                                            _mask_token(working_expr, token)
                                             continue
                                 for c in calc_df.columns:
                                     if c.startswith(token + "_"):
@@ -1448,15 +1462,17 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                                         break
                                 if token not in col_mapping:
                                     unmatched_tokens.append(token)
+                                _mask_token(working_expr, token)
                                 continue
-                            for c in calc_df.columns:
-                                if c.startswith(token + "_"):
-                                    col_mapping[token] = c
-                                    break
-                            if token not in col_mapping and scalar_context and token in scalar_context:
-                                col_mapping[token] = "__SCALAR__"
-                            if token not in col_mapping:
-                                unmatched_tokens.append(token)
+                            else:
+                                for c in calc_df.columns:
+                                    if c.startswith(token + "_"):
+                                        col_mapping[token] = c
+                                        break
+                                if token not in col_mapping and scalar_context and token in scalar_context:
+                                    col_mapping[token] = "__SCALAR__"
+                            # 将已匹配token在working_expr中屏蔽，防止子串误匹配
+                            _mask_token(working_expr, token)
 
                         if not col_mapping or unmatched_tokens:
                             print(f"    [警告] 值计算表达式'{expr}'解析失败:" if unmatched_tokens
