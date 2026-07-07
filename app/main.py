@@ -19,8 +19,8 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.15.0"
-__UPDATE_DATE__ = "2026-07-06"
+__VERSION__ = "2.16.0"
+__UPDATE_DATE__ = "2026-07-07"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -1103,6 +1103,12 @@ def main():
             if not getattr(args, 'check', False):
                 print()
                 _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out)
+                # 自动生成 HTML 报告（供手机预览）
+                print()
+                try:
+                    _run_html_mode(config_path, None, pivot_file=pivot_out, ppt_file=ppt_out)
+                except Exception as e:
+                    print(f"[警告] HTML 报告生成失败: {e}")
             return
         print(f"[信息] 自动检测配置类型: {detected}")
         if detected == "unknown":

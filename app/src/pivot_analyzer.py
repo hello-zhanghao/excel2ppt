@@ -1394,62 +1394,122 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                     expr = expr_part.strip()
                     result_col_name = result_col_name.strip()
                 
-                has_multi_col = False
-                for vcol in value_cols:
-                    if vcol in expr:
-                        has_multi_col = True
-                        break
+                # 判断走多列分支还是单列分支：
+                # - 单列分支：表达式以运算符开头（如 *100, /@标量, +10），对当前列做单值运算
+                # - 多列分支：表达式是完整算式（如 销售额/销量, @总销售额/@总销量），用 eval 计算
+                is_single_col_op = bool(re.match(r"^[+\-*/]", expr))
+                has_multi_col = not is_single_col_op
                 
                 try:
                     if has_multi_col:
                         calc_df = df.copy()
                         expr_safe = expr
-                        col_mapping = {}
-                        for vcol in value_cols:
-                            if vcol in expr_safe:
-                                safe_name = vcol.replace("(", "_").replace(")", "_").replace("%", "")
-                                col_mapping[safe_name] = vcol
-                                expr_safe = expr_safe.replace(vcol, safe_name)
-                                # 优先用原始列名，若已被值映射重命名则找映射后的列名
-                                if vcol in calc_df.columns:
-                                    calc_df[safe_name] = calc_df[vcol]
-                                elif raw_val_maps and len(raw_val_maps) > value_cols.index(vcol):
-                                    mapped_name = raw_val_maps[value_cols.index(vcol)]
-                                    if mapped_name in calc_df.columns:
-                                        calc_df[safe_name] = calc_df[mapped_name]
-                                    elif safe_name not in scalar_context:
-                                        safe_name = mapped_name.replace("(", "_").replace(")", "_").replace("%", "")
-                                        expr_safe = expr_safe.replace(vcol, safe_name)
-                                        if mapped_name in calc_df.columns:
-                                            calc_df[safe_name] = calc_df[mapped_name]
-                                elif safe_name != vcol and vcol in calc_df.columns:
-                                    calc_df[safe_name] = calc_df[vcol]
-                        
-                        # 注入历史标量：表达式中的变量名优先匹配列名，匹配不到则查找 scalar_context
+
+                        # 显式标量引用：@标量名 强制使用 scalar_context 中的值（不查列）
+                        # 将 @xxx 替换为字面数值，避免与列名歧义
+                        explicit_scalar_pattern = re.compile(r"@([\w\u4e00-\u9fa5]+)")
+                        for m in explicit_scalar_pattern.finditer(expr):
+                            scalar_key = m.group(1)
+                            if scalar_key in scalar_context:
+                                val = float(scalar_context[scalar_key])
+                                # 用括号包裹避免负数/小数点引发的运算符优先级问题
+                                expr_safe = expr_safe.replace(m.group(0), f"({val})")
+                            else:
+                                print(f"    [警告] 值计算引用的标量不存在: @{scalar_key}（可用标量: {list(scalar_context.keys())}）")
+                                expr_safe = expr_safe.replace(m.group(0), "0")
+
+                        # 隐式标量注入：表达式中的变量名优先匹配列名，匹配不到则查找 scalar_context
+                        # （仅对未使用 @ 语法的变量生效）
                         for scalar_name, scalar_val in scalar_context.items():
                             if scalar_name in expr_safe and scalar_name not in calc_df.columns:
                                 calc_df[scalar_name] = float(scalar_val)
-                        
-                        calc_result = calc_df.eval(expr_safe)
-                        
+
+                        # 先尝试直接 eval（表达式中的列名可能已在 calc_df 中，如值映射后的列名）
+                        calc_result = None
+                        try:
+                            calc_result = calc_df.eval(expr_safe)
+                        except Exception:
+                            # 直接 eval 失败，构建列名替换映射
+                            # 场景：表达式使用原始字段名，但 calc_df 中是值映射名或聚合后缀名
+                            replacements = {}
+                            for vcol in value_cols:
+                                if vcol not in expr_safe:
+                                    continue
+                                if vcol in calc_df.columns:
+                                    continue
+                                # 查找值映射后的列名
+                                mapped_found = None
+                                if raw_val_maps:
+                                    idx = value_cols.index(vcol)
+                                    if idx < len(raw_val_maps):
+                                        mapped = raw_val_maps[idx]
+                                        if mapped in calc_df.columns:
+                                            mapped_found = mapped
+                                # 查找聚合后缀列名（如 销售额_求和）
+                                if not mapped_found:
+                                    for c in calc_df.columns:
+                                        if c.startswith(vcol + "_"):
+                                            mapped_found = c
+                                            break
+                                if mapped_found:
+                                    replacements[vcol] = mapped_found
+
+                            # 使用占位符替换，避免子串替换问题
+                            # （如 vcol="销售额" 替换会破坏 "总销售额"）
+                            if replacements:
+                                sorted_names = sorted(replacements.keys(), key=len, reverse=True)
+                                placeholders = {}
+                                for i, name in enumerate(sorted_names):
+                                    actual_col = replacements[name]
+                                    placeholder = f"__COL_{i}__"
+                                    expr_safe = expr_safe.replace(name, placeholder)
+                                    placeholders[placeholder] = actual_col
+                                for placeholder, actual_col in placeholders.items():
+                                    expr_safe = expr_safe.replace(placeholder, actual_col)
+
+                                try:
+                                    calc_result = calc_df.eval(expr_safe)
+                                except Exception as e:
+                                    print(f"    [警告] 值计算表达式解析失败: {expr}, 错误: {e}")
+                                    continue
+                            else:
+                                print(f"    [警告] 值计算表达式解析失败: {expr}, 无法匹配列名")
+                                continue
+
+                        if calc_result is None:
+                            continue
+
                         if result_col_name:
                             new_col_name = result_col_name
                         else:
-                            # 自动生成列名
-                            new_col_name = expr.replace("/", "_除_").replace("*", "_乘_").replace("+", "_加_").replace("-", "_减_")
+                            # 自动生成列名（移除 @ 符号使列名更整洁）
+                            new_col_name = expr.replace("@", "")
+                            new_col_name = new_col_name.replace("/", "_除_").replace("*", "_乘_").replace("+", "_加_").replace("-", "_减_")
                             new_col_name = new_col_name.replace("(", "").replace(")", "").replace("%", "")
-                        
+
                         new_cols[new_col_name] = calc_result
                     else:
-                        # 单列与常数运算（支持引用标量）
-                        if expr.startswith("*"):
-                            factor = _resolve_scalar_or_number(expr[1:], scalar_context)
+                        # 单列与常数运算（支持引用标量，支持 @标量名 显式语法）
+                        # 解析 @标量名 显式引用
+                        operand_expr = expr
+                        if "@" in operand_expr:
+                            explicit_scalar_pattern = re.compile(r"@([\w\u4e00-\u9fa5]+)")
+                            for m in explicit_scalar_pattern.finditer(operand_expr):
+                                scalar_key = m.group(1)
+                                if scalar_key in scalar_context:
+                                    operand_expr = operand_expr.replace(m.group(0), str(float(scalar_context[scalar_key])))
+                                else:
+                                    print(f"    [警告] 值计算引用的标量不存在: @{scalar_key}")
+                                    operand_expr = operand_expr.replace(m.group(0), "0")
+
+                        if operand_expr.startswith("*"):
+                            factor = _resolve_scalar_or_number(operand_expr[1:], scalar_context)
                             if factor is None:
                                 print(f"    [警告] 值计算无法解析: {expr}")
                                 continue
                             df[col] = df[col] * factor
-                        elif expr.startswith("/"):
-                            divisor = _resolve_scalar_or_number(expr[1:], scalar_context)
+                        elif operand_expr.startswith("/"):
+                            divisor = _resolve_scalar_or_number(operand_expr[1:], scalar_context)
                             if divisor is None:
                                 print(f"    [警告] 值计算无法解析: {expr}")
                                 continue
@@ -1457,22 +1517,22 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                                 print(f"    [警告] 值计算除数为0，跳过: {expr}")
                                 continue
                             df[col] = df[col] / divisor
-                        elif expr.startswith("+"):
-                            addend = _resolve_scalar_or_number(expr[1:], scalar_context)
+                        elif operand_expr.startswith("+"):
+                            addend = _resolve_scalar_or_number(operand_expr[1:], scalar_context)
                             if addend is None:
                                 print(f"    [警告] 值计算无法解析: {expr}")
                                 continue
                             df[col] = df[col] + addend
-                        elif expr.startswith("-"):
-                            subtrahend = _resolve_scalar_or_number(expr[1:], scalar_context)
+                        elif operand_expr.startswith("-"):
+                            subtrahend = _resolve_scalar_or_number(operand_expr[1:], scalar_context)
                             if subtrahend is None:
                                 print(f"    [警告] 值计算无法解析: {expr}")
                                 continue
                             df[col] = df[col] - subtrahend
-                        elif _resolve_scalar_or_number(expr, scalar_context) is not None:
-                            df[col] = float(_resolve_scalar_or_number(expr, scalar_context))
-                        elif expr.replace(".", "").replace("-", "").isnumeric():
-                            df[col] = float(expr)
+                        elif _resolve_scalar_or_number(operand_expr, scalar_context) is not None:
+                            df[col] = float(_resolve_scalar_or_number(operand_expr, scalar_context))
+                        elif operand_expr.replace(".", "").replace("-", "").isnumeric():
+                            df[col] = float(operand_expr)
                 except Exception as e:
                     print(f"    [警告] 值计算表达式解析失败: {expr}, 错误: {e}")
         
