@@ -1,6 +1,5 @@
 import os
 import re
-import keyword
 import openpyxl
 import pandas as pd
 import numpy as np
@@ -1430,16 +1429,15 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                         try:
                             calc_result = calc_df.eval(expr_safe)
                         except Exception:
-                            # 直接 eval 失败，可能是列名不是合法 Python 标识符（如以数字开头）
-                            # 先尝试给非法列名加反引号再 eval
+                            # 直接 eval 失败，给表达式中出现的 DataFrame 列名加反引号再试
+                            # pd.eval() 不支持中文/数字开头等非标准标识符，反引号可绕过限制
                             try:
                                 expr_quoted = expr_safe
                                 for col_name in sorted(calc_df.columns, key=lambda x: len(str(x)), reverse=True):
                                     str_col = str(col_name)
-                                    if not str_col.isidentifier() or keyword.iskeyword(str_col):
-                                        pattern = r'(?<![`\w])' + re.escape(str_col) + r'(?![`\w])'
-                                        if re.search(pattern, expr_quoted):
-                                            expr_quoted = re.sub(pattern, f'`{str_col}`', expr_quoted)
+                                    pattern = r'(?<![`\w])' + re.escape(str_col) + r'(?![`\w])'
+                                    if re.search(pattern, expr_quoted):
+                                        expr_quoted = re.sub(pattern, f'`{str_col}`', expr_quoted)
                                 if expr_quoted != expr_safe:
                                     calc_result = calc_df.eval(expr_quoted)
                             except Exception:
@@ -1484,14 +1482,13 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                                 for placeholder, actual_col in placeholders.items():
                                     expr_safe = expr_safe.replace(placeholder, actual_col)
 
-                                # 替换后列名可能仍不是合法标识符（如 5g终端用户数_求和），加反引号
+                                # 替换后给表达式中出现的列名加反引号，确保 pd.eval 可解析
                                 expr_quoted = expr_safe
                                 for col_name in sorted(calc_df.columns, key=lambda x: len(str(x)), reverse=True):
                                     str_col = str(col_name)
-                                    if not str_col.isidentifier() or keyword.iskeyword(str_col):
-                                        pattern = r'(?<![`\w])' + re.escape(str_col) + r'(?![`\w])'
-                                        if re.search(pattern, expr_quoted):
-                                            expr_quoted = re.sub(pattern, f'`{str_col}`', expr_quoted)
+                                    pattern = r'(?<![`\w])' + re.escape(str_col) + r'(?![`\w])'
+                                    if re.search(pattern, expr_quoted):
+                                        expr_quoted = re.sub(pattern, f'`{str_col}`', expr_quoted)
 
                                 try:
                                     calc_result = calc_df.eval(expr_quoted)
