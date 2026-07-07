@@ -1,5 +1,6 @@
 import os
 import re
+import keyword
 import openpyxl
 import pandas as pd
 import numpy as np
@@ -1429,7 +1430,23 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                         try:
                             calc_result = calc_df.eval(expr_safe)
                         except Exception:
-                            # 直接 eval 失败，构建列名替换映射
+                            # 直接 eval 失败，可能是列名不是合法 Python 标识符（如以数字开头）
+                            # 先尝试给非法列名加反引号再 eval
+                            try:
+                                expr_quoted = expr_safe
+                                for col_name in sorted(calc_df.columns, key=lambda x: len(str(x)), reverse=True):
+                                    str_col = str(col_name)
+                                    if not str_col.isidentifier() or keyword.iskeyword(str_col):
+                                        pattern = r'(?<![`\w])' + re.escape(str_col) + r'(?![`\w])'
+                                        if re.search(pattern, expr_quoted):
+                                            expr_quoted = re.sub(pattern, f'`{str_col}`', expr_quoted)
+                                if expr_quoted != expr_safe:
+                                    calc_result = calc_df.eval(expr_quoted)
+                            except Exception:
+                                pass
+
+                        if calc_result is None:
+                            # 仍然失败，构建列名替换映射
                             # 场景：表达式使用原始字段名，但 calc_df 中是值映射名或聚合后缀名
                             replacements = {}
                             for vcol in value_cols:
@@ -1467,8 +1484,17 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                                 for placeholder, actual_col in placeholders.items():
                                     expr_safe = expr_safe.replace(placeholder, actual_col)
 
+                                # 替换后列名可能仍不是合法标识符（如 5g终端用户数_求和），加反引号
+                                expr_quoted = expr_safe
+                                for col_name in sorted(calc_df.columns, key=lambda x: len(str(x)), reverse=True):
+                                    str_col = str(col_name)
+                                    if not str_col.isidentifier() or keyword.iskeyword(str_col):
+                                        pattern = r'(?<![`\w])' + re.escape(str_col) + r'(?![`\w])'
+                                        if re.search(pattern, expr_quoted):
+                                            expr_quoted = re.sub(pattern, f'`{str_col}`', expr_quoted)
+
                                 try:
-                                    calc_result = calc_df.eval(expr_safe)
+                                    calc_result = calc_df.eval(expr_quoted)
                                 except Exception as e:
                                     print(f"    [警告] 值计算表达式解析失败: {expr}, 错误: {e}")
                                     continue
