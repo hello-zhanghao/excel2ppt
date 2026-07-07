@@ -191,8 +191,8 @@ def verify_ppt_features(ppt_path):
     prs = Presentation(ppt_path)
     slides = list(prs.slides)
 
-    # 检查页数（期望21页配置→20页实际，页21跳过）
-    checks.append(("总页数=20", len(slides) == 20, f"实际{len(slides)}页"))
+    # 检查页数（期望22页配置→21页实际，页21跳过）
+    checks.append(("总页数=21", len(slides) == 21, f"实际{len(slides)}页"))
 
     def get_texts(slide):
         return [s.text_frame.text for s in slide.shapes if s.has_text_frame]
@@ -261,10 +261,10 @@ def verify_ppt_features(ppt_path):
     else:
         checks.append(("P1 结尾页", False, "页数不足"))
 
-    # 是否生成=否 的页面被跳过（配置21页，实际20页，"跳过测试页"不应出现）
+    # 是否生成=否 的页面被跳过（配置22页，实际21页，"跳过测试页"不应出现）
     all_texts = [t for slide in slides for t in get_texts(slide)]
     no_skip_page = not any("跳过测试页" in t or "不应出现" in t for t in all_texts)
-    checks.append(("是否生成跳过(页21)", no_skip_page and len(slides) == 20, f"配置21页→实际{len(slides)}页"))
+    checks.append(("是否生成跳过(页21)", no_skip_page and len(slides) == 21, f"配置22页→实际{len(slides)}页"))
 
     # P0: 百分比饼图数据为 0~1 小数（第5页饼图，引用占比透视结果）
     # 验证 PPT 拿到的是 0~1 小数，未被 Excel 的 0.0% 格式 ×100 影响
@@ -594,6 +594,28 @@ def verify_excel_output(excel_path):
                             break
                 checks.append(("标量消费者_占比正确", ratio_ok,
                                f"expected={expected_ratios}"))
+
+    # 12. 异名映射多列组合计算：任务21——值映射(金额,数量)与原始字段名(销售额,销量)完全不同
+    if "地区均价分析" in actual_sheets:
+        ws_price = wb["地区均价分析"]
+        first_cell = ws_price.cell(row=1, column=1).value
+        checks.append(("异名映射_区块名", first_cell == "多列组合_异名映射",
+                       f"期望'多列组合_异名映射', 实际'{first_cell}'"))
+
+        header, data = _read_sheet_data("地区均价分析")
+        expected_cols = ["地区", "金额", "数量", "均价(万元/个)"]
+        has_all_cols = all(c in header for c in expected_cols)
+        checks.append(("异名映射_4列完整", has_all_cols, f"header={header}"))
+
+        if data:
+            vals = {str(r[0]).strip(): r for r in data if r[0]}
+            # 华东: 金额=4800, 数量=390, 均价=4800/390=12.3077
+            hd = vals.get("华东")
+            if hd:
+                checks.append(("异名映射_华东金额=4800", float(hd[1]) == 4800, str(hd[1])))
+                checks.append(("异名映射_华东数量=390", float(hd[2]) == 390, str(hd[2])))
+                checks.append(("异名映射_华东均价≈12.31",
+                               abs(float(hd[3]) - 12.31) < 0.01, str(hd[3])))
 
     wb.close()
 
