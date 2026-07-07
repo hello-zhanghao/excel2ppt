@@ -1509,7 +1509,14 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                                             namespace[temp_name] = float(scalar_context[token])
                                 else:
                                     namespace[temp_name] = float(row[actual_col])
-                            results_list.append(eval(safe_expr, {"__builtins__": {}}, namespace))
+                            try:
+                                results_list.append(eval(safe_expr, {"__builtins__": {}}, namespace))
+                            except Exception as e:
+                                print(f"    [警告] 值计算表达式'{expr}'执行失败: {e}")
+                                print(f"           替换后表达式: {safe_expr}")
+                                print(f"           列名映射: {col_mapping}")
+                                print(f"           行列值: {namespace}")
+                                break
 
                         calc_result = pd.Series(results_list, index=calc_df.index)
 
