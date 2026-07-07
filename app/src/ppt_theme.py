@@ -990,7 +990,7 @@ class PptTheme:
                             data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
                     else:
                         data_labels.show_value = True
-                        data_labels.number_format = '0.00'
+                        data_labels.number_format = '#,##0.##'
                         if chart_type in ("line", "area"):
                             data_labels.position = XL_LABEL_POSITION.CENTER
                         else:
@@ -1081,7 +1081,10 @@ class PptTheme:
             text = tmpl
             for key, val in ctx.items():
                 if isinstance(val, float):
-                    text = text.replace("{" + key + "}", f"{val:.2f}")
+                    if val == int(val):
+                        text = text.replace("{" + key + "}", str(int(val)))
+                    else:
+                        text = text.replace("{" + key + "}", f"{val:.2f}")
                 else:
                     text = text.replace("{" + key + "}", str(val))
         except Exception:
