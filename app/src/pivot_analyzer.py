@@ -1403,101 +1403,78 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                 try:
                     if has_multi_col:
                         calc_df = df.copy()
-                        expr_safe = expr
 
                         # 显式标量引用：@标量名 强制使用 scalar_context 中的值（不查列）
-                        # 将 @xxx 替换为字面数值，避免与列名歧义
                         explicit_scalar_pattern = re.compile(r"@([\w\u4e00-\u9fa5]+)")
                         for m in explicit_scalar_pattern.finditer(expr):
                             scalar_key = m.group(1)
                             if scalar_key in scalar_context:
                                 val = float(scalar_context[scalar_key])
-                                # 用括号包裹避免负数/小数点引发的运算符优先级问题
-                                expr_safe = expr_safe.replace(m.group(0), f"({val})")
+                                expr = expr.replace(m.group(0), f"({val})")
                             else:
                                 print(f"    [警告] 值计算引用的标量不存在: @{scalar_key}（可用标量: {list(scalar_context.keys())}）")
-                                expr_safe = expr_safe.replace(m.group(0), "0")
+                                expr = expr.replace(m.group(0), "0")
 
-                        # 隐式标量注入：表达式中的变量名优先匹配列名，匹配不到则查找 scalar_context
-                        # （仅对未使用 @ 语法的变量生效）
-                        for scalar_name, scalar_val in scalar_context.items():
-                            if scalar_name in expr_safe and scalar_name not in calc_df.columns:
-                                calc_df[scalar_name] = float(scalar_val)
-
-                        # 先尝试直接 eval（表达式中的列名可能已在 calc_df 中，如值映射后的列名）
-                        calc_result = None
-                        try:
-                            calc_result = calc_df.eval(expr_safe)
-                        except Exception:
-                            # 直接 eval 失败，给表达式中出现的 DataFrame 列名加反引号再试
-                            # pd.eval() 不支持中文/数字开头等非标准标识符，反引号可绕过限制
-                            try:
-                                expr_quoted = expr_safe
-                                for col_name in sorted(calc_df.columns, key=lambda x: len(str(x)), reverse=True):
-                                    str_col = str(col_name)
-                                    pattern = r'(?<![`\w])' + re.escape(str_col) + r'(?![`\w])'
-                                    if re.search(pattern, expr_quoted):
-                                        expr_quoted = re.sub(pattern, f'`{str_col}`', expr_quoted)
-                                if expr_quoted != expr_safe:
-                                    calc_result = calc_df.eval(expr_quoted)
-                            except Exception:
-                                pass
-
-                        if calc_result is None:
-                            # 仍然失败，构建列名替换映射
-                            # 场景：表达式使用原始字段名，但 calc_df 中是值映射名或聚合后缀名
-                            replacements = {}
-                            for vcol in value_cols:
-                                if vcol not in expr_safe:
-                                    continue
-                                if vcol in calc_df.columns:
-                                    continue
-                                # 查找值映射后的列名
-                                mapped_found = None
+                        # 构建列名映射：找到表达式中每个标识符对应的 DataFrame 实际列名
+                        # 优先级：直接匹配 → 值映射名匹配 → 值字段原始名反查 → 聚合后缀 → 隐式标量
+                        col_mapping = {}
+                        expr_tokens = re.findall(r'[A-Za-z_]\w*|[^\s+\-*/()=]+', expr)
+                        for token in expr_tokens:
+                            if token in calc_df.columns:
+                                col_mapping[token] = token
+                                continue
+                            # 检查是否是值映射后的列名
+                            if raw_val_maps and token in raw_val_maps and token in calc_df.columns:
+                                col_mapping[token] = token
+                                continue
+                            # 检查是否是值字段原始名（需要映射到值映射名或聚合后缀）
+                            if token in value_cols:
                                 if raw_val_maps:
-                                    idx = value_cols.index(vcol)
+                                    idx = value_cols.index(token)
                                     if idx < len(raw_val_maps):
                                         mapped = raw_val_maps[idx]
                                         if mapped in calc_df.columns:
-                                            mapped_found = mapped
-                                # 查找聚合后缀列名（如 销售额_求和）
-                                if not mapped_found:
-                                    for c in calc_df.columns:
-                                        if c.startswith(vcol + "_"):
-                                            mapped_found = c
-                                            break
-                                if mapped_found:
-                                    replacements[vcol] = mapped_found
-
-                            # 使用占位符替换，避免子串替换问题
-                            # （如 vcol="销售额" 替换会破坏 "总销售额"）
-                            if replacements:
-                                sorted_names = sorted(replacements.keys(), key=len, reverse=True)
-                                placeholders = {}
-                                for i, name in enumerate(sorted_names):
-                                    actual_col = replacements[name]
-                                    placeholder = f"__COL_{i}__"
-                                    expr_safe = expr_safe.replace(name, placeholder)
-                                    placeholders[placeholder] = actual_col
-                                for placeholder, actual_col in placeholders.items():
-                                    expr_safe = expr_safe.replace(placeholder, actual_col)
-
-                                # 替换后给表达式中出现的列名加反引号，确保 pd.eval 可解析
-                                expr_quoted = expr_safe
-                                for col_name in sorted(calc_df.columns, key=lambda x: len(str(x)), reverse=True):
-                                    str_col = str(col_name)
-                                    pattern = r'(?<![`\w])' + re.escape(str_col) + r'(?![`\w])'
-                                    if re.search(pattern, expr_quoted):
-                                        expr_quoted = re.sub(pattern, f'`{str_col}`', expr_quoted)
-
-                                try:
-                                    calc_result = calc_df.eval(expr_quoted)
-                                except Exception as e:
-                                    print(f"    [警告] 值计算表达式解析失败: {expr}, 错误: {e}")
-                                    continue
-                            else:
-                                print(f"    [警告] 值计算表达式解析失败: {expr}, 无法匹配列名")
+                                            col_mapping[token] = mapped
+                                            continue
+                                for c in calc_df.columns:
+                                    if c.startswith(token + "_"):
+                                        col_mapping[token] = c
+                                        break
                                 continue
+                            # 检查聚合后缀匹配
+                            for c in calc_df.columns:
+                                if c.startswith(token + "_"):
+                                    col_mapping[token] = c
+                                    break
+                            # 隐式标量
+                            if token not in col_mapping and scalar_context and token in scalar_context:
+                                col_mapping[token] = "__SCALAR__"
+
+                        if not col_mapping:
+                            print(f"    [警告] 值计算表达式解析失败: {expr}, 无法匹配列名")
+                            continue
+
+                        # 逐行计算：将每行列值注入表达式命名空间
+                        safe_expr = expr
+                        temp_names = {}
+                        for i, (orig_name, actual_col) in enumerate(col_mapping.items()):
+                            temp_name = f"_C{i}_"
+                            safe_expr = safe_expr.replace(orig_name, temp_name)
+                            temp_names[temp_name] = actual_col
+
+                        results_list = []
+                        for _, row in calc_df.iterrows():
+                            namespace = {}
+                            for temp_name, actual_col in temp_names.items():
+                                if actual_col == "__SCALAR__":
+                                    for token, col in col_mapping.items():
+                                        if col == "__SCALAR__" and token in scalar_context:
+                                            namespace[temp_name] = float(scalar_context[token])
+                                else:
+                                    namespace[temp_name] = float(row[actual_col])
+                            results_list.append(eval(safe_expr, {"__builtins__": {}}, namespace))
+
+                        calc_result = pd.Series(results_list, index=calc_df.index)
 
                         if calc_result is None:
                             continue
