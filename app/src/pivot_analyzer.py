@@ -49,17 +49,17 @@ def read_pivot_config(config_path, sheet_name=None):
         task["序号"] = item.get("序号", "")
         task["数据源"] = str(item.get("数据源", "")).strip() if item.get("数据源") else ""
         task["sheet"] = str(item.get("Sheet", item.get("sheet", ""))).strip() if (item.get("Sheet") or item.get("sheet")) else "Sheet1"
-        task["行维度"] = str(item.get("行维度", "")).strip().replace("，", ",") if item.get("行维度") else ""
-        task["列维度"] = str(item.get("列维度", "")).strip().replace("，", ",") if item.get("列维度") else ""
-        task["值字段"] = str(item.get("值字段", "")).strip().replace("，", ",") if item.get("值字段") else ""
-        task["聚合方式"] = str(item.get("聚合方式", "sum")).strip().replace("，", ",") if item.get("聚合方式") else "sum"
+        task["行维度"] = str(item.get("行维度", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("行维度") else ""
+        task["列维度"] = str(item.get("列维度", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("列维度") else ""
+        task["值字段"] = str(item.get("值字段", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值字段") else ""
+        task["聚合方式"] = str(item.get("聚合方式", "sum")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("聚合方式") else "sum"
         task["结果Sheet"] = str(item.get("结果Sheet", "")).strip() if item.get("结果Sheet") else f"结果{task.get('序号','')}"
         task["区块名"] = str(item.get("区块名", item.get("备注", ""))).strip() if (item.get("区块名") or item.get("备注")) else ""
         task["行映射"] = str(item.get("行映射", "")).strip() if item.get("行映射") else (str(item.get("行维度映射", "")).strip() if item.get("行维度映射") else str(item.get("映射表", "")).strip() if item.get("映射表") else "")
         task["列映射"] = str(item.get("列映射", "")).strip() if item.get("列映射") else (str(item.get("列维度映射", "")).strip() if item.get("列维度映射") else "")
-        task["值映射"] = str(item.get("值映射", "")).strip().replace("，", ",") if item.get("值映射") else (str(item.get("值字段映射", "")).strip().replace("，", ",") if item.get("值字段映射") else "")
-        task["分箱"] = str(item.get("分箱", "")).strip().replace("，", ",") if item.get("分箱") else ""
-        task["值计算"] = str(item.get("值计算", "")).strip().replace("，", ",") if item.get("值计算") else ""
+        task["值映射"] = str(item.get("值映射", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值映射") else (str(item.get("值字段映射", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值字段映射") else "")
+        task["分箱"] = str(item.get("分箱", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("分箱") else ""
+        task["值计算"] = str(item.get("值计算", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值计算") else ""
         task["是否计算"] = str(item.get("是否计算", "是")).strip() if item.get("是否计算") else "是"
         task["过滤条件"] = str(item.get("过滤条件", "")).strip() if item.get("过滤条件") else ""
 
@@ -1376,7 +1376,9 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
     scalar_context = scalar_context or {}
     raw_val_maps = raw_val_maps or []
     orig_value_cols = orig_value_cols or list(value_cols)
-    calcs = [c.strip() for c in val_calc.split(",")]
+    # 防御性处理：将换行符统一为逗号（Excel Alt+Enter 产生的换行会导致多个表达式被合并为一个）
+    val_calc = val_calc.replace("\n", ",").replace("\r", ",")
+    calcs = [c.strip() for c in val_calc.split(",") if c.strip()]
     calc_map = {}
     for i, expr in enumerate(calcs):
         if not expr:
