@@ -776,9 +776,11 @@ def verify_template_mode(pivot_excel_path):
         return False, None
 
     # 1. 创建带占位符的 PPT 模板
-    # 优先用固定名（便于人工查看），若被占用则回退到带时间戳的临时名
+    # 模板放在防护用例目录，输出结果放到透视结果所在的结果文件夹
     template_path = os.path.join(SCRIPT_DIR, "测试模板.pptx")
-    output_path = os.path.join(SCRIPT_DIR, "模板填充结果.pptx")
+    # 输出路径放到透视结果所在的结果文件夹（output_xxx）
+    pivot_dir = os.path.dirname(pivot_excel_path) if pivot_excel_path else SCRIPT_DIR
+    output_path = os.path.join(pivot_dir, "模板填充结果.pptx")
 
     def _try_remove(path):
         if os.path.exists(path):
@@ -789,13 +791,13 @@ def verify_template_mode(pivot_excel_path):
                 return False
         return True
 
-    # 尝试清理旧文件；若被占用则改用临时名
+    # 尝试清理旧文件；若被占用则改用带时间戳的临时名
     use_temp_name = False
     if not _try_remove(template_path) or not _try_remove(output_path):
         use_temp_name = True
         ts = time.strftime("%Y%m%d_%H%M%S")
         template_path = os.path.join(SCRIPT_DIR, f"测试模板_{ts}.pptx")
-        output_path = os.path.join(SCRIPT_DIR, f"模板填充结果_{ts}.pptx")
+        output_path = os.path.join(pivot_dir, f"模板填充结果_{ts}.pptx")
         print(f"  {YELLOW}⚠ 检测到旧模板文件被占用，改用临时名: {os.path.basename(template_path)}{RESET}")
 
     try:
