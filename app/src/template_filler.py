@@ -19,6 +19,9 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
         {{图片:文件路径}}            替换为指定图片（绝对路径或相对模板目录）
         {{图片:区块名.列名.行值}}    取透视数据中的图片路径
 
+    表格占位符（在表格替代文字/名称中）：
+        {{表格:区块名}}              用该区块数据整表替换（保留模板表格样式）
+
     聚合后缀（可选）：
         {{区块名.列名.sum}}          求和（默认）
         {{区块名.列名.avg}}          平均
@@ -46,6 +49,8 @@ _PLACEHOLDER_RE = re.compile(r"\{\{([^{}]+)\}\}")
 _CHART_PLACEHOLDER_RE = re.compile(r"\{\{图表[:：]([^{}]+)\}\}")
 # 图片占位符正则：{{图片:xxx}}
 _IMAGE_PLACEHOLDER_RE = re.compile(r"\{\{图片[:：]([^{}]+)\}\}")
+# 表格占位符正则：{{表格:xxx}}
+_TABLE_PLACEHOLDER_RE = re.compile(r"\{\{表格[:：]([^{}]+)\}\}")
 
 
 def load_pivot_results(pivot_data_path: str) -> Dict[str, pd.DataFrame]:
@@ -436,6 +441,63 @@ def _do_replace_picture(slide, old_shape, image_path: str):
     slide.shapes.add_picture(image_path, left, top, width, height)
 
 
+def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
+                        default_block: Optional[str]) -> int:
+    """替换幻灯片中的表格数据（整表替换），返回替换次数。
+    通过表格形状的 name 或 alternative_text 中的 {{表格:区块名}} 匹配。
+    """
+    replace_count = 0
+    for shape in list(slide.shapes):
+        if not shape.has_table:
+            continue
+
+        target_block = None
+        for attr in ("name", "alternative_text"):
+            val = (getattr(shape, attr, None) or "")
+            m = _TABLE_PLACEHOLDER_RE.search(val)
+            if m:
+                target_block = m.group(1).strip()
+                break
+
+        if not target_block:
+            continue
+
+        if target_block not in pivot_data:
+            print(f"    [警告] 表格数据区块 '{target_block}' 未在透视结果中找到")
+            continue
+
+        df = pivot_data[target_block]
+        if df.empty:
+            continue
+
+        table = shape.table
+        headers = list(df.columns)
+        data_rows = df.values.tolist()
+
+        try:
+            # 先填表头（第一行），再填数据行
+            for col_idx, header in enumerate(headers):
+                if col_idx < len(table.columns):
+                    cell = table.cell(0, col_idx)
+                    cell.text = str(header)
+
+            for row_idx, row_data in enumerate(data_rows):
+                table_row = row_idx + 1
+                if table_row >= len(table.rows):
+                    break
+                for col_idx, value in enumerate(row_data):
+                    if col_idx < len(table.columns):
+                        cell = table.cell(table_row, col_idx)
+                        cell.text = _parse_value(value)
+
+            replace_count += 1
+            filled = min(len(data_rows), len(table.rows) - 1)
+            print(f"    [OK] 表格数据替换: {target_block} ({len(headers)}列 x {filled}行)")
+        except Exception as e:
+            print(f"    [警告] 表格数据替换失败 [{target_block}]: {e}")
+    return replace_count
+
+
 def fill_template(template_path: str, pivot_data_path: str, output_path: str) -> Dict:
     """填充 PPT 模板
 
@@ -445,7 +507,7 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
         output_path: 输出 PPT 路径
 
     Returns:
-        dict: 替换统计 {slides, text_replacements, chart_replacements, picture_replacements}
+        dict: 替换统计 {slides, text_replacements, chart_replacements, picture_replacements, table_replacements}
     """
     if not os.path.exists(template_path):
         raise FileNotFoundError(f"模板文件不存在: {template_path}")
@@ -463,6 +525,7 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
     total_text = 0
     total_chart = 0
     total_picture = 0
+    total_table = 0
 
     for slide_idx, slide in enumerate(prs.slides, 1):
         default_block = None
@@ -485,10 +548,13 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
 
         picture_count = _replace_pictures(slide, pivot_data, default_block, template_dir, image_collector)
 
+        table_count = _replace_table_data(slide, pivot_data, default_block)
+
         total_text += text_count
         total_chart += chart_count
         total_picture += picture_count
-        print(f"    [页{slide_idx}] 文本替换: {text_count}, 图表替换: {chart_count}, 图片替换: {picture_count}")
+        total_table += table_count
+        print(f"    [页{slide_idx}] 文本替换: {text_count}, 图表替换: {chart_count}, 图片替换: {picture_count}, 表格替换: {table_count}")
 
     print(f"[模板/3] 保存: {output_path}")
     prs.save(output_path)
@@ -498,6 +564,7 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
         "text_replacements": total_text,
         "chart_replacements": total_chart,
         "picture_replacements": total_picture,
+        "table_replacements": total_table,
     }
-    print(f"\n[OK] 模板填充完成！共 {stats['slides']} 页, 文本替换 {total_text} 处, 图表替换 {total_chart} 处, 图片替换 {total_picture} 处")
+    print(f"\n[OK] 模板填充完成！共 {stats['slides']} 页, 文本替换 {total_text} 处, 图表替换 {total_chart} 处, 图片替换 {total_picture} 处, 表格替换 {total_table} 处")
     return stats
