@@ -648,7 +648,8 @@ def validate_pivot_config(tasks, config_dir):
     return results
 
 
-NUMERIC_AGGS = {"sum", "mean", "avg", "max", "min", "pct"}
+# 仅这些聚合方式强制要求数值列；max/min 对字符串列合法（字典序），可用于取路径等场景
+NUMERIC_AGGS = {"sum", "mean", "avg", "pct"}
 
 
 def _check_agg_dtype_compat(results, task_seq, df, value_cols, agg_funcs):
@@ -768,7 +769,8 @@ def run_analysis(task, config_dir, scalar_context=None):
 
     for col in 值字段:
         af_for_col = _get_agg_for_col(col, 聚合函数, 值字段)
-        if af_for_col not in ("count", "nunique", "pct", "count_pct"):
+        # max/min 对字符串列合法（字典序），不强制转数值（如图片路径取值场景）
+        if af_for_col not in ("count", "nunique", "pct", "count_pct", "max", "min"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df = df.dropna(subset=值字段, how="all")
@@ -1045,7 +1047,7 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
         grouped.columns = pd.MultiIndex.from_tuples(new_cols)
     else:
         for col in grouped.columns:
-            if col not in group_cols:
+            if col not in group_cols and pd.api.types.is_numeric_dtype(grouped[col]):
                 grouped[col] = grouped[col].round(2)
 
     # 检查是否有值映射配置

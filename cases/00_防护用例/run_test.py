@@ -939,30 +939,31 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {YELLOW}⚠ 页2 表格未扩展（可能数据与模板尺寸一致）{RESET}")
 
-        # ---------- 页3: 图片替换 ----------
+        # ---------- 页3: 图片替换（绝对路径 + 透视数据取路径 两种方式） ----------
         if len(prs.slides) >= 3:
             slide3 = prs.slides[2]
-            pic_found = False
-            pic_replaced = False
+            pic_count = 0
+            pic_replaced_count = 0
             for shape in slide3.shapes:
                 if shape.shape_type == 13:  # PICTURE
-                    pic_found = True
+                    pic_count += 1
                     # 验证图片名称不再包含 {{图片: 占位符
                     if "{{图片:" not in shape.name:
-                        pic_replaced = True
-                    break
+                        pic_replaced_count += 1
 
-            checks.append(("页3 图片存在", pic_found))
-            checks.append(("页3 图片已替换", pic_replaced))
+            pic_found = pic_count >= 2  # 应有两张图片（绝对路径 + 透视取路径）
+            pic_replaced = pic_replaced_count >= 2
+            checks.append(("页3 两张图片存在", pic_found))
+            checks.append(("页3 图片全部已替换", pic_replaced))
 
             if pic_found:
-                print(f"  {GREEN}✓ 页3 图片存在{RESET}")
+                print(f"  {GREEN}✓ 页3 两张图片存在（绝对路径 + 透视取路径）{RESET}")
             else:
-                print(f"  {RED}✗ 页3 未找到图片{RESET}")
+                print(f"  {RED}✗ 页3 图片数量不足（期望2张，实际{pic_count}张）{RESET}")
             if pic_replaced:
-                print(f"  {GREEN}✓ 页3 图片已替换{RESET}")
+                print(f"  {GREEN}✓ 页3 图片全部已替换{RESET}")
             else:
-                print(f"  {YELLOW}⚠ 页3 图片可能未替换（占位符仍存在）{RESET}")
+                print(f"  {YELLOW}⚠ 页3 图片可能未替换（{pic_replaced_count}/{pic_count}张已替换）{RESET}")
 
         # ---------- 页4: 多区块图表 + 默认区块 ----------
         if len(prs.slides) >= 4:
@@ -1223,7 +1224,7 @@ def _create_test_template(template_path):
 
     页1 - 文本占位符 + 图表占位符（原基础场景）
     页2 - 表格整体替换 + 表格行数扩展
-    页3 - 图片替换（绝对路径方式）
+    页3 - 图片替换（绝对路径 + 透视数据取路径两种方式）
     页4 - 多区块图表 + 备注声明默认区块
     页5 - 同 sheet 内多区块按区块名独立引用
     页6 - Sheet名.区块名 精确查找（区分不同 sheet 中的同名区块）
@@ -1323,7 +1324,7 @@ def _create_test_template(template_path):
     except Exception:
         pass
 
-    # ========== 页3: 图片替换（绝对路径方式） ==========
+    # ========== 页3: 图片替换（两种方式：绝对路径 + 透视数据取路径） ==========
     slide3 = prs.slides.add_slide(blank_layout)
 
     title3 = slide3.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
@@ -1335,14 +1336,23 @@ def _create_test_template(template_path):
 
     # 生成一张测试图片（避免外部依赖）
     test_image_path = _generate_test_image()
+
+    # 方式1: 绝对路径 — 占位符直接写完整路径
     if test_image_path:
-        # 添加一张占位图片，并设置其 name 为图片占位符
         pic_shape = slide3.shapes.add_picture(
             test_image_path,
-            Inches(2), Inches(1.5), Inches(5), Inches(4)
+            Inches(0.5), Inches(1.5), Inches(4), Inches(3.5)
         )
-        # 通过形状名称标记
         pic_shape.name = "{{图片:" + test_image_path + "}}"
+
+    # 方式2: 从透视数据取路径 — 占位符写 区块名.列名.行值
+    # 透视结果"地区图片"区块含"图片路径"列，华东行值为 _test_image.png
+    if test_image_path:
+        pic_shape2 = slide3.shapes.add_picture(
+            test_image_path,
+            Inches(5.5), Inches(1.5), Inches(4), Inches(3.5)
+        )
+        pic_shape2.name = "{{图片:地区图片.图片路径.华东}}"
 
     # 页3备注
     try:
