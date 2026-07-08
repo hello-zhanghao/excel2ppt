@@ -15,6 +15,10 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
     图表占位符（在图表标题或备注中）：
         {{图表:区块名}}              用该区块数据替换图表数据源
 
+    图片占位符（在图片替代文字/名称中，或在文本框中）：
+        {{图片:文件路径}}            替换为指定图片（绝对路径或相对模板目录）
+        {{图片:区块名.列名.行值}}    取透视数据中的图片路径
+
     聚合后缀（可选）：
         {{区块名.列名.sum}}          求和（默认）
         {{区块名.列名.avg}}          平均
@@ -33,12 +37,15 @@ import openpyxl
 import pandas as pd
 from pptx import Presentation
 from pptx.util import Pt
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 
 # 占位符正则：{{...}}
 _PLACEHOLDER_RE = re.compile(r"\{\{([^{}]+)\}\}")
 # 图表占位符正则：{{图表:xxx}}
 _CHART_PLACEHOLDER_RE = re.compile(r"\{\{图表[:：]([^{}]+)\}\}")
+# 图片占位符正则：{{图片:xxx}}
+_IMAGE_PLACEHOLDER_RE = re.compile(r"\{\{图片[:：]([^{}]+)\}\}")
 
 
 def load_pivot_results(pivot_data_path: str) -> Dict[str, pd.DataFrame]:
@@ -235,12 +242,13 @@ def _parse_slide_notes(notes_text: str) -> Dict[str, str]:
 
 
 def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
-                           default_block: Optional[str]) -> int:
-    """替换文本框中的占位符，返回替换次数"""
+                           default_block: Optional[str],
+                           image_collector: Optional[List[str]] = None) -> int:
+    """替换文本框中的占位符，返回替换次数。
+    如果 image_collector 不为 None，{{图片:...}} 会被收集到列表中并从文本中移除。
+    """
     replace_count = 0
-    # 遍历段落
     for para in text_frame.paragraphs:
-        # 合并所有 run 的文本，做整体替换（占位符可能跨多个 run）
         full_text = "".join(run.text for run in para.runs)
         if not _PLACEHOLDER_RE.search(full_text):
             continue
@@ -248,9 +256,12 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
         def _replacer(m):
             nonlocal replace_count
             expr = m.group(1).strip()
-            # 图表占位符不在此处理
             if expr.startswith("图表") or expr.startswith("图表:"):
                 return m.group(0)
+            if (expr.startswith("图片") or expr.startswith("图片:")) and image_collector is not None:
+                image_collector.append(expr[2:].lstrip(":：").strip())
+                replace_count += 1
+                return ""
             value = _resolve_text_placeholder(expr, pivot_data, default_block)
             if value:
                 replace_count += 1
@@ -258,7 +269,6 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
 
         new_text = _PLACEHOLDER_RE.sub(_replacer, full_text)
         if new_text != full_text and para.runs:
-            # 把新文本放到第一个 run，清空其他 run
             para.runs[0].text = new_text
             for run in para.runs[1:]:
                 run.text = ""
@@ -336,6 +346,96 @@ def _write_chart_data(chart, df: pd.DataFrame):
     chart.replace_data(chart_data)
 
 
+def _resolve_image_path(expr: str, pivot_data: Dict[str, pd.DataFrame],
+                        default_block: Optional[str], template_dir: str) -> Optional[str]:
+    """解析 {{图片:...}} 表达式，返回图片文件绝对路径或 None"""
+    expr = expr.strip()
+    if not expr:
+        return None
+
+    # 1) 绝对路径或相对模板目录的直接路径
+    for candidate in (expr, os.path.join(template_dir, expr)):
+        if os.path.isfile(candidate):
+            return os.path.abspath(candidate)
+
+    # 2) 透视数据解析（区块.列 或 区块.列.行值）
+    text_value = _resolve_text_placeholder(expr, pivot_data, default_block)
+    if text_value:
+        for candidate in (text_value, os.path.join(template_dir, text_value)):
+            if os.path.isfile(candidate):
+                return os.path.abspath(candidate)
+
+    return None
+
+
+def _replace_pictures(slide, pivot_data: Dict[str, pd.DataFrame],
+                      default_block: Optional[str],
+                      template_dir: str,
+                      text_image_exprs: Optional[List[str]] = None) -> int:
+    """替换幻灯片中的图片，返回替换次数。
+
+    匹配优先级：
+    1. 图片形状的 name 或 alternative_text 中含 {{图片:...}}
+    2. 文本框中收集到的 {{图片:...}} 表达式 → 匹配同页第一张未被其他方式匹配的图片
+    """
+    if text_image_exprs is None:
+        text_image_exprs = []
+
+    replaced = 0
+    matched_shape_ids = set()
+
+    for shape in list(slide.shapes):
+        if shape.shape_type != MSO_SHAPE_TYPE.PICTURE:
+            continue
+
+        expr = None
+        for attr in ("name", "alternative_text"):
+            val = (getattr(shape, attr, None) or "")
+            m = _IMAGE_PLACEHOLDER_RE.search(val)
+            if m:
+                expr = m.group(1).strip()
+                break
+
+        if not expr:
+            continue
+
+        image_path = _resolve_image_path(expr, pivot_data, default_block, template_dir)
+        if not image_path:
+            print(f"    [警告] 图片路径无效 [{expr}]: 文件不存在")
+            continue
+
+        _do_replace_picture(slide, shape, image_path)
+        matched_shape_ids.add(shape.shape_id)
+        replaced += 1
+        print(f"    [OK] 图片替换: {os.path.basename(image_path)}")
+
+    # 文本关联模式：{{图片:...}} 在文本框中 → 替换同页第一张未被匹配的图片
+    for expr in text_image_exprs:
+        image_path = _resolve_image_path(expr, pivot_data, default_block, template_dir)
+        if not image_path:
+            continue
+        for shape in slide.shapes:
+            if shape.shape_type != MSO_SHAPE_TYPE.PICTURE:
+                continue
+            if shape.shape_id in matched_shape_ids:
+                continue
+            _do_replace_picture(slide, shape, image_path)
+            matched_shape_ids.add(shape.shape_id)
+            replaced += 1
+            print(f"    [OK] 图片替换(文本关联): {os.path.basename(image_path)}")
+            break
+
+    return replaced
+
+
+def _do_replace_picture(slide, old_shape, image_path: str):
+    """删除旧图片，在原位置插入新图片"""
+    left, top, width, height = old_shape.left, old_shape.top, old_shape.width, old_shape.height
+    sp = old_shape._element
+    sp.getparent().remove(sp)
+    slide.shapes.add_picture(image_path, left, top, width, height)
+
+
 def fill_template(template_path: str, pivot_data_path: str, output_path: str) -> Dict:
     """填充 PPT 模板
 
@@ -345,10 +445,12 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
         output_path: 输出 PPT 路径
 
     Returns:
-        dict: 替换统计 {slides, text_replacements, chart_replacements}
+        dict: 替换统计 {slides, text_replacements, chart_replacements, picture_replacements}
     """
     if not os.path.exists(template_path):
         raise FileNotFoundError(f"模板文件不存在: {template_path}")
+
+    template_dir = os.path.dirname(os.path.abspath(template_path))
 
     print(f"[模板/1] 加载透视结果: {os.path.basename(pivot_data_path)}")
     pivot_data = load_pivot_results(pivot_data_path)
@@ -360,9 +462,9 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
 
     total_text = 0
     total_chart = 0
+    total_picture = 0
 
     for slide_idx, slide in enumerate(prs.slides, 1):
-        # 解析备注配置
         default_block = None
         try:
             if slide.has_notes_slide:
@@ -372,19 +474,21 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
         except Exception:
             pass
 
-        # 替换文本占位符
+        image_collector: List[str] = []
         text_count = 0
         for shape in slide.shapes:
             if not shape.has_text_frame:
                 continue
-            text_count += _replace_in_text_frame(shape.text_frame, pivot_data, default_block)
+            text_count += _replace_in_text_frame(shape.text_frame, pivot_data, default_block, image_collector)
 
-        # 替换图表数据
         chart_count = _replace_chart_data(slide, pivot_data, default_block)
+
+        picture_count = _replace_pictures(slide, pivot_data, default_block, template_dir, image_collector)
 
         total_text += text_count
         total_chart += chart_count
-        print(f"    [页{slide_idx}] 文本替换: {text_count}, 图表替换: {chart_count}")
+        total_picture += picture_count
+        print(f"    [页{slide_idx}] 文本替换: {text_count}, 图表替换: {chart_count}, 图片替换: {picture_count}")
 
     print(f"[模板/3] 保存: {output_path}")
     prs.save(output_path)
@@ -393,6 +497,7 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
         "slides": len(prs.slides),
         "text_replacements": total_text,
         "chart_replacements": total_chart,
+        "picture_replacements": total_picture,
     }
-    print(f"\n[OK] 模板填充完成！共 {stats['slides']} 页, 文本替换 {total_text} 处, 图表替换 {total_chart} 处")
+    print(f"\n[OK] 模板填充完成！共 {stats['slides']} 页, 文本替换 {total_text} 处, 图表替换 {total_chart} 处, 图片替换 {total_picture} 处")
     return stats
