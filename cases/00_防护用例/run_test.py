@@ -854,15 +854,21 @@ def verify_template_mode(pivot_excel_path):
         # 验证点3: 页1 图表存在且数据已替换
         chart_found = False
         chart_data_replaced = False
+        chart_title_preserved = False
         for shape in slide1.shapes:
             if shape.has_chart:
                 chart_found = True
                 chart = shape.chart
                 try:
+                    # 验证图表标题保留模板原样（未被占位符污染）
+                    if chart.has_title and chart.chart_title.has_text_frame:
+                        title = chart.chart_title.text_frame.text
+                        if "各地区销售汇总" in title and "{{" not in title:
+                            chart_title_preserved = True
+                    # 验证图表数据已替换
                     if chart.plots:
                         plot = chart.plots[0]
                         categories = list(plot.categories)
-                        # 验证图表分类包含"华东"（按地区汇总的行值）
                         cat_str = [str(c) for c in categories]
                         if categories and any("华东" in c for c in cat_str):
                             chart_data_replaced = True
@@ -873,12 +879,17 @@ def verify_template_mode(pivot_excel_path):
                 break
 
         checks.append(("页1 图表数据已替换", chart_found and chart_data_replaced))
+        checks.append(("页1 图表标题保留模板原样", chart_title_preserved))
         if chart_found and chart_data_replaced:
             print(f"  {GREEN}✓ 页1 图表数据已替换（分类包含透视数据行值）{RESET}")
         elif chart_found:
             print(f"  {YELLOW}⚠ 页1 图表存在但数据可能未替换{RESET}")
         else:
             print(f"  {RED}✗ 页1 未找到图表{RESET}")
+        if chart_title_preserved:
+            print(f"  {GREEN}✓ 页1 图表标题保留模板原样{RESET}")
+        else:
+            print(f"  {RED}✗ 页1 图表标题未保留（被占位符污染）{RESET}")
 
         # ---------- 页2: 表格整体替换 ----------
         if len(prs.slides) >= 2:
@@ -970,11 +981,18 @@ def verify_template_mode(pivot_excel_path):
             # 验证第二个图表（饼图）存在且数据已替换
             chart2_found = False
             chart2_data_ok = False
+            chart2_title_preserved = False
             for shape in slide4.shapes:
                 if shape.has_chart:
                     chart2_found = True
                     chart = shape.chart
                     try:
+                        # 验证图表标题保留模板原样
+                        if chart.has_title and chart.chart_title.has_text_frame:
+                            title = chart.chart_title.text_frame.text
+                            if "产品销售额占比" in title and "{{" not in title:
+                                chart2_title_preserved = True
+                        # 验证数据已替换
                         if chart.plots:
                             plot = chart.plots[0]
                             categories = list(plot.categories)
@@ -988,6 +1006,7 @@ def verify_template_mode(pivot_excel_path):
 
             checks.append(("页4 第二图表存在", chart2_found))
             checks.append(("页4 第二图表数据已替换", chart2_data_ok))
+            checks.append(("页4 第二图表标题保留模板原样", chart2_title_preserved))
             if chart2_found:
                 print(f"  {GREEN}✓ 页4 第二图表存在{RESET}")
             else:
@@ -996,6 +1015,10 @@ def verify_template_mode(pivot_excel_path):
                 print(f"  {GREEN}✓ 页4 第二图表数据已替换（分类含产品）{RESET}")
             else:
                 print(f"  {YELLOW}⚠ 页4 第二图表数据可能未替换{RESET}")
+            if chart2_title_preserved:
+                print(f"  {GREEN}✓ 页4 第二图表标题保留模板原样{RESET}")
+            else:
+                print(f"  {RED}✗ 页4 第二图表标题未保留{RESET}")
 
         # ---------- 整体文件检查 ----------
         # 验证点N: 输出文件大小合理（>0）
@@ -1076,16 +1099,20 @@ def _create_test_template(template_path):
     chart_data = CategoryChartData()
     chart_data.categories = ["A", "B", "C"]
     chart_data.add_series("占位数据", (1, 2, 3))
-    chart = slide.shapes.add_chart(
+    chart_shape = slide.shapes.add_chart(
         XL_CHART_TYPE.COLUMN_CLUSTERED,
         Inches(7), Inches(1.5), Inches(5.5), Inches(4),
         chart_data
-    ).chart
+    )
+    chart = chart_shape.chart
+    # 图表标题保留模板文字（不被占位符污染）
     try:
         chart.has_title = True
-        chart.chart_title.text_frame.text = "{{图表:按地区汇总}}"
+        chart.chart_title.text_frame.text = "各地区销售汇总"
     except Exception:
         pass
+    # 占位符写在形状名称中（不污染标题）
+    chart_shape.name = "{{图表:按地区汇总}}"
 
     try:
         slide.notes_slide.notes_text_frame.text = "# 模板测试\n数据源=透视结果.xlsx\n"
@@ -1175,16 +1202,20 @@ def _create_test_template(template_path):
     chart_data2 = CategoryChartData()
     chart_data2.categories = ["X", "Y", "Z"]
     chart_data2.add_series("占位", (10, 20, 30))
-    chart2 = slide4.shapes.add_chart(
+    chart2_shape = slide4.shapes.add_chart(
         XL_CHART_TYPE.PIE,
         Inches(7), Inches(1.5), Inches(5.5), Inches(4),
         chart_data2
-    ).chart
+    )
+    chart2 = chart2_shape.chart
+    # 图表标题保留模板文字
     try:
         chart2.has_title = True
-        chart2.chart_title.text_frame.text = "{{图表:产品销售额}}"
+        chart2.chart_title.text_frame.text = "产品销售额占比"
     except Exception:
         pass
+    # 占位符写在形状名称中
+    chart2_shape.name = "{{图表:产品销售额}}"
 
     prs.save(template_path)
 

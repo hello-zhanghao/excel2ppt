@@ -282,32 +282,37 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
 
 def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                         default_block: Optional[str]) -> int:
-    """替换幻灯片中的图表数据，返回替换次数"""
+    """替换幻灯片中的图表数据，返回替换次数
+
+    图表占位符只从形状名称/替代文字读取，不修改图表标题（保留模板原标题）。
+    """
     replace_count = 0
     for shape in slide.shapes:
         if not shape.has_chart:
             continue
 
         chart = shape.chart
-        chart_title_text = ""
+
+        # 只从形状名称/替代文字读取占位符（不读取图表标题，保留模板原标题）
+        target_block = None
         try:
-            if chart.has_title and chart.chart_title.has_text_frame:
-                chart_title_text = chart.chart_title.text_frame.text
+            for attr in ("name", "alternative_text"):
+                val = (getattr(shape, attr, None) or "")
+                m = _CHART_PLACEHOLDER_RE.search(val)
+                if m:
+                    target_block = m.group(1).strip()
+                    break
         except Exception:
             pass
 
-        # 备注里的图表占位符也支持（由调用方处理 default_block）
-        target_block = None
-        match = _CHART_PLACEHOLDER_RE.search(chart_title_text)
-        if match:
-            target_block = match.group(1).strip()
-        else:
-            # 检查图表形状的 alternative_text 或 name
+        # 兼容：如果形状名称没有占位符，再回退到图表标题读取（旧模板兼容）
+        if not target_block:
             try:
-                shape_name = shape.name or ""
-                m = _CHART_PLACEHOLDER_RE.search(shape_name)
-                if m:
-                    target_block = m.group(1).strip()
+                if chart.has_title and chart.chart_title.has_text_frame:
+                    title_text = chart.chart_title.text_frame.text
+                    m = _CHART_PLACEHOLDER_RE.search(title_text)
+                    if m:
+                        target_block = m.group(1).strip()
             except Exception:
                 pass
 
@@ -326,20 +331,7 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
             _write_chart_data(chart, df)
             replace_count += 1
             print(f"    [OK] 图表数据替换: {target_block} ({df.shape[0]}行 x {df.shape[1]}列)")
-            # 清除图表标题中的占位符（替换为区块名，避免标题残留 {{图表:xxx}}）
-            try:
-                if chart.has_title and chart.chart_title.has_text_frame:
-                    tf = chart.chart_title.text_frame
-                    for para in tf.paragraphs:
-                        full_text = para.text
-                        new_text = _CHART_PLACEHOLDER_RE.sub(target_block, full_text)
-                        if new_text != full_text and para.runs:
-                            para.runs[0].text = new_text
-                            for run in para.runs[1:]:
-                                run.text = ""
-            except Exception:
-                pass
-            # 清除形状名称中的占位符
+            # 清除形状名称中的占位符（不动图表标题）
             try:
                 if shape.name and _CHART_PLACEHOLDER_RE.search(shape.name):
                     shape.name = _CHART_PLACEHOLDER_RE.sub(target_block, shape.name)
