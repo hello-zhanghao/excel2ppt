@@ -6,14 +6,22 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
     fill_template("模板.pptx", "透视结果.xlsx", "输出.pptx")
 
 占位符语法：
+    区块查找支持三种形式（图表/表格/图片占位符的"区块名"位置同样适用）：
+        区块名                       跨所有 sheet 查找（兼容旧用法）
+        Sheet名.区块名               精确指定 sheet 内的区块
+        Sheet名                      该 sheet 第一个区块（兼容旧用法）
+
     文本占位符（在文本框中）：
         {{区块名.列名}}              取该列合计值（数值列）或首行值
         {{区块名.列名.行值}}         精确取某行某列的值
         {{区块名.行数}}              取该区块的数据行数
         {{标量.标量名}}              取无行维度标量
+        {{Sheet名.区块名.列名}}      精确指定 sheet 内区块（同名区块不冲突）
+        {{Sheet名.区块名.列名.行值}} 精确指定 sheet 内区块的某行
 
-    图表占位符（在图表标题或备注中）：
+    图表占位符（在图表形状名称/替代文字中）：
         {{图表:区块名}}              用该区块数据替换图表数据源
+        {{图表:Sheet名.区块名}}      精确指定 sheet 内区块
 
     图片占位符（在图片替代文字/名称中，或在文本框中）：
         {{图片:文件路径}}            替换为指定图片（绝对路径或相对模板目录）
@@ -21,6 +29,7 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
 
     表格占位符（在表格替代文字/名称中）：
         {{表格:区块名}}              用该区块数据整表替换（保留模板表格样式）
+        {{表格:Sheet名.区块名}}      精确指定 sheet 内区块
 
     聚合后缀（可选）：
         {{区块名.列名.sum}}          求和（默认）
@@ -63,6 +72,7 @@ def load_pivot_results(pivot_data_path: str) -> Dict[str, pd.DataFrame]:
     索引优先级：
     1. 区块名（精确匹配，跨所有 sheet 查找）
     2. sheet 名（指向该 sheet 的第一个区块，兼容旧用法）
+    3. "Sheet名.区块名"（精确指定 sheet 内的区块，新增）
     """
     if not os.path.exists(pivot_data_path):
         raise FileNotFoundError(f"透视结果文件不存在: {pivot_data_path}")
@@ -71,6 +81,8 @@ def load_pivot_results(pivot_data_path: str) -> Dict[str, pd.DataFrame]:
     result = {}
     # 记录每个 sheet 的第一个区块名，用于 sheet 名别名
     sheet_first_block = {}
+    # 记录 (sheet_name, block_name) → DataFrame，用于 "Sheet名.区块名" 查找
+    sheet_block_map = {}
 
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
@@ -116,6 +128,9 @@ def load_pivot_results(pivot_data_path: str) -> Dict[str, pd.DataFrame]:
             # 用区块名作为 key（后出现的同名区块覆盖先出现的，与 pivot 输出语义一致）
             result[block_name] = df
 
+            # 记录 (sheet_name, block_name) → DataFrame
+            sheet_block_map[f"{sheet_name}.{block_name}"] = df
+
             # 记录每个 sheet 的第一个区块名
             if first_block_in_sheet:
                 sheet_first_block[sheet_name] = block_name
@@ -125,6 +140,9 @@ def load_pivot_results(pivot_data_path: str) -> Dict[str, pd.DataFrame]:
     for sheet_name, first_block in sheet_first_block.items():
         if sheet_name not in result:
             result[sheet_name] = result.get(first_block)
+
+    # 合并 "Sheet名.区块名" 形式的 key
+    result.update(sheet_block_map)
 
     wb.close()
     return result
@@ -173,6 +191,20 @@ def _aggregate_column(df: pd.DataFrame, col: str, agg: str = "sum") -> Optional[
     return float(numeric_series.sum())
 
 
+def _lookup_block(pivot_data: Dict[str, pd.DataFrame], block_expr: str) -> Optional[pd.DataFrame]:
+    """按区块表达式查找 DataFrame，支持三种形式：
+    1. "区块名"          → 跨 sheet 查找（兼容旧用法）
+    2. "Sheet名.区块名"  → 精确指定 sheet 内的区块
+    3. "Sheet名"         → 该 sheet 第一个区块（兼容旧用法）
+    """
+    if not block_expr:
+        return None
+    # 精确匹配（包括 "Sheet名.区块名" 形式）
+    if block_expr in pivot_data:
+        return pivot_data[block_expr]
+    return None
+
+
 def _resolve_text_placeholder(expr: str, pivot_data: Dict[str, pd.DataFrame],
                               default_block: Optional[str] = None) -> str:
     """解析文本占位符表达式，返回替换值字符串
@@ -183,8 +215,14 @@ def _resolve_text_placeholder(expr: str, pivot_data: Dict[str, pd.DataFrame],
         区块名.行数
         区块名.列名.聚合(sum/avg/max/min/count)
         标量.标量名
-        列名             （使用 default_block）
-        列名.行值        （使用 default_block）
+        Sheet名.区块名.列名              （精确指定 sheet 内区块，新增）
+        Sheet名.区块名.列名.行值         （新增）
+        Sheet名.区块名.列名.聚合         （新增）
+        列名                             （使用 default_block）
+        列名.行值                        （使用 default_block）
+
+    查找优先级：先尝试 "Sheet名.区块名" 双段精确匹配，
+    再回退到 "区块名" 单段跨 sheet 匹配。
     """
     expr = expr.strip()
     parts = expr.split(".")
@@ -200,51 +238,73 @@ def _resolve_text_placeholder(expr: str, pivot_data: Dict[str, pd.DataFrame],
                 return _parse_value(df[scalar_name].iloc[0])
         return ""
 
-    # 解析区块名、列名、行值/聚合
-    if len(parts) == 1:
-        # 只有列名，依赖 default_block
-        if not default_block:
-            return ""
-        col = parts[0]
-        block = default_block
-        row_val = None
-        agg = None
-    elif len(parts) == 2:
-        # 区块名.列名 或 列名.行值/聚合
-        if parts[0] in pivot_data:
-            block, col = parts[0], parts[1]
+    # 尝试 "Sheet名.区块名" 双段形式（至少3段：Sheet.区块.列）
+    # 先用最长前缀匹配，找出 Sheet.区块 的边界
+    block = None
+    col = None
+    row_val = None
+    agg = None
+
+    if len(parts) >= 3:
+        # 尝试前两段作为 "Sheet名.区块名"
+        candidate_two = f"{parts[0]}.{parts[1]}"
+        if candidate_two in pivot_data:
+            block = candidate_two
+            col = parts[2]
+            if len(parts) >= 4:
+                fourth = parts[3]
+                if fourth in ("sum", "avg", "mean", "max", "min", "count"):
+                    agg = fourth
+                    row_val = None
+                else:
+                    row_val = fourth
+                    agg = parts[4] if len(parts) > 4 else None
+
+    # 回退到旧逻辑：单段区块名
+    if block is None:
+        if len(parts) == 1:
+            # 只有列名，依赖 default_block
+            if not default_block:
+                return ""
+            col = parts[0]
+            block = default_block
             row_val = None
             agg = None
-        elif default_block and parts[1] in ("sum", "avg", "mean", "max", "min", "count"):
-            block = default_block
-            col = parts[0]
-            row_val = None
-            agg = parts[1]
-        elif default_block:
-            block = default_block
-            col = parts[0]
-            row_val = parts[1]
-            agg = None
+        elif len(parts) == 2:
+            # 区块名.列名 或 列名.行值/聚合
+            if parts[0] in pivot_data:
+                block, col = parts[0], parts[1]
+                row_val = None
+                agg = None
+            elif default_block and parts[1] in ("sum", "avg", "mean", "max", "min", "count"):
+                block = default_block
+                col = parts[0]
+                row_val = None
+                agg = parts[1]
+            elif default_block:
+                block = default_block
+                col = parts[0]
+                row_val = parts[1]
+                agg = None
+            else:
+                return ""
+        elif len(parts) >= 3:
+            block = parts[0]
+            col = parts[1]
+            third = parts[2]
+            # 判断第三个是聚合还是行值
+            if third in ("sum", "avg", "mean", "max", "min", "count"):
+                agg = third
+                row_val = None
+            else:
+                row_val = third
+                agg = parts[3] if len(parts) > 3 else None
         else:
             return ""
-    elif len(parts) >= 3:
-        block = parts[0]
-        col = parts[1]
-        third = parts[2]
-        # 判断第三个是聚合还是行值
-        if third in ("sum", "avg", "mean", "max", "min", "count"):
-            agg = third
-            row_val = None
-        else:
-            row_val = third
-            agg = parts[3] if len(parts) > 3 else None
-    else:
-        return ""
 
-    if block not in pivot_data:
+    df = _lookup_block(pivot_data, block)
+    if df is None:
         return ""
-
-    df = pivot_data[block]
 
     # 特殊列名：行数
     if col == "行数":
@@ -367,11 +427,10 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
         if not target_block:
             continue
 
-        if target_block not in pivot_data:
+        df = _lookup_block(pivot_data, target_block)
+        if df is None:
             print(f"    [警告] 图表数据区块 '{target_block}' 未在透视结果中找到")
             continue
-
-        df = pivot_data[target_block]
         if df.empty:
             continue
 
@@ -580,11 +639,10 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
         if not target_block:
             continue
 
-        if target_block not in pivot_data:
+        df = _lookup_block(pivot_data, target_block)
+        if df is None:
             print(f"    [警告] 表格数据区块 '{target_block}' 未在透视结果中找到")
             continue
-
-        df = pivot_data[target_block]
         if df.empty:
             continue
 

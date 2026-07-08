@@ -1116,6 +1116,80 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页5 图表引用区块1失败{RESET}")
 
+        # ---------- 页6: Sheet名.区块名 精确查找（v2.18.8 核心验证） ----------
+        if len(prs.slides) >= 6:
+            slide6 = prs.slides[5]
+            slide6_text = ""
+            for shape in slide6.shapes:
+                if shape.has_text_frame:
+                    slide6_text += shape.text_frame.text + "\n"
+
+            # 验证6-1: 页6 文本占位符全部替换（不应有 {{ 残留）
+            page6_no_placeholder = "{{" not in slide6_text
+            checks.append(("页6 文本占位符已替换", page6_no_placeholder))
+            if page6_no_placeholder:
+                print(f"  {GREEN}✓ 页6 文本占位符已替换{RESET}")
+            else:
+                print(f"  {RED}✗ 页6 存在未替换的占位符{RESET}")
+
+            # 验证6-2: 精确查找数据正确（按地区汇总.简单分组求和.华东=4800）
+            block6_ok = "4800" in slide6_text
+            checks.append(("页6 精确查找数据正确(4800)", block6_ok))
+            if block6_ok:
+                print(f"  {GREEN}✓ 页6 精确查找数据正确（按地区汇总.简单分组求和 华东=4800）{RESET}")
+            else:
+                print(f"  {RED}✗ 页6 精确查找数据不正确{RESET}")
+
+            # 验证6-3: 表格引用成功（表头应为 简单分组求和 的列：地区/总销售额/总销量）
+            table6_found = False
+            table6_ok = False
+            for shape in slide6.shapes:
+                if shape.has_table:
+                    table6_found = True
+                    table = shape.table
+                    header_cells = [table.cell(0, c).text.strip() for c in range(len(table.columns))]
+                    # 简单分组求和区块表头: 地区/总销售额/总销量
+                    table6_ok = "总销售额" in header_cells or "总销量" in header_cells
+                    break
+            checks.append(("页6 表格存在", table6_found))
+            checks.append(("页6 表格精确查找成功", table6_ok))
+            if table6_found:
+                print(f"  {GREEN}✓ 页6 表格存在{RESET}")
+            else:
+                print(f"  {RED}✗ 页6 未找到表格{RESET}")
+            if table6_ok:
+                print(f"  {GREEN}✓ 页6 表格精确查找成功（表头含总销售额/总销量）{RESET}")
+            else:
+                print(f"  {RED}✗ 页6 表格精确查找失败{RESET}")
+
+            # 验证6-4: 图表引用成功（分类应含"华东"等地区）
+            chart6_found = False
+            chart6_ok = False
+            for shape in slide6.shapes:
+                if shape.has_chart:
+                    chart6_found = True
+                    chart = shape.chart
+                    try:
+                        if chart.plots:
+                            plot = chart.plots[0]
+                            categories = list(plot.categories)
+                            cat_str = [str(c) for c in categories]
+                            if any("华东" in c for c in cat_str):
+                                chart6_ok = True
+                    except Exception:
+                        pass
+                    break
+            checks.append(("页6 图表存在", chart6_found))
+            checks.append(("页6 图表精确查找成功", chart6_ok))
+            if chart6_found:
+                print(f"  {GREEN}✓ 页6 图表存在{RESET}")
+            else:
+                print(f"  {RED}✗ 页6 未找到图表{RESET}")
+            if chart6_ok:
+                print(f"  {GREEN}✓ 页6 图表精确查找成功（分类含华东）{RESET}")
+            else:
+                print(f"  {RED}✗ 页6 图表精确查找失败{RESET}")
+
         # ---------- 整体文件检查 ----------
         # 验证点N: 输出文件大小合理（>0）
         file_size = os.path.getsize(output_path)
@@ -1145,12 +1219,14 @@ def verify_template_mode(pivot_excel_path):
 
 
 def _create_test_template(template_path):
-    """创建带占位符的测试 PPT 模板（4页，覆盖文本/图表/表格/图片四类替换）
+    """创建带占位符的测试 PPT 模板（6页，覆盖文本/图表/表格/图片四类替换）
 
     页1 - 文本占位符 + 图表占位符（原基础场景）
     页2 - 表格整体替换 + 表格行数扩展
     页3 - 图片替换（绝对路径方式）
     页4 - 多区块图表 + 备注声明默认区块
+    页5 - 同 sheet 内多区块按区块名独立引用
+    页6 - Sheet名.区块名 精确查找（区分不同 sheet 中的同名区块）
     """
     from pptx import Presentation
     from pptx.util import Inches, Pt, Emu
@@ -1363,6 +1439,53 @@ def _create_test_template(template_path):
 
     try:
         slide5.notes_slide.notes_text_frame.text = "# 多区块引用测试\n"
+    except Exception:
+        pass
+
+    # ========== 页6: Sheet名.区块名 精确查找（v2.18.8 核心验证） ==========
+    # 透视结果中 "按地区汇总" sheet 内有 "简单分组求和" 区块
+    # 当不同 sheet 出现同名区块时，单写区块名无法区分，必须用 "Sheet名.区块名" 精确指定
+    slide6 = prs.slides.add_slide(blank_layout)
+
+    title6 = slide6.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
+    title6.text_frame.text = "Sheet名.区块名 精确查找测试"
+    for para in title6.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(24)
+            run.font.bold = True
+
+    # 文本占位符：Sheet名.区块名.列名.行值
+    text6_box = slide6.shapes.add_textbox(Inches(0.5), Inches(1.2), Inches(8), Inches(0.5))
+    text6_box.text_frame.text = "精确查找 华东总销售额: {{按地区汇总.简单分组求和.总销售额.华东}}"
+
+    # 表格占位符：{{表格:Sheet名.区块名}}
+    table_shape6 = slide6.shapes.add_table(2, 2, Inches(0.5), Inches(2.0), Inches(8), Inches(3))
+    table6 = table_shape6.table
+    table6.cell(0, 0).text = "占位表头1"
+    table6.cell(0, 1).text = "占位表头2"
+    table6.cell(1, 0).text = "占位数据1"
+    table6.cell(1, 1).text = "占位数据2"
+    table_shape6.name = "{{表格:按地区汇总.简单分组求和}}"
+
+    # 图表占位符：{{图表:Sheet名.区块名}}
+    chart_data6 = CategoryChartData()
+    chart_data6.categories = ["A", "B", "C"]
+    chart_data6.add_series("占位", (1, 2, 3))
+    chart6_shape = slide6.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED,
+        Inches(9), Inches(1.2), Inches(4), Inches(4),
+        chart_data6
+    )
+    chart6 = chart6_shape.chart
+    try:
+        chart6.has_title = True
+        chart6.chart_title.text_frame.text = "精确查找图表"
+    except Exception:
+        pass
+    chart6_shape.name = "{{图表:按地区汇总.简单分组求和}}"
+
+    try:
+        slide6.notes_slide.notes_text_frame.text = "# Sheet名.区块名 精确查找测试\n"
     except Exception:
         pass
 
