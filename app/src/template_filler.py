@@ -326,6 +326,25 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
             _write_chart_data(chart, df)
             replace_count += 1
             print(f"    [OK] 图表数据替换: {target_block} ({df.shape[0]}行 x {df.shape[1]}列)")
+            # 清除图表标题中的占位符（替换为区块名，避免标题残留 {{图表:xxx}}）
+            try:
+                if chart.has_title and chart.chart_title.has_text_frame:
+                    tf = chart.chart_title.text_frame
+                    for para in tf.paragraphs:
+                        full_text = para.text
+                        new_text = _CHART_PLACEHOLDER_RE.sub(target_block, full_text)
+                        if new_text != full_text and para.runs:
+                            para.runs[0].text = new_text
+                            for run in para.runs[1:]:
+                                run.text = ""
+            except Exception:
+                pass
+            # 清除形状名称中的占位符
+            try:
+                if shape.name and _CHART_PLACEHOLDER_RE.search(shape.name):
+                    shape.name = _CHART_PLACEHOLDER_RE.sub(target_block, shape.name)
+            except Exception:
+                pass
         except Exception as e:
             print(f"    [警告] 图表数据替换失败 [{target_block}]: {e}")
     return replace_count
@@ -561,6 +580,12 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
 
             replace_count += 1
             print(f"    [OK] 表格数据替换: {target_block} ({len(headers)}列 x {len(data_rows)}行)")
+            # 清除表格形状名称/替代文字中的占位符
+            try:
+                if shape.name and _TABLE_PLACEHOLDER_RE.search(shape.name):
+                    shape.name = _TABLE_PLACEHOLDER_RE.sub(target_block, shape.name)
+            except Exception:
+                pass
         except Exception as e:
             print(f"    [警告] 表格数据替换失败 [{target_block}]: {e}")
     return replace_count
