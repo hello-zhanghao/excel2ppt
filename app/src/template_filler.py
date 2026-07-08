@@ -54,41 +54,89 @@ _TABLE_PLACEHOLDER_RE = re.compile(r"\{\{表格[:：]([^{}]+)\}\}")
 
 
 def load_pivot_results(pivot_data_path: str) -> Dict[str, pd.DataFrame]:
-    """加载透视结果 xlsx，返回 {sheet_name: DataFrame}。
-    首行作为表头，区块标题行（单独一列的标题）会被跳过。
+    """加载透视结果 xlsx，返回 {区块名或sheet名: DataFrame}。
+
+    一个 sheet 中可能包含多个区块（以区块标题行分隔），每个区块独立解析。
+    - 区块标题行：只有第1列有值（区块名），其余列为空
+    - 区块标题行的下一行是表头，再下面是数据行
+
+    索引优先级：
+    1. 区块名（精确匹配，跨所有 sheet 查找）
+    2. sheet 名（指向该 sheet 的第一个区块，兼容旧用法）
     """
     if not os.path.exists(pivot_data_path):
         raise FileNotFoundError(f"透视结果文件不存在: {pivot_data_path}")
 
     wb = openpyxl.load_workbook(pivot_data_path, data_only=True)
     result = {}
+    # 记录每个 sheet 的第一个区块名，用于 sheet 名别名
+    sheet_first_block = {}
+
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
             continue
 
-        # 透视结果每页第一行可能是区块标题（单列有值），第二行才是表头
-        # 判断逻辑：如果第一行只有1个非空单元格，视为标题行
-        first_row = rows[0]
-        non_empty_count = sum(1 for c in first_row if c is not None and str(c).strip())
-        if non_empty_count == 1 and len(rows) > 1:
-            header_row_idx = 1
-        else:
-            header_row_idx = 0
+        # 扫描所有行，按区块标题行分段
+        # 区块标题行：只有第1列有值，其余列为空
+        block_starts = []  # [(title_row_idx, block_name), ...]
+        for i, row in enumerate(rows):
+            non_empty = [c for c in row if c is not None and str(c).strip()]
+            if len(non_empty) == 1:
+                # 只有第1列有值 → 区块标题行
+                block_name = str(rows[i][0]).strip()
+                block_starts.append((i, block_name))
 
-        if header_row_idx >= len(rows):
-            continue
+        if not block_starts:
+            # 没有区块标题行：整个 sheet 当作一个区块，sheet 名作为区块名
+            block_starts.append((0, sheet_name))
 
-        headers = [str(c).strip() if c is not None else f"col_{i}" for i, c in enumerate(rows[header_row_idx])]
-        data_rows = rows[header_row_idx + 1:]
-        # 过滤空行
-        data_rows = [r for r in data_rows if any(c is not None and str(c).strip() for c in r)]
-        if data_rows:
+        first_block_in_sheet = True
+        for idx, (title_row_idx, block_name) in enumerate(block_starts):
+            # 区块标题行存在时，表头在下一行；否则表头在当前行
+            if block_name == sheet_name and not _is_title_row(rows, title_row_idx):
+                header_row_idx = title_row_idx
+            else:
+                header_row_idx = title_row_idx + 1
+
+            # 数据行范围：表头行+1 到 下一个区块标题行-1（或 sheet 末尾）
+            data_end = block_starts[idx + 1][0] if idx + 1 < len(block_starts) else len(rows)
+            data_rows = rows[header_row_idx + 1:data_end]
+            # 过滤空行
+            data_rows = [r for r in data_rows if any(c is not None and str(c).strip() for c in r)]
+            if not data_rows:
+                continue
+            if header_row_idx >= len(rows):
+                continue
+
+            headers = [str(c).strip() if c is not None else f"col_{i}" for i, c in enumerate(rows[header_row_idx])]
             df = pd.DataFrame(data_rows, columns=headers)
-            result[sheet_name] = df
+
+            # 用区块名作为 key（后出现的同名区块覆盖先出现的，与 pivot 输出语义一致）
+            result[block_name] = df
+
+            # 记录每个 sheet 的第一个区块名
+            if first_block_in_sheet:
+                sheet_first_block[sheet_name] = block_name
+                first_block_in_sheet = False
+
+    # 用 sheet 名作为别名，指向该 sheet 的第一个区块（兼容旧用法）
+    for sheet_name, first_block in sheet_first_block.items():
+        if sheet_name not in result:
+            result[sheet_name] = result.get(first_block)
+
     wb.close()
     return result
+
+
+def _is_title_row(rows, row_idx):
+    """判断指定行是否是区块标题行（只有第1列有值）"""
+    if row_idx >= len(rows):
+        return False
+    row = rows[row_idx]
+    non_empty = [c for c in row if c is not None and str(c).strip()]
+    return len(non_empty) == 1
 
 
 def _parse_value(value, default=""):
