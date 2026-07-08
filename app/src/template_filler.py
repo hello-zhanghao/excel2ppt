@@ -441,10 +441,69 @@ def _do_replace_picture(slide, old_shape, image_path: str):
     slide.shapes.add_picture(image_path, left, top, width, height)
 
 
+def _expand_table_columns(table, target_col_count: int):
+    """给表格添加列到目标列数，复制最后一列的样式"""
+    current = len(table.columns)
+    if target_col_count <= current:
+        return
+    ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    tbl = table._tbl
+    for row_idx, tr in enumerate(tbl.findall(f"{{{ns}}}tr")):
+        # 取该行最后一格做模板
+        last_tc = tr.findall(f"{{{ns}}}tc")[-1]
+        for _ in range(target_col_count - current):
+            new_tc = last_tc.__deepcopy__(True)
+            # 清空新格的文本段落
+            for p in new_tc.findall(f".//{{{ns}}}p"):
+                for r in p.findall(f"{{{ns}}}r"):
+                    r.text = ""
+            tr.append(new_tc)
+    # 刷新 table 的网格列定义
+    grid = tbl.find(f"{{{ns}}}tblGrid")
+    if grid is not None:
+        last_gc = grid.findall(f"{{{ns}}}gridCol")[-1]
+        for _ in range(target_col_count - current):
+            grid.append(last_gc.__deepcopy__(True))
+
+
+def _expand_table_rows(table, target_row_count: int):
+    """给表格添加行到目标行数（含表头），复制最后一行的样式"""
+    current = len(table.rows)
+    if target_row_count <= current:
+        return
+    ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    tbl = table._tbl
+    tr_list = tbl.findall(f"{{{ns}}}tr")
+    last_tr = tr_list[-1]
+    for _ in range(target_row_count - current):
+        new_tr = last_tr.__deepcopy__(True)
+        # 清空新行所有单元格的文本
+        for tc in new_tr.findall(f"{{{ns}}}tc"):
+            for p in tc.findall(f".//{{{ns}}}p"):
+                for r in p.findall(f"{{{ns}}}r"):
+                    r.text = ""
+        tbl.append(new_tr)
+
+
+def _clear_table_row(table, row_idx: int):
+    """清空表格某行的所有单元格文本"""
+    ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    tbl = table._tbl
+    tr_list = tbl.findall(f"{{{ns}}}tr")
+    if row_idx >= len(tr_list):
+        return
+    tr = tr_list[row_idx]
+    for tc in tr.findall(f"{{{ns}}}tc"):
+        for p in tc.findall(f".//{{{ns}}}p"):
+            for r in p.findall(f"{{{ns}}}r"):
+                r.text = ""
+
+
 def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
                         default_block: Optional[str]) -> int:
     """替换幻灯片中的表格数据（整表替换），返回替换次数。
     通过表格形状的 name 或 alternative_text 中的 {{表格:区块名}} 匹配。
+    自动扩展表格行列以容纳完整数据，数据少于模板时清空多余行。
     """
     replace_count = 0
     for shape in list(slide.shapes):
@@ -474,25 +533,34 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
         headers = list(df.columns)
         data_rows = df.values.tolist()
 
-        try:
-            # 先填表头（第一行），再填数据行
-            for col_idx, header in enumerate(headers):
-                if col_idx < len(table.columns):
-                    cell = table.cell(0, col_idx)
-                    cell.text = str(header)
+        need_rows = 1 + len(data_rows)  # 表头 + 数据行
+        need_cols = len(headers)
 
+        try:
+            # 自动扩展
+            if need_cols > len(table.columns):
+                _expand_table_columns(table, need_cols)
+            if need_rows > len(table.rows):
+                _expand_table_rows(table, need_rows)
+
+            # 填表头（第一行）
+            for col_idx, header in enumerate(headers):
+                cell = table.cell(0, col_idx)
+                cell.text = str(header)
+
+            # 填数据行
             for row_idx, row_data in enumerate(data_rows):
                 table_row = row_idx + 1
-                if table_row >= len(table.rows):
-                    break
                 for col_idx, value in enumerate(row_data):
-                    if col_idx < len(table.columns):
-                        cell = table.cell(table_row, col_idx)
-                        cell.text = _parse_value(value)
+                    cell = table.cell(table_row, col_idx)
+                    cell.text = _parse_value(value)
+
+            # 数据少于模板行数时，清空多余行
+            for extra_row in range(need_rows, len(table.rows)):
+                _clear_table_row(table, extra_row)
 
             replace_count += 1
-            filled = min(len(data_rows), len(table.rows) - 1)
-            print(f"    [OK] 表格数据替换: {target_block} ({len(headers)}列 x {filled}行)")
+            print(f"    [OK] 表格数据替换: {target_block} ({len(headers)}列 x {len(data_rows)}行)")
         except Exception as e:
             print(f"    [警告] 表格数据替换失败 [{target_block}]: {e}")
     return replace_count
