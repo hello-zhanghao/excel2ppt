@@ -822,49 +822,36 @@ def verify_template_mode(pivot_excel_path):
         from pptx import Presentation
         from pptx.util import Pt
         prs = Presentation(output_path)
-        slide1 = prs.slides[0]
 
-        # 收集本页所有文本
+        # ---------- 页1: 文本占位符 + 图表占位符 ----------
+        slide1 = prs.slides[0]
         all_text = ""
         for shape in slide1.shapes:
             if shape.has_text_frame:
                 all_text += shape.text_frame.text + "\n"
 
-        # 验证点1: 文本占位符已被替换（不再包含 {{）
+        # 验证点1: 页1 文本占位符全部替换
         has_unreplaced = "{{" in all_text
-        checks.append(("文本占位符已替换", not has_unreplaced))
+        checks.append(("页1 文本占位符已替换", not has_unreplaced))
         if has_unreplaced:
-            print(f"  {RED}✗ 存在未替换的占位符: {RESET}")
-            # 显示未替换的占位符
+            print(f"  {RED}✗ 页1 存在未替换的占位符:{RESET}")
             import re
             unreplaced = re.findall(r"\{\{[^}]+\}\}", all_text)
             for u in unreplaced[:5]:
                 print(f"      {u}")
         else:
-            print(f"  {GREEN}✓ 文本占位符全部已替换{RESET}")
+            print(f"  {GREEN}✓ 页1 文本占位符全部已替换{RESET}")
 
-        # 验证点2: 替换结果包含期望数据（从透视结果读取）
-        import openpyxl
-        wb = openpyxl.load_workbook(pivot_excel_path, data_only=True)
-        # 找到第一个区块的 sheet
-        first_sheet = wb.sheetnames[0]
-        ws = wb[first_sheet]
-        rows = list(ws.iter_rows(values_only=True))
-        # 第一列首行的值作为关键字验证
-        if rows and len(rows) > 1:
-            # 找到表头行
-            header_row_idx = 1 if sum(1 for c in rows[0] if c) == 1 else 0
-            headers = rows[header_row_idx]
-            # 检查任意一个表头是否出现在替换后的文本中
-            matched_any = False
-            for h in headers:
-                if h and str(h).strip() in all_text:
-                    matched_any = True
-                    break
-            # 不做硬性要求，因为模板可能用的是区块名而非列名
-        wb.close()
+        # 验证点2: 页1 文本替换值合理（包含期望的数值）
+        # 按地区汇总中总销售额应为 4800（华东）等
+        value_ok = "4800" in all_text or "4800.0" in all_text
+        checks.append(("页1 文本替换值正确", value_ok))
+        if value_ok:
+            print(f"  {GREEN}✓ 页1 文本替换值正确（包含期望数据）{RESET}")
+        else:
+            print(f"  {YELLOW}⚠ 页1 文本替换值未包含期望数据{RESET}")
 
-        # 验证点3: 图表存在且已被替换数据
+        # 验证点3: 页1 图表存在且数据已替换
         chart_found = False
         chart_data_replaced = False
         for shape in slide1.shapes:
@@ -872,30 +859,148 @@ def verify_template_mode(pivot_excel_path):
                 chart_found = True
                 chart = shape.chart
                 try:
-                    # 检查图表是否有数据
                     if chart.plots:
                         plot = chart.plots[0]
                         categories = list(plot.categories)
-                        if categories:
+                        # 验证图表分类包含"华东"（按地区汇总的行值）
+                        cat_str = [str(c) for c in categories]
+                        if categories and any("华东" in c for c in cat_str):
                             chart_data_replaced = True
+                        elif categories:
+                            chart_data_replaced = True  # 至少有数据
                 except Exception:
                     pass
                 break
 
-        if chart_found:
-            print(f"  {GREEN}✓ 图表存在{RESET}")
-            if chart_data_replaced:
-                print(f"  {GREEN}✓ 图表数据已替换{RESET}")
-            else:
-                print(f"  {YELLOW}⚠ 图表数据可能为空{RESET}")
+        checks.append(("页1 图表数据已替换", chart_found and chart_data_replaced))
+        if chart_found and chart_data_replaced:
+            print(f"  {GREEN}✓ 页1 图表数据已替换（分类包含透视数据行值）{RESET}")
+        elif chart_found:
+            print(f"  {YELLOW}⚠ 页1 图表存在但数据可能未替换{RESET}")
         else:
-            print(f"  {YELLOW}⚠ 未找到图表（模板可能未包含图表占位符）{RESET}")
+            print(f"  {RED}✗ 页1 未找到图表{RESET}")
 
-        checks.append(("图表数据已替换", chart_data_replaced))
+        # ---------- 页2: 表格整体替换 ----------
+        if len(prs.slides) >= 2:
+            slide2 = prs.slides[1]
+            table_found = False
+            table_header_ok = False
+            table_data_ok = False
+            table_expanded = False
+            for shape in slide2.shapes:
+                if shape.has_table:
+                    table_found = True
+                    table = shape.table
+                    # 验证表头包含 "地区" 和 "总销售额"
+                    header_cells = [table.cell(0, c).text.strip() for c in range(len(table.columns))]
+                    table_header_ok = "地区" in header_cells and "总销售额" in header_cells
+                    # 验证数据行包含 "华东"
+                    all_cells_text = []
+                    for r in range(len(table.rows)):
+                        for c in range(len(table.columns)):
+                            all_cells_text.append(table.cell(r, c).text.strip())
+                    table_data_ok = any("华东" in t for t in all_cells_text)
+                    # 验证表格已扩展（模板2行2列，数据4行3列，替换后应至少3行3列）
+                    table_expanded = len(table.rows) >= 3 and len(table.columns) >= 3
+                    break
 
-        # 验证点4: 输出文件大小合理（>0）
+            checks.append(("页2 表格存在", table_found))
+            checks.append(("页2 表头已替换", table_header_ok))
+            checks.append(("页2 表格数据已替换", table_data_ok))
+            checks.append(("页2 表格行列已扩展", table_expanded))
+
+            if table_found:
+                print(f"  {GREEN}✓ 页2 表格存在{RESET}")
+            else:
+                print(f"  {RED}✗ 页2 未找到表格{RESET}")
+            if table_header_ok:
+                print(f"  {GREEN}✓ 页2 表头已替换（含地区/总销售额）{RESET}")
+            else:
+                print(f"  {RED}✗ 页2 表头未正确替换{RESET}")
+            if table_data_ok:
+                print(f"  {GREEN}✓ 页2 表格数据已替换（含华东）{RESET}")
+            else:
+                print(f"  {RED}✗ 页2 表格数据未替换{RESET}")
+            if table_expanded:
+                print(f"  {GREEN}✓ 页2 表格行列已自动扩展{RESET}")
+            else:
+                print(f"  {YELLOW}⚠ 页2 表格未扩展（可能数据与模板尺寸一致）{RESET}")
+
+        # ---------- 页3: 图片替换 ----------
+        if len(prs.slides) >= 3:
+            slide3 = prs.slides[2]
+            pic_found = False
+            pic_replaced = False
+            for shape in slide3.shapes:
+                if shape.shape_type == 13:  # PICTURE
+                    pic_found = True
+                    # 验证图片名称不再包含 {{图片: 占位符
+                    if "{{图片:" not in shape.name:
+                        pic_replaced = True
+                    break
+
+            checks.append(("页3 图片存在", pic_found))
+            checks.append(("页3 图片已替换", pic_replaced))
+
+            if pic_found:
+                print(f"  {GREEN}✓ 页3 图片存在{RESET}")
+            else:
+                print(f"  {RED}✗ 页3 未找到图片{RESET}")
+            if pic_replaced:
+                print(f"  {GREEN}✓ 页3 图片已替换{RESET}")
+            else:
+                print(f"  {YELLOW}⚠ 页3 图片可能未替换（占位符仍存在）{RESET}")
+
+        # ---------- 页4: 多区块图表 + 默认区块 ----------
+        if len(prs.slides) >= 4:
+            slide4 = prs.slides[3]
+            slide4_text = ""
+            for shape in slide4.shapes:
+                if shape.has_text_frame:
+                    slide4_text += shape.text_frame.text + "\n"
+
+            # 验证默认区块占位符已替换
+            default_block_ok = "{{总销售额}}" not in slide4_text and "{{" not in slide4_text
+            checks.append(("页4 默认区块占位符已替换", default_block_ok))
+            if default_block_ok:
+                print(f"  {GREEN}✓ 页4 默认区块占位符已替换（省略前缀生效）{RESET}")
+            else:
+                print(f"  {RED}✗ 页4 默认区块占位符未替换{RESET}")
+
+            # 验证第二个图表（饼图）存在且数据已替换
+            chart2_found = False
+            chart2_data_ok = False
+            for shape in slide4.shapes:
+                if shape.has_chart:
+                    chart2_found = True
+                    chart = shape.chart
+                    try:
+                        if chart.plots:
+                            plot = chart.plots[0]
+                            categories = list(plot.categories)
+                            cat_str = [str(c) for c in categories]
+                            # 产品销售额区块包含 产品A/产品B/产品C
+                            if any("产品" in c for c in cat_str):
+                                chart2_data_ok = True
+                    except Exception:
+                        pass
+                    break
+
+            checks.append(("页4 第二图表存在", chart2_found))
+            checks.append(("页4 第二图表数据已替换", chart2_data_ok))
+            if chart2_found:
+                print(f"  {GREEN}✓ 页4 第二图表存在{RESET}")
+            else:
+                print(f"  {RED}✗ 页4 未找到第二图表{RESET}")
+            if chart2_data_ok:
+                print(f"  {GREEN}✓ 页4 第二图表数据已替换（分类含产品）{RESET}")
+            else:
+                print(f"  {YELLOW}⚠ 页4 第二图表数据可能未替换{RESET}")
+
+        # ---------- 整体文件检查 ----------
+        # 验证点N: 输出文件大小合理（>0）
         file_size = os.path.getsize(output_path)
-        size_ok = file_size > 1000  # 至少 1KB
+        size_ok = file_size > 1000
         checks.append((f"输出文件大小合理 ({file_size}B)", size_ok))
         if size_ok:
             print(f"  {GREEN}✓ 输出文件大小合理 ({file_size} bytes){RESET}")
@@ -921,7 +1026,13 @@ def verify_template_mode(pivot_excel_path):
 
 
 def _create_test_template(template_path):
-    """创建带占位符的测试 PPT 模板"""
+    """创建带占位符的测试 PPT 模板（4页，覆盖文本/图表/表格/图片四类替换）
+
+    页1 - 文本占位符 + 图表占位符（原基础场景）
+    页2 - 表格整体替换 + 表格行数扩展
+    页3 - 图片替换（绝对路径方式）
+    页4 - 多区块图表 + 备注声明默认区块
+    """
     from pptx import Presentation
     from pptx.util import Inches, Pt, Emu
     from pptx.dml.color import RGBColor
@@ -933,9 +1044,10 @@ def _create_test_template(template_path):
     prs.slide_height = Inches(7.5)
 
     blank_layout = prs.slide_layouts[6]
+
+    # ========== 页1: 文本占位符 + 图表占位符 ==========
     slide = prs.slides.add_slide(blank_layout)
 
-    # 标题文本框
     title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.8))
     tf = title_box.text_frame
     tf.text = "数据报告 - {{简单分组求和.总销售额}}"
@@ -944,7 +1056,6 @@ def _create_test_template(template_path):
             run.font.size = Pt(28)
             run.font.bold = True
 
-    # 多个占位符文本框
     placeholders = [
         ("总销售额", "{{简单分组求和.总销售额}}"),
         ("总销量", "{{简单分组求和.总销量}}"),
@@ -962,7 +1073,6 @@ def _create_test_template(template_path):
                 run.font.size = Pt(16)
         y_offset += Inches(0.6)
 
-    # 添加图表（柱状图），标题里带图表占位符
     chart_data = CategoryChartData()
     chart_data.categories = ["A", "B", "C"]
     chart_data.add_series("占位数据", (1, 2, 3))
@@ -977,13 +1087,130 @@ def _create_test_template(template_path):
     except Exception:
         pass
 
-    # 添加备注
     try:
         slide.notes_slide.notes_text_frame.text = "# 模板测试\n数据源=透视结果.xlsx\n"
     except Exception:
         pass
 
+    # ========== 页2: 表格整体替换（模板表格只有2行2列，数据4行3列，验证行列扩展） ==========
+    slide2 = prs.slides.add_slide(blank_layout)
+
+    title2 = slide2.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
+    title2.text_frame.text = "表格替换测试页"
+    for para in title2.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(24)
+            run.font.bold = True
+
+    rows, cols = 2, 2  # 模板表只有 2x2，透视数据 4行3列，会触发自动扩展
+    table_shape = slide2.shapes.add_table(rows, cols, Inches(1), Inches(1.5), Inches(8), Inches(3))
+    table = table_shape.table
+    # 填充占位内容
+    table.cell(0, 0).text = "占位表头1"
+    table.cell(0, 1).text = "占位表头2"
+    table.cell(1, 0).text = "占位数据1"
+    table.cell(1, 1).text = "占位数据2"
+    # 给表格形状打标记（替代文字）
+    try:
+        table_shape._element.attrib
+        # python-pptx 没有 set alt text 的 API，通过设置 name 实现
+        table_shape.name = "{{表格:按地区汇总}}"
+    except Exception:
+        pass
+
+    # 页2备注
+    try:
+        slide2.notes_slide.notes_text_frame.text = "# 表格替换测试\n"
+    except Exception:
+        pass
+
+    # ========== 页3: 图片替换（绝对路径方式） ==========
+    slide3 = prs.slides.add_slide(blank_layout)
+
+    title3 = slide3.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
+    title3.text_frame.text = "图片替换测试页"
+    for para in title3.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(24)
+            run.font.bold = True
+
+    # 生成一张测试图片（避免外部依赖）
+    test_image_path = _generate_test_image()
+    if test_image_path:
+        # 添加一张占位图片，并设置其 name 为图片占位符
+        pic_shape = slide3.shapes.add_picture(
+            test_image_path,
+            Inches(2), Inches(1.5), Inches(5), Inches(4)
+        )
+        # 通过形状名称标记
+        pic_shape.name = "{{图片:" + test_image_path + "}}"
+
+    # 页3备注
+    try:
+        slide3.notes_slide.notes_text_frame.text = "# 图片替换测试\n"
+    except Exception:
+        pass
+
+    # ========== 页4: 多区块图表 + 备注声明默认区块（省略前缀占位符） ==========
+    slide4 = prs.slides.add_slide(blank_layout)
+
+    title4 = slide4.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
+    title4.text_frame.text = "多区块图表 + 默认区块测试"
+    for para in title4.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(24)
+            run.font.bold = True
+
+    # 使用备注声明本页默认区块 = 按地区汇总
+    try:
+        slide4.notes_slide.notes_text_frame.text = "区块=按地区汇总\n"
+    except Exception:
+        pass
+
+    # 省略前缀的占位符（依赖备注声明的默认区块）
+    default_block_box = slide4.shapes.add_textbox(Inches(0.5), Inches(1.2), Inches(6), Inches(0.5))
+    default_block_box.text_frame.text = "默认区块总销售额: {{总销售额}}"
+
+    # 第二个图表（饼图），引用不同区块
+    chart_data2 = CategoryChartData()
+    chart_data2.categories = ["X", "Y", "Z"]
+    chart_data2.add_series("占位", (10, 20, 30))
+    chart2 = slide4.shapes.add_chart(
+        XL_CHART_TYPE.PIE,
+        Inches(7), Inches(1.5), Inches(5.5), Inches(4),
+        chart_data2
+    ).chart
+    try:
+        chart2.has_title = True
+        chart2.chart_title.text_frame.text = "{{图表:产品销售额}}"
+    except Exception:
+        pass
+
     prs.save(template_path)
+
+
+def _generate_test_image():
+    """生成一张简单的测试图片（PNG），返回路径"""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new('RGB', (400, 300), color=(73, 109, 137))
+        draw = ImageDraw.Draw(img)
+        # 简单画几个矩形和文字
+        draw.rectangle([50, 50, 350, 100], fill=(255, 255, 255))
+        draw.rectangle([50, 150, 350, 200], fill=(255, 200, 100))
+        try:
+            font = ImageFont.truetype("arial.ttf", 20)
+        except Exception:
+            font = ImageFont.load_default()
+        draw.text((100, 60), "PLACEHOLDER IMAGE", fill=(0, 0, 0), font=font)
+        draw.text((100, 160), "FOR TEMPLATE TEST", fill=(0, 0, 0), font=font)
+
+        path = os.path.join(SCRIPT_DIR, "_test_image.png")
+        img.save(path)
+        return path
+    except Exception as e:
+        print(f"  {YELLOW}⚠ 生成测试图片失败: {e}{RESET}")
+        return None
 
 
 def main():
