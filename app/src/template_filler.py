@@ -617,6 +617,35 @@ def _clear_table_row(table, row_idx: int):
                 r.text = ""
 
 
+def _set_cell_text_preserve_format(cell, text: str):
+    """替换单元格文本但保留模板原有格式（字体/颜色/对齐/填充）。
+
+    python-pptx 的 cell.text setter 会清空段落重建 run，导致格式丢失。
+    本函数保留第一个段落的第一个 run，只改其文本；多余 run 清空文本。
+    """
+    tf = cell.text_frame
+    paragraphs = tf.paragraphs
+    if not paragraphs:
+        cell.text = text
+        return
+    # 用第一个段落承载文本
+    first_para = paragraphs[0]
+    runs = first_para.runs
+    if runs:
+        # 第一个 run 写入新文本
+        runs[0].text = text
+        # 其余 run 清空（避免拼接出旧文本）
+        for r in runs[1:]:
+            r.text = ""
+    else:
+        # 段落没有 run（空段落），直接用 add_run（会继承段落默认格式）
+        first_para.add_run().text = text
+    # 多余段落清空文本（保留段落本身的格式属性）
+    for p in paragraphs[1:]:
+        for r in p.runs:
+            r.text = ""
+
+
 def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
                         default_block: Optional[str]) -> int:
     """替换幻灯片中的表格数据（整表替换），返回替换次数。
@@ -660,17 +689,17 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
             if need_rows > len(table.rows):
                 _expand_table_rows(table, need_rows)
 
-            # 填表头（第一行）
+            # 填表头（第一行）——保留模板单元格格式（字体/颜色/对齐/填充）
             for col_idx, header in enumerate(headers):
                 cell = table.cell(0, col_idx)
-                cell.text = str(header)
+                _set_cell_text_preserve_format(cell, str(header))
 
             # 填数据行
             for row_idx, row_data in enumerate(data_rows):
                 table_row = row_idx + 1
                 for col_idx, value in enumerate(row_data):
                     cell = table.cell(table_row, col_idx)
-                    cell.text = _parse_value(value)
+                    _set_cell_text_preserve_format(cell, _parse_value(value))
 
             # 数据少于模板行数时，清空多余行
             for extra_row in range(need_rows, len(table.rows)):
