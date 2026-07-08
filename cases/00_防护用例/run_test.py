@@ -1191,6 +1191,63 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页6 图表精确查找失败{RESET}")
 
+        # ---------- 页7: 选列替换（v2.18.11 核心验证） ----------
+        if len(prs.slides) >= 7:
+            slide7 = prs.slides[6]
+
+            # 验证7-1: 表格存在
+            table7_found = any(s.has_table for s in slide7.shapes)
+            checks.append(("页7 表格存在", table7_found))
+            if table7_found:
+                print(f"  {GREEN}✓ 页7 表格存在{RESET}")
+            else:
+                print(f"  {RED}✗ 页7 未找到表格{RESET}")
+
+            # 验证7-2: 表格只含选定列（地区+总销售额，不含总销量）
+            table7_cols_ok = False
+            if table7_found:
+                for s in slide7.shapes:
+                    if s.has_table:
+                        t = s.table
+                        headers7 = [t.cell(0, c).text_frame.text for c in range(len(t.columns))]
+                        has_total_sales = any("总销售额" in h for h in headers7)
+                        no_total_volume = all("总销量" not in h for h in headers7)
+                        table7_cols_ok = has_total_sales and no_total_volume and len(headers7) == 2
+                        break
+            checks.append(("页7 表格只含选定列", table7_cols_ok))
+            if table7_cols_ok:
+                print(f"  {GREEN}✓ 页7 表格只含选定列（地区+总销售额，排除总销量）{RESET}")
+            else:
+                print(f"  {RED}✗ 页7 表格选列失败{RESET}")
+
+            # 验证7-3: 图表存在
+            chart7_found = any(s.has_chart for s in slide7.shapes)
+            checks.append(("页7 图表存在", chart7_found))
+            if chart7_found:
+                print(f"  {GREEN}✓ 页7 图表存在{RESET}")
+            else:
+                print(f"  {RED}✗ 页7 未找到图表{RESET}")
+
+            # 验证7-4: 图表只有1个系列且名称含"总销量"
+            chart7_series_ok = False
+            if chart7_found:
+                for s in slide7.shapes:
+                    if s.has_chart:
+                        try:
+                            plot = s.chart.plots[0]
+                            series_list = list(plot.series)
+                            if len(series_list) == 1:
+                                name = series_list[0].name if hasattr(series_list[0], "name") else ""
+                                chart7_series_ok = "总销量" in str(name)
+                        except Exception:
+                            pass
+                        break
+            checks.append(("页7 图表只含选定系列", chart7_series_ok))
+            if chart7_series_ok:
+                print(f"  {GREEN}✓ 页7 图表只含选定系列（总销量，单系列）{RESET}")
+            else:
+                print(f"  {RED}✗ 页7 图表选列失败{RESET}")
+
         # ---------- 整体文件检查 ----------
         # 验证点N: 输出文件大小合理（>0）
         file_size = os.path.getsize(output_path)
@@ -1496,6 +1553,50 @@ def _create_test_template(template_path):
 
     try:
         slide6.notes_slide.notes_text_frame.text = "# Sheet名.区块名 精确查找测试\n"
+    except Exception:
+        pass
+
+    # ========== 页7: 选列替换（v2.18.11 核心验证） ==========
+    # 区块 "按地区汇总" 有 地区/总销售额/总销量 三列
+    # 用 {{表格:区块名|列1}} 只填指定列，第一列（地区）自动保留
+    # 用 {{图表:区块名|列1}} 只把指定列作为系列
+    slide7 = prs.slides.add_slide(blank_layout)
+
+    title7 = slide7.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
+    title7.text_frame.text = "选列替换测试"
+    for para in title7.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(24)
+            run.font.bold = True
+
+    # 表格：只选"总销售额"列，结果应是 2列（地区+总销售额），不含总销量
+    table_shape7 = slide7.shapes.add_table(2, 2, Inches(0.5), Inches(2.0), Inches(8), Inches(3))
+    table7 = table_shape7.table
+    table7.cell(0, 0).text = "占位表头1"
+    table7.cell(0, 1).text = "占位表头2"
+    table7.cell(1, 0).text = "占位数据1"
+    table7.cell(1, 1).text = "占位数据2"
+    table_shape7.name = "{{表格:按地区汇总|总销售额}}"
+
+    # 图表：只选"总销量"列，结果应只有1个系列（总销量）
+    chart_data7 = CategoryChartData()
+    chart_data7.categories = ["A", "B", "C"]
+    chart_data7.add_series("占位", (1, 2, 3))
+    chart7_shape = slide7.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED,
+        Inches(9), Inches(1.2), Inches(4), Inches(4),
+        chart_data7
+    )
+    chart7 = chart7_shape.chart
+    try:
+        chart7.has_title = True
+        chart7.chart_title.text_frame.text = "选列图表"
+    except Exception:
+        pass
+    chart7_shape.name = "{{图表:按地区汇总|总销量}}"
+
+    try:
+        slide7.notes_slide.notes_text_frame.text = "# 选列替换测试\n"
     except Exception:
         pass
 

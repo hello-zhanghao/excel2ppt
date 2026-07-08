@@ -22,6 +22,7 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
     图表占位符（在图表形状名称/替代文字中）：
         {{图表:区块名}}              用该区块数据替换图表数据源
         {{图表:Sheet名.区块名}}      精确指定 sheet 内区块
+        {{图表:区块名|列1,列2}}      只使用指定列（第一列自动作为X轴类别）
 
     图片占位符（在图片替代文字/名称中，或在文本框中）：
         {{图片:文件路径}}            替换为指定图片（绝对路径或相对模板目录）
@@ -30,6 +31,7 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
     表格占位符（在表格替代文字/名称中）：
         {{表格:区块名}}              用该区块数据整表替换（保留模板表格样式）
         {{表格:Sheet名.区块名}}      精确指定 sheet 内区块
+        {{表格:区块名|列1,列2}}      只填指定列（第一列自动保留）
 
     聚合后缀（可选）：
         {{区块名.列名.sum}}          求和（默认）
@@ -203,6 +205,46 @@ def _lookup_block(pivot_data: Dict[str, pd.DataFrame], block_expr: str) -> Optio
     if block_expr in pivot_data:
         return pivot_data[block_expr]
     return None
+
+
+def _parse_block_and_cols(expr: str) -> Tuple[str, Optional[List[str]]]:
+    """解析占位符参数：'区块名|列1,列2,列3' → ('区块名', ['列1','列2','列3'])
+
+    支持的格式：
+        区块名                → (区块名, None)  全量列
+        区块名|列1,列2        → (区块名, [列1,列2])  指定列
+        Sheet名.区块名|列1    → (Sheet名.区块名, [列1])
+
+    列名会去除首尾空白。无 | 时返回 (expr, None) 保持兼容。
+    """
+    expr = expr.strip()
+    if "|" not in expr:
+        return expr, None
+    block_part, cols_part = expr.split("|", 1)
+    block_part = block_part.strip()
+    cols = [c.strip() for c in cols_part.split(",") if c.strip()]
+    if not cols:
+        return block_part, None
+    return block_part, cols
+
+
+def _filter_df_columns(df: pd.DataFrame, cols: Optional[List[str]]) -> pd.DataFrame:
+    """按指定列筛选 DataFrame，保留第一列（行维度）+ 指定列。
+
+    无 cols 或 cols 为 None 时返回原 df。
+    指定列不存在时跳过，至少保留第一列。
+    """
+    if cols is None or df.empty:
+        return df
+    # 第一列是行维度，必须保留
+    first_col = df.columns[0]
+    keep = [first_col]
+    for c in cols:
+        if c in df.columns and c != first_col:
+            keep.append(c)
+    if not keep:
+        return df
+    return df[keep]
 
 
 def _resolve_text_placeholder(expr: str, pivot_data: Dict[str, pd.DataFrame],
@@ -402,42 +444,47 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
         chart = shape.chart
 
         # 只从形状名称/替代文字读取占位符（不读取图表标题，保留模板原标题）
-        target_block = None
+        target_expr = None
         try:
             for attr in ("name", "alternative_text"):
                 val = (getattr(shape, attr, None) or "")
                 m = _CHART_PLACEHOLDER_RE.search(val)
                 if m:
-                    target_block = m.group(1).strip()
+                    target_expr = m.group(1).strip()
                     break
         except Exception:
             pass
 
         # 兼容：如果形状名称没有占位符，再回退到图表标题读取（旧模板兼容）
-        if not target_block:
+        if not target_expr:
             try:
                 if chart.has_title and chart.chart_title.has_text_frame:
                     title_text = chart.chart_title.text_frame.text
                     m = _CHART_PLACEHOLDER_RE.search(title_text)
                     if m:
-                        target_block = m.group(1).strip()
+                        target_expr = m.group(1).strip()
             except Exception:
                 pass
 
-        if not target_block:
+        if not target_expr:
             continue
 
+        # 解析 "区块名|列1,列2" 语法
+        target_block, cols = _parse_block_and_cols(target_expr)
         df = _lookup_block(pivot_data, target_block)
         if df is None:
             print(f"    [警告] 图表数据区块 '{target_block}' 未在透视结果中找到")
             continue
         if df.empty:
             continue
+        # 按指定列筛选
+        df = _filter_df_columns(df, cols)
 
         try:
             _write_chart_data(chart, df)
             replace_count += 1
-            print(f"    [OK] 图表数据替换: {target_block} ({df.shape[0]}行 x {df.shape[1]}列)")
+            cols_info = f", 仅列: {cols}" if cols else ""
+            print(f"    [OK] 图表数据替换: {target_block} ({df.shape[0]}行 x {df.shape[1]}列{cols_info})")
             # 清除形状名称中的占位符（不动图表标题）
             try:
                 if shape.name and _CHART_PLACEHOLDER_RE.search(shape.name):
@@ -657,23 +704,27 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
         if not shape.has_table:
             continue
 
-        target_block = None
+        target_expr = None
         for attr in ("name", "alternative_text"):
             val = (getattr(shape, attr, None) or "")
             m = _TABLE_PLACEHOLDER_RE.search(val)
             if m:
-                target_block = m.group(1).strip()
+                target_expr = m.group(1).strip()
                 break
 
-        if not target_block:
+        if not target_expr:
             continue
 
+        # 解析 "区块名|列1,列2" 语法
+        target_block, cols = _parse_block_and_cols(target_expr)
         df = _lookup_block(pivot_data, target_block)
         if df is None:
             print(f"    [警告] 表格数据区块 '{target_block}' 未在透视结果中找到")
             continue
         if df.empty:
             continue
+        # 按指定列筛选
+        df = _filter_df_columns(df, cols)
 
         table = shape.table
         headers = list(df.columns)
@@ -706,7 +757,8 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
                 _clear_table_row(table, extra_row)
 
             replace_count += 1
-            print(f"    [OK] 表格数据替换: {target_block} ({len(headers)}列 x {len(data_rows)}行)")
+            cols_info = f", 仅列: {cols}" if cols else ""
+            print(f"    [OK] 表格数据替换: {target_block} ({len(headers)}列 x {len(data_rows)}行{cols_info})")
             # 清除表格形状名称/替代文字中的占位符
             try:
                 if shape.name and _TABLE_PLACEHOLDER_RE.search(shape.name):
