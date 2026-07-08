@@ -1022,6 +1022,100 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页4 第二图表标题未保留{RESET}")
 
+        # ---------- 页5: 同 sheet 多区块引用（v2.18.6 核心验证） ----------
+        if len(prs.slides) >= 5:
+            slide5 = prs.slides[4]
+            slide5_text = ""
+            for shape in slide5.shapes:
+                if shape.has_text_frame:
+                    slide5_text += shape.text_frame.text + "\n"
+
+            # 验证5-1: 页5 文本占位符全部替换（不应有 {{ 残留）
+            page5_no_placeholder = "{{" not in slide5_text
+            checks.append(("页5 文本占位符已替换", page5_no_placeholder))
+            if page5_no_placeholder:
+                print(f"  {GREEN}✓ 页5 文本占位符已替换{RESET}")
+            else:
+                print(f"  {RED}✗ 页5 存在未替换的占位符{RESET}")
+
+            # 验证5-2: 第一个区块数据正确（简单分组求和 - 华东总销售额=4800）
+            block1_ok = "4800" in slide5_text
+            checks.append(("页5 区块1数据正确(4800)", block1_ok))
+            if block1_ok:
+                print(f"  {GREEN}✓ 页5 区块1数据正确（简单分组求和 华东=4800）{RESET}")
+            else:
+                print(f"  {RED}✗ 页5 区块1数据不正确{RESET}")
+
+            # 验证5-3: 第二个区块数据正确（标量消费者 - 华东销量占比，应是小数）
+            # 标量消费者区块的"销量占比"列值应在 0~1 之间（百分比小数）
+            import re as _re
+            # 提取"区块2 销量占比(华东):" 后面的数值
+            m5 = _re.search(r"区块2 销量占比\(华东\):\s*([\d.]+)", slide5_text)
+            block2_ok = False
+            if m5:
+                try:
+                    val = float(m5.group(1))
+                    # 占比值应在 0~1 之间（如 0.03）
+                    block2_ok = 0 < val < 1
+                except Exception:
+                    pass
+            checks.append(("页5 区块2数据正确(0~1小数)", block2_ok))
+            if block2_ok:
+                print(f"  {GREEN}✓ 页5 区块2数据正确（标量消费者 华东销量占比={m5.group(1) if m5 else 'N/A'}）{RESET}")
+            else:
+                print(f"  {RED}✗ 页5 区块2数据不正确（应为0~1小数）{RESET}")
+
+            # 验证5-4: 表格引用第二个区块成功（表头应为 标量消费者 的列）
+            table5_found = False
+            table5_block2_ok = False
+            for shape in slide5.shapes:
+                if shape.has_table:
+                    table5_found = True
+                    table = shape.table
+                    header_cells = [table.cell(0, c).text.strip() for c in range(len(table.columns))]
+                    # 标量消费者区块表头: 地区/地区销量/销量占比
+                    table5_block2_ok = "销量占比" in header_cells or "地区销量" in header_cells
+                    break
+            checks.append(("页5 表格存在", table5_found))
+            checks.append(("页5 表格引用区块2成功", table5_block2_ok))
+            if table5_found:
+                print(f"  {GREEN}✓ 页5 表格存在{RESET}")
+            else:
+                print(f"  {RED}✗ 页5 未找到表格{RESET}")
+            if table5_block2_ok:
+                print(f"  {GREEN}✓ 页5 表格引用区块2成功（表头含销量占比/地区销量）{RESET}")
+            else:
+                print(f"  {RED}✗ 页5 表格引用区块2失败{RESET}")
+
+            # 验证5-5: 图表引用第一个区块成功（分类应含"华东"等地区）
+            chart5_found = False
+            chart5_block1_ok = False
+            for shape in slide5.shapes:
+                if shape.has_chart:
+                    chart5_found = True
+                    chart = shape.chart
+                    try:
+                        if chart.plots:
+                            plot = chart.plots[0]
+                            categories = list(plot.categories)
+                            cat_str = [str(c) for c in categories]
+                            # 简单分组求和区块行值: 华东/华北/华南
+                            if any("华东" in c for c in cat_str):
+                                chart5_block1_ok = True
+                    except Exception:
+                        pass
+                    break
+            checks.append(("页5 图表存在", chart5_found))
+            checks.append(("页5 图表引用区块1成功", chart5_block1_ok))
+            if chart5_found:
+                print(f"  {GREEN}✓ 页5 图表存在{RESET}")
+            else:
+                print(f"  {RED}✗ 页5 未找到图表{RESET}")
+            if chart5_block1_ok:
+                print(f"  {GREEN}✓ 页5 图表引用区块1成功（分类含华东）{RESET}")
+            else:
+                print(f"  {RED}✗ 页5 图表引用区块1失败{RESET}")
+
         # ---------- 整体文件检查 ----------
         # 验证点N: 输出文件大小合理（>0）
         file_size = os.path.getsize(output_path)
@@ -1218,6 +1312,59 @@ def _create_test_template(template_path):
         pass
     # 占位符写在形状名称中
     chart2_shape.name = "{{图表:产品销售额}}"
+
+    # ========== 页5: 同 sheet 内多区块引用（核心验证 v2.18.6） ==========
+    # 透视结果 sheet "按地区汇总" 内有两个区块：
+    #   - "简单分组求和"（3行3列：地区/总销售额/总销量）
+    #   - "标量消费者"（3行3列：地区/地区销量/销量占比）
+    # 之前只读取第一个区块，现在两个都能独立引用
+    slide5 = prs.slides.add_slide(blank_layout)
+
+    title5 = slide5.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
+    title5.text_frame.text = "同 Sheet 多区块引用测试"
+    for para in title5.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(24)
+            run.font.bold = True
+
+    # 第一个区块：简单分组求和（第一个区块）
+    block1_box = slide5.shapes.add_textbox(Inches(0.5), Inches(1.2), Inches(6), Inches(0.5))
+    block1_box.text_frame.text = "区块1 总销售额(华东): {{简单分组求和.总销售额.华东}}"
+
+    # 第二个区块：标量消费者（同 sheet 内第二个区块，之前访问不到）
+    block2_box = slide5.shapes.add_textbox(Inches(0.5), Inches(1.8), Inches(6), Inches(0.5))
+    block2_box.text_frame.text = "区块2 销量占比(华东): {{标量消费者.销量占比.华东}}"
+
+    # 表格引用第二个区块（验证表格也能取到正确区块）
+    table_shape5 = slide5.shapes.add_table(2, 2, Inches(0.5), Inches(2.5), Inches(8), Inches(3))
+    table5 = table_shape5.table
+    table5.cell(0, 0).text = "占位表头1"
+    table5.cell(0, 1).text = "占位表头2"
+    table5.cell(1, 0).text = "占位数据1"
+    table5.cell(1, 1).text = "占位数据2"
+    table_shape5.name = "{{表格:标量消费者}}"
+
+    # 图表引用第一个区块
+    chart_data5 = CategoryChartData()
+    chart_data5.categories = ["A", "B", "C"]
+    chart_data5.add_series("占位", (1, 2, 3))
+    chart5_shape = slide5.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED,
+        Inches(7), Inches(1.2), Inches(5.5), Inches(4),
+        chart_data5
+    )
+    chart5 = chart5_shape.chart
+    try:
+        chart5.has_title = True
+        chart5.chart_title.text_frame.text = "区块1 图表"
+    except Exception:
+        pass
+    chart5_shape.name = "{{图表:简单分组求和}}"
+
+    try:
+        slide5.notes_slide.notes_text_frame.text = "# 多区块引用测试\n"
+    except Exception:
+        pass
 
     prs.save(template_path)
 
