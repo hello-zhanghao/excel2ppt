@@ -99,7 +99,7 @@ def _ensure_output_dir(config_dir):
 
 
 def _auto_find_latest_pivot(search_dir):
-    """递归扫描目录及子目录下所有 xlsx，按文件修改时间取最新。
+    """递归扫描目录及子目录下所有 xlsx，按文件创建时间取最新。
 
     排除：临时文件（~$）、配置文件（含"配置"/"config"）、模板文件（含"模板"/"template"）。
     """
@@ -121,7 +121,7 @@ def _auto_find_latest_pivot(search_dir):
     if not candidates:
         return None
 
-    candidates.sort(key=os.path.getmtime, reverse=True)
+    candidates.sort(key=os.path.getctime, reverse=True)
     return candidates[0]
 
 
@@ -1081,10 +1081,10 @@ def _run_template_mode(template_path, pivot_file=None, output_path=None):
         latest = _auto_find_latest_pivot(template_dir)
         if latest:
             pivot_file = latest
-            mtime = datetime.fromtimestamp(os.path.getmtime(pivot_file))
+            ctime = datetime.fromtimestamp(os.path.getctime(pivot_file))
             print(f"[信息] 自动找到最新数据文件:")
             print(f"       文件名:   {os.path.basename(pivot_file)}")
-            print(f"       修改时间: {mtime.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"       创建时间: {ctime.strftime('%Y-%m-%d %H:%M:%S')}")
             print(f"       路径:     {pivot_file}")
         else:
             print("[错误] 未找到可用数据文件（.xlsx），请用 --pivot 指定")
