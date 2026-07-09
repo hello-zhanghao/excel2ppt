@@ -54,6 +54,13 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
 PPT 备注配置（每页备注区可写）：
     数据源=透视结果.xlsx
     区块=按地区汇总                # 声明本页默认区块，占位符可省略前缀
+    别名.别名名=表达式             # 声明别名，正文用 {{别名名}} 引用，避免长表达式堆在正文
+                                  # 表达式可以是文本占位符表达式或 计算: 表达式
+    示例：
+        别名.华东销售额=按地区汇总.总销售额.华东
+        别名.利润率=计算:利润/销售额|.2%
+        别名.环比=计算:(本月-上月)/上月*100|.2f
+    正文写：华东销售额: {{华东销售额}}，利润率: {{利润率}}
 """
 import os
 import re
@@ -540,9 +547,11 @@ def _parse_slide_notes(notes_text: str) -> Dict[str, str]:
 
 def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
                            default_block: Optional[str],
-                           image_collector: Optional[List[str]] = None) -> int:
+                           image_collector: Optional[List[str]] = None,
+                           alias_map: Optional[Dict[str, str]] = None) -> int:
     """替换文本框中的占位符，返回替换次数。
     如果 image_collector 不为 None，{{图片:...}} 会被收集到列表中并从文本中移除。
+    alias_map: 备注区声明的别名映射（{别名: 表达式}），正文 {{别名}} 会被展开为对应表达式再解析。
     """
     replace_count = 0
     for para in text_frame.paragraphs:
@@ -563,6 +572,17 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
             if expr.startswith("计算:") or expr.startswith("计算："):
                 calc_expr = expr[3:].lstrip(":：").strip()
                 value = _resolve_calc_expr(calc_expr, pivot_data, default_block)
+                if value:
+                    replace_count += 1
+                return value or ""
+            # 别名展开：{{别名}} → 用备注区声明的表达式替换后再解析
+            if alias_map and expr in alias_map:
+                alias_expr = alias_map[expr]
+                if alias_expr.startswith("计算:") or alias_expr.startswith("计算："):
+                    calc_expr = alias_expr[3:].lstrip(":：").strip()
+                    value = _resolve_calc_expr(calc_expr, pivot_data, default_block)
+                else:
+                    value = _resolve_text_placeholder(alias_expr, pivot_data, default_block)
                 if value:
                     replace_count += 1
                 return value or ""
@@ -1000,11 +1020,19 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
 
     for slide_idx, slide in enumerate(prs.slides, 1):
         default_block = None
+        alias_map: Dict[str, str] = {}
         try:
             if slide.has_notes_slide:
                 notes_text = slide.notes_slide.notes_text_frame.text
                 config = _parse_slide_notes(notes_text)
                 default_block = config.get("区块")
+                # 提取别名映射：备注区写 "别名.别名名=表达式"
+                # 正文可用 {{别名名}} 引用，避免长表达式堆在正文
+                for key, value in config.items():
+                    if key.startswith("别名."):
+                        alias_name = key[3:].strip()
+                        if alias_name:
+                            alias_map[alias_name] = value
         except Exception:
             pass
 
@@ -1013,7 +1041,7 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
         for shape in slide.shapes:
             if not shape.has_text_frame:
                 continue
-            text_count += _replace_in_text_frame(shape.text_frame, pivot_data, default_block, image_collector)
+            text_count += _replace_in_text_frame(shape.text_frame, pivot_data, default_block, image_collector, alias_map)
 
         chart_count = _replace_chart_data(slide, pivot_data, default_block)
 

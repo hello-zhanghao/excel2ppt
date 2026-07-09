@@ -1296,6 +1296,22 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页8 默认区块运算不正确{RESET}")
 
+            # 验证8-6: 别名-文本表达式（华东销售额=4800，来自备注 别名.华东销售额=按地区汇总.总销售额.华东）
+            calc8e_ok = "别名-华东销售额: 4800" in slide8_text
+            checks.append(("页8 别名文本表达式(4800)", calc8e_ok))
+            if calc8e_ok:
+                print(f"  {GREEN}✓ 页8 别名文本表达式正确（华东销售额=4800）{RESET}")
+            else:
+                print(f"  {RED}✗ 页8 别名文本表达式不正确{RESET}")
+
+            # 验证8-7: 别名-计算表达式（华东/合计=4800/12750≈37.65%）
+            calc8f_ok = "别名-利润率: 37.65%" in slide8_text
+            checks.append(("页8 别名计算表达式(37.65%)", calc8f_ok))
+            if calc8f_ok:
+                print(f"  {GREEN}✓ 页8 别名计算表达式正确（4800/12750=37.65%）{RESET}")
+            else:
+                print(f"  {RED}✗ 页8 别名计算表达式不正确{RESET}")
+
         # ---------- 整体文件检查 ----------
         # 验证点N: 输出文件大小合理（>0）
         file_size = os.path.getsize(output_path)
@@ -1686,8 +1702,16 @@ def _create_test_template(template_path):
     text8d = slide8.shapes.add_textbox(Inches(0.5), Inches(3.0), Inches(12), Inches(0.5))
     text8d.text_frame.text = "华东销量占比: {{计算:总销量.华东 / 总销量.sum | .2%}}"
 
+    # 文本5：使用别名（备注区声明 别名.华东销售额=按地区汇总.总销售额.华东）
+    text8e = slide8.shapes.add_textbox(Inches(0.5), Inches(3.6), Inches(12), Inches(0.5))
+    text8e.text_frame.text = "别名-华东销售额: {{华东销售额}}"
+
+    # 文本6：使用别名引用计算表达式（备注区声明 别名.利润率=计算:利润/销售额|.2%）
+    text8f = slide8.shapes.add_textbox(Inches(0.5), Inches(4.2), Inches(12), Inches(0.5))
+    text8f.text_frame.text = "别名-利润率: {{利润率}}"
+
     try:
-        slide8.notes_slide.notes_text_frame.text = "# 计算占位符测试\n区块=按地区汇总\n"
+        slide8.notes_slide.notes_text_frame.text = "# 计算占位符测试\n区块=按地区汇总\n别名.华东销售额=按地区汇总.总销售额.华东\n别名.利润率=计算:按地区汇总.总销售额.华东 / 按地区汇总.总销售额.sum | .2%\n"
     except Exception:
         pass
 
