@@ -354,9 +354,11 @@ def _resolve_calc_expr(expr: str, pivot_data: Dict[str, pd.DataFrame],
     # 标识符正则：1段或多段以 . 分隔，第一段必须含字母/汉字/下划线（排除 3.14 这类纯数字）
     # 单段如 "本月"（依赖 default_block），多段如 "区块.列"、"Sheet.区块.列.行值"
     # 字符类含空格以支持含空格的字段名（如 "总 销售额"），匹配后 rstrip 去除运算符前的空格
+    # 每段后可选跟 (...) 形式的括号内容，支持含括号的字段名（如 "销售额(万元)"、"率(%)"）
+    # 括号内不支持嵌套，仅匹配单层 ()
     ident_pattern = re.compile(
         r'[\u4e00-\u9fa5a-zA-Z_][\u4e00-\u9fa5\w ]*'
-        r'(?:\.[\u4e00-\u9fa5\w ]+)*'
+        r'(?:\.[\u4e00-\u9fa5\w ]+(?:\([^)]*\))?)*'
     )
 
     missing_any = False
