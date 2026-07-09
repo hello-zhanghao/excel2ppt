@@ -276,13 +276,15 @@ def _format_calc_result(value, fmt: str) -> str:
     """按格式化字符串格式化计算结果
 
     支持的格式：
-        .0f / .1f / .2f / .3f    固定小数位
-        int / d                  整数
-        .0% / .1% / .2%          百分比（原值×100 后加 %）
-        其它                     当作 Python format spec 用
+        .0f ~ .6f               固定小数位（.0f/.1f/.2f/.3f/.4f/.5f/.6f）
+        int / d                 整数
+        .0% ~ .4%               百分比（值×100 后加 %）
+        .0e ~ .3e / .0E ~ .3E   科学计数法
+        ,.0f ~ ,.3f             千分位小数
+        ,.0% ~ ,.3%             千分位百分比
     """
     fmt = fmt.strip()
-    pct_formats = {".0%", ".1%", ".2%", ".3%"}
+    pct_formats = {".0%", ".1%", ".2%", ".3%", ".4%"}
     if fmt in pct_formats:
         # Python format spec ".2%" 本身会自动乘 100 并加 %
         try:
@@ -330,7 +332,18 @@ def _resolve_calc_expr(expr: str, pivot_data: Dict[str, pd.DataFrame],
         expr_part, fmt_candidate = expr.rsplit("|", 1)
         fmt_candidate = fmt_candidate.strip()
         # 仅当候选项符合已知格式时才视为格式串，否则当表达式的一部分
-        known_fmts = {".0f", ".1f", ".2f", ".3f", "int", "d", ".0%", ".1%", ".2%", ".3%"}
+        known_fmts = {
+            # 小数位格式
+            ".0f", ".1f", ".2f", ".3f", ".4f", ".5f", ".6f",
+            # 整数格式
+            "int", "d",
+            # 百分比格式（自动 ×100 加 %）
+            ".0%", ".1%", ".2%", ".3%", ".4%",
+            # 科学计数法
+            ".0e", ".1e", ".2e", ".3e", ".0E", ".1E", ".2E", ".3E",
+            # 千分位
+            ",.0f", ",.1f", ",.2f", ",.3f", ",.0%", ",.1%", ",.2%", ",.3%",
+        }
         if fmt_candidate in known_fmts:
             expr = expr_part.strip()
             fmt = fmt_candidate
