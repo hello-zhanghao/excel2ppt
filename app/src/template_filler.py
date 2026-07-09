@@ -26,6 +26,7 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
 
     图片占位符（在图片替代文字/名称中，或在文本框中）：
         {{图片:文件路径}}            替换为指定图片（绝对路径或相对模板目录）
+        {{图片:@output/相对路径}}    从输出目录查找（解决带时间戳的动态输出目录）
         {{图片:区块名.列名.行值}}    取透视数据中的图片路径
 
     表格占位符（在表格替代文字/名称中）：
@@ -517,23 +518,53 @@ def _write_chart_data(chart, df: pd.DataFrame):
 
 
 def _resolve_image_path(expr: str, pivot_data: Dict[str, pd.DataFrame],
-                        default_block: Optional[str], template_dir: str) -> Optional[str]:
-    """解析 {{图片:...}} 表达式，返回图片文件绝对路径或 None"""
+                        default_block: Optional[str], template_dir: str,
+                        output_dir: Optional[str] = None) -> Optional[str]:
+    """解析 {{图片:...}} 表达式，返回图片文件绝对路径或 None
+
+    路径解析顺序：
+    1. 绝对路径 → 直接用
+    2. @output/... 前缀 → 拼接到输出目录（解决带时间戳的动态输出目录）
+    3. 其他相对路径 → 拼接到模板目录
+    4. 透视数据解析 → 取到的值再按 1/2/3 查找
+    """
     expr = expr.strip()
     if not expr:
         return None
 
-    # 1) 绝对路径或相对模板目录的直接路径
-    for candidate in (expr, os.path.join(template_dir, expr)):
+    def _try_resolve(path_str: str) -> Optional[str]:
+        """对单个路径字符串尝试解析（绝对 / @output / 相对模板目录）"""
+        path_str = path_str.strip()
+        if not path_str:
+            return None
+        # @output/ 前缀：相对输出目录（动态时间戳目录）
+        if path_str.startswith("@output/") or path_str.startswith("@output\\"):
+            rel = path_str[len("@output/"):].lstrip("/\\")
+            if output_dir:
+                candidate = os.path.join(output_dir, rel)
+                if os.path.isfile(candidate):
+                    return os.path.abspath(candidate)
+            return None
+        # 绝对路径
+        if os.path.isfile(path_str):
+            return os.path.abspath(path_str)
+        # 相对模板目录
+        candidate = os.path.join(template_dir, path_str)
         if os.path.isfile(candidate):
             return os.path.abspath(candidate)
+        return None
+
+    # 1) 直接尝试解析表达式本身作为路径
+    result = _try_resolve(expr)
+    if result:
+        return result
 
     # 2) 透视数据解析（区块.列 或 区块.列.行值）
     text_value = _resolve_text_placeholder(expr, pivot_data, default_block)
     if text_value:
-        for candidate in (text_value, os.path.join(template_dir, text_value)):
-            if os.path.isfile(candidate):
-                return os.path.abspath(candidate)
+        result = _try_resolve(text_value)
+        if result:
+            return result
 
     return None
 
@@ -541,7 +572,8 @@ def _resolve_image_path(expr: str, pivot_data: Dict[str, pd.DataFrame],
 def _replace_pictures(slide, pivot_data: Dict[str, pd.DataFrame],
                       default_block: Optional[str],
                       template_dir: str,
-                      text_image_exprs: Optional[List[str]] = None) -> int:
+                      text_image_exprs: Optional[List[str]] = None,
+                      output_dir: Optional[str] = None) -> int:
     """替换幻灯片中的图片，返回替换次数。
 
     匹配优先级：
@@ -569,7 +601,7 @@ def _replace_pictures(slide, pivot_data: Dict[str, pd.DataFrame],
         if not expr:
             continue
 
-        image_path = _resolve_image_path(expr, pivot_data, default_block, template_dir)
+        image_path = _resolve_image_path(expr, pivot_data, default_block, template_dir, output_dir)
         if not image_path:
             print(f"    [警告] 图片路径无效 [{expr}]: 文件不存在")
             continue
@@ -581,7 +613,7 @@ def _replace_pictures(slide, pivot_data: Dict[str, pd.DataFrame],
 
     # 文本关联模式：{{图片:...}} 在文本框中 → 替换同页第一张未被匹配的图片
     for expr in text_image_exprs:
-        image_path = _resolve_image_path(expr, pivot_data, default_block, template_dir)
+        image_path = _resolve_image_path(expr, pivot_data, default_block, template_dir, output_dir)
         if not image_path:
             continue
         for shape in slide.shapes:
@@ -785,6 +817,7 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
         raise FileNotFoundError(f"模板文件不存在: {template_path}")
 
     template_dir = os.path.dirname(os.path.abspath(template_path))
+    output_dir = os.path.dirname(os.path.abspath(output_path))
 
     print(f"[模板/1] 加载透视结果: {os.path.basename(pivot_data_path)}")
     pivot_data = load_pivot_results(pivot_data_path)
@@ -818,7 +851,7 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
 
         chart_count = _replace_chart_data(slide, pivot_data, default_block)
 
-        picture_count = _replace_pictures(slide, pivot_data, default_block, template_dir, image_collector)
+        picture_count = _replace_pictures(slide, pivot_data, default_block, template_dir, image_collector, output_dir)
 
         table_count = _replace_table_data(slide, pivot_data, default_block)
 
