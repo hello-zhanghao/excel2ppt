@@ -356,9 +356,10 @@ def _resolve_calc_expr(expr: str, pivot_data: Dict[str, pd.DataFrame],
     # 字符类含空格以支持含空格的字段名（如 "总 销售额"），匹配后 rstrip 去除运算符前的空格
     # 每段后可选跟 (...) 形式的括号内容，支持含括号的字段名（如 "销售额(万元)"、"率(%)"）
     # 括号内不支持嵌套，仅匹配单层 ()
+    # 字符类含 % 以支持字段名直接含百分号（如 "增长%"、"利润率%"）
     ident_pattern = re.compile(
-        r'[\u4e00-\u9fa5a-zA-Z_][\u4e00-\u9fa5\w ]*'
-        r'(?:\.[\u4e00-\u9fa5\w ]+(?:\([^)]*\))?)*'
+        r'[\u4e00-\u9fa5a-zA-Z_][\u4e00-\u9fa5\w %]*'
+        r'(?:\.[\u4e00-\u9fa5\w %]+(?:\([^)]*\))?)*'
     )
 
     missing_any = False
