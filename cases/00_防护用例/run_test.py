@@ -1380,6 +1380,30 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页9 图表数据源未替换{RESET}")
 
+        # ---------- 页10: 表格数据源备注区声明（v2.18.19 验证） ----------
+        if len(prs.slides) >= 10:
+            slide10 = prs.slides[9]
+            table10_ok = False
+            for shape in slide10.shapes:
+                if shape.has_table:
+                    table = shape.table
+                    try:
+                        # 验证选列：总销售额,平均销售额 → 表头应有这两列，不应有客户数
+                        h0 = table.cell(0, 0).text
+                        h1 = table.cell(0, 1).text if len(table.columns) > 1 else ""
+                        h2 = table.cell(0, 2).text if len(table.columns) > 2 else ""
+                        # 地区多维统计：地区 | 总销售额 | 平均销售额
+                        table10_ok = (h0 == "地区" and "总销售额" in (h1, h2) and "平均销售额" in (h1, h2)
+                                      and "客户数" not in h0 and "客户数" not in h1 and "客户数" not in h2)
+                        if table10_ok:
+                            print(f"  {GREEN}✓ 页10 表格备注区声明正确（地区+总销售额+平均销售额，已筛掉客户数）{RESET}")
+                        else:
+                            print(f"  {RED}✗ 页10 表格备注区声明不正确: 表头={h0}/{h1}/{h2}{RESET}")
+                    except Exception as e:
+                        print(f"  {RED}✗ 页10 表格读取异常: {e}{RESET}")
+                    break
+            checks.append(("页10 表格备注区声明", table10_ok))
+
         # ---------- 整体文件检查 ----------
         # 验证点N: 输出文件大小合理（>0）
         file_size = os.path.getsize(output_path)
@@ -1409,7 +1433,7 @@ def verify_template_mode(pivot_excel_path):
 
 
 def _create_test_template(template_path):
-    """创建带占位符的测试 PPT 模板（6页，覆盖文本/图表/表格/图片四类替换）
+    """创建带占位符的测试 PPT 模板（10页，覆盖文本/图表/表格/图片四类替换）
 
     页1 - 文本占位符 + 图表占位符（原基础场景）
     页2 - 表格整体替换 + 表格行数扩展
@@ -1417,6 +1441,10 @@ def _create_test_template(template_path):
     页4 - 多区块图表 + 备注声明默认区块
     页5 - 同 sheet 内多区块按区块名独立引用
     页6 - Sheet名.区块名 精确查找（区分不同 sheet 中的同名区块）
+    页7 - 选列功能（{{图表:区块|列1,列2}}）
+    页8 - 计算占位符 + 别名 + 文本占位符格式后缀
+    页9 - 图表标题文本占位符 + 备注区声明图表数据源（方案C）
+    页10 - 备注区声明表格数据源（方案C）+ 选列
     """
     from pptx import Presentation
     from pptx.util import Inches, Pt, Emu
@@ -1813,11 +1841,36 @@ def _create_test_template(template_path):
         chart9.chart_title.text_frame.text = "华东销售额{{按地区汇总.总销售额.华东}}万元 占比{{计算:按地区汇总.总销售额.华东 / 按地区汇总.总销售额.sum|.2%}}"
     except Exception:
         pass
-    # 数据源占位符写在形状名称
-    chart9_shape.name = "{{图表:按地区汇总}}"
+    # 数据源占位符通过备注区的方案C声明（不用形状名称写 {{图表:...}}）
+    chart9_shape.name = "图表1"
 
     try:
-        slide9.notes_slide.notes_text_frame.text = "# 图表标题占位符测试\n区块=按地区汇总\n"
+        slide9.notes_slide.notes_text_frame.text = "# 图表标题占位符测试\n区块=按地区汇总\n图表1=按地区汇总\n"
+    except Exception:
+        pass
+
+    # ========== 页10: 表格数据源备注区声明（v2.18.19 验证） ==========
+    slide10 = prs.slides.add_slide(blank_layout)
+
+    title10 = slide10.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
+    title10.text_frame.text = "表格备注区声明测试"
+    for para in title10.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(24)
+            run.font.bold = True
+
+    rows10, cols10 = 2, 2
+    table10_shape = slide10.shapes.add_table(rows10, cols10, Inches(1), Inches(1.5), Inches(8), Inches(3))
+    table10 = table10_shape.table
+    table10.cell(0, 0).text = "占位表头1"
+    table10.cell(0, 1).text = "占位表头2"
+    table10.cell(1, 0).text = "占位数据1"
+    table10.cell(1, 1).text = "占位数据2"
+    # 方案C：形状名用简短标识，备注区声明映射（含选列）
+    table10_shape.name = "表格1"
+
+    try:
+        slide10.notes_slide.notes_text_frame.text = "# 表格备注区声明测试\n表格1=地区多维统计|总销售额,平均销售额\n"
     except Exception:
         pass
 

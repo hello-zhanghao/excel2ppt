@@ -66,6 +66,10 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
 PPT 备注配置（每页备注区可写）：
     数据源=透视结果.xlsx
     区块=按地区汇总                # 声明本页默认区块，占位符可省略前缀
+    别名.别名名=表达式              # 别名声明，正文用 {{别名名}} 引用
+    形状名=区块表达式               # 图表/表格数据源映射（方案C）
+                                    形状名需与 PPT 中的形状名称一致
+                                    如：图表1=按地区汇总|销售额,利润
     别名.别名名=表达式             # 声明别名，正文用 {{别名名}} 引用，避免长表达式堆在正文
                                   # 表达式可以是文本占位符表达式或 计算: 表达式
     示例：
@@ -645,10 +649,12 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
 
 def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                         default_block: Optional[str],
-                        alias_map: Optional[Dict[str, str]] = None) -> int:
+                        alias_map: Optional[Dict[str, str]] = None,
+                        shape_block_map: Optional[Dict[str, str]] = None) -> int:
     """替换幻灯片中的图表数据，返回替换次数
 
     - 图表数据源占位符 {{图表:xxx}} 从形状名称/替代文字读取（不污染图表标题）
+    - 形状名称/替代文字无占位符时，回退到 shape_block_map（备注区声明 形状名=区块名）
     - 图表标题支持文本占位符（{{区块.列}}、{{计算:...}}、别名、格式后缀等），
       与正文文本框共用替换逻辑
     """
@@ -659,7 +665,6 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
 
         chart = shape.chart
 
-        # 只从形状名称/替代文字读取占位符（不读取图表标题，保留模板原标题）
         target_expr = None
         try:
             for attr in ("name", "alternative_text"):
@@ -670,6 +675,15 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                     break
         except Exception:
             pass
+
+        # 形状名在备注区声明了映射（方案C：备注区写 "形状名=区块表达式"）
+        if not target_expr and shape_block_map:
+            try:
+                mapped = shape_block_map.get(shape.name)
+                if mapped:
+                    target_expr = mapped
+            except Exception:
+                pass
 
         # 兼容：如果形状名称没有占位符，再回退到图表标题读取（旧模板兼容）
         if not target_expr:
@@ -972,9 +986,11 @@ def _set_cell_text_preserve_format(cell, text: str):
 
 
 def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
-                        default_block: Optional[str]) -> int:
+                        default_block: Optional[str],
+                        shape_block_map: Optional[Dict[str, str]] = None) -> int:
     """替换幻灯片中的表格数据（整表替换），返回替换次数。
     通过表格形状的 name 或 alternative_text 中的 {{表格:区块名}} 匹配。
+    形状名称/替代文字无占位符时，回退到 shape_block_map（备注区声明 形状名=区块名）。
     自动扩展表格行列以容纳完整数据，数据少于模板时清空多余行。
     """
     replace_count = 0
@@ -989,6 +1005,15 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
             if m:
                 target_expr = m.group(1).strip()
                 break
+
+        # 形状名在备注区声明了映射（方案C：备注区写 "形状名=区块表达式"）
+        if not target_expr and shape_block_map:
+            try:
+                mapped = shape_block_map.get(shape.name)
+                if mapped:
+                    target_expr = mapped
+            except Exception:
+                pass
 
         if not target_expr:
             continue
@@ -1081,18 +1106,20 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
     for slide_idx, slide in enumerate(prs.slides, 1):
         default_block = None
         alias_map: Dict[str, str] = {}
+        shape_block_map: Dict[str, str] = {}
         try:
             if slide.has_notes_slide:
                 notes_text = slide.notes_slide.notes_text_frame.text
                 config = _parse_slide_notes(notes_text)
                 default_block = config.get("区块")
-                # 提取别名映射：备注区写 "别名.别名名=表达式"
-                # 正文可用 {{别名名}} 引用，避免长表达式堆在正文
+                known_prefixes = ("区块", "数据源", "别名.")
                 for key, value in config.items():
                     if key.startswith("别名."):
                         alias_name = key[3:].strip()
                         if alias_name:
                             alias_map[alias_name] = value
+                    elif not any(key.startswith(p) for p in known_prefixes):
+                        shape_block_map[key] = value
         except Exception:
             pass
 
@@ -1103,11 +1130,11 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
                 continue
             text_count += _replace_in_text_frame(shape.text_frame, pivot_data, default_block, image_collector, alias_map)
 
-        chart_count = _replace_chart_data(slide, pivot_data, default_block, alias_map)
+        chart_count = _replace_chart_data(slide, pivot_data, default_block, alias_map, shape_block_map)
 
         picture_count = _replace_pictures(slide, pivot_data, default_block, template_dir, image_collector, output_dir)
 
-        table_count = _replace_table_data(slide, pivot_data, default_block)
+        table_count = _replace_table_data(slide, pivot_data, default_block, shape_block_map)
 
         total_text += text_count
         total_chart += chart_count
