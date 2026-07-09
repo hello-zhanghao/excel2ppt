@@ -337,16 +337,17 @@ def _resolve_calc_expr(expr: str, pivot_data: Dict[str, pd.DataFrame],
 
     # 标识符正则：1段或多段以 . 分隔，第一段必须含字母/汉字/下划线（排除 3.14 这类纯数字）
     # 单段如 "本月"（依赖 default_block），多段如 "区块.列"、"Sheet.区块.列.行值"
+    # 字符类含空格以支持含空格的字段名（如 "总 销售额"），匹配后 rstrip 去除运算符前的空格
     ident_pattern = re.compile(
-        r'[\u4e00-\u9fa5a-zA-Z_][\u4e00-\u9fa5\w]*'
-        r'(?:\.[\u4e00-\u9fa5\w]+)*'
+        r'[\u4e00-\u9fa5a-zA-Z_][\u4e00-\u9fa5\w ]*'
+        r'(?:\.[\u4e00-\u9fa5\w ]+)*'
     )
 
     missing_any = False
 
     def _replace_ident(m):
         nonlocal missing_any
-        ident = m.group(0)
+        ident = m.group(0).rstrip()  # 去除末尾空格（运算符前的空格被贪婪匹配吞入）
         value = _resolve_text_placeholder(ident, pivot_data, default_block)
         if not value:
             missing_any = True
