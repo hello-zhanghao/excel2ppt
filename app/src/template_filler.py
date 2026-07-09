@@ -27,6 +27,7 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
     图片占位符（在图片替代文字/名称中，或在文本框中）：
         {{图片:文件路径}}            替换为指定图片（绝对路径或相对模板目录）
         {{图片:@output/相对路径}}    从输出目录查找（解决带时间戳的动态输出目录）
+        {{图片:路径*.png}}           支持通配符 * 和 ?（文件名/目录名带时间戳时模糊匹配）
         {{图片:区块名.列名.行值}}    取透视数据中的图片路径
 
     表格占位符（在表格替代文字/名称中）：
@@ -526,30 +527,48 @@ def _resolve_image_path(expr: str, pivot_data: Dict[str, pd.DataFrame],
     1. 绝对路径 → 直接用
     2. @output/... 前缀 → 拼接到输出目录（解决带时间戳的动态输出目录）
     3. 其他相对路径 → 拼接到模板目录
-    4. 透视数据解析 → 取到的值再按 1/2/3 查找
+    4. 透视数据解析 → 取到的值再按 1/2/3 查
+
+    支持通配符 * 和 ?（用于文件名或目录名带时间戳的模糊匹配）：
+        {{图片:@output/chart_*.png}}        匹配输出目录下唯一 chart_xxxxx.png
+        {{图片:@output/report_*/a.png}}     匹配输出目录下 report_xxxxx 子目录里的 a.png
+    多个匹配时取第一个（按名称排序），匹配前会提示。
     """
+    import glob
+
     expr = expr.strip()
     if not expr:
         return None
 
     def _try_resolve(path_str: str) -> Optional[str]:
-        """对单个路径字符串尝试解析（绝对 / @output / 相对模板目录）"""
+        """对单个路径字符串尝试解析（绝对 / @output / 相对模板目录），支持通配符"""
         path_str = path_str.strip()
         if not path_str:
             return None
+
         # @output/ 前缀：相对输出目录（动态时间戳目录）
         if path_str.startswith("@output/") or path_str.startswith("@output\\"):
             rel = path_str[len("@output/"):].lstrip("/\\")
-            if output_dir:
-                candidate = os.path.join(output_dir, rel)
-                if os.path.isfile(candidate):
-                    return os.path.abspath(candidate)
-            return None
-        # 绝对路径
-        if os.path.isfile(path_str):
-            return os.path.abspath(path_str)
-        # 相对模板目录
-        candidate = os.path.join(template_dir, path_str)
+            if not output_dir:
+                return None
+            candidate = os.path.join(output_dir, rel)
+        elif os.path.isabs(path_str):
+            # 绝对路径
+            candidate = path_str
+        else:
+            # 相对模板目录
+            candidate = os.path.join(template_dir, path_str)
+
+        # 含通配符：用 glob 模糊匹配
+        if "*" in candidate or "?" in candidate:
+            matches = sorted(glob.glob(candidate))
+            if not matches:
+                return None
+            if len(matches) > 1:
+                print(f"    [信息] 通配符匹配到 {len(matches)} 个文件，使用第一个: {os.path.basename(matches[0])}")
+            return os.path.abspath(matches[0])
+
+        # 无通配符：精确匹配
         if os.path.isfile(candidate):
             return os.path.abspath(candidate)
         return None

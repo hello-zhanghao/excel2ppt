@@ -951,15 +951,15 @@ def verify_template_mode(pivot_excel_path):
                     if "{{图片:" not in shape.name:
                         pic_replaced_count += 1
 
-            pic_found = pic_count >= 2  # 应有两张图片（绝对路径 + 透视取路径）
-            pic_replaced = pic_replaced_count >= 2
-            checks.append(("页3 两张图片存在", pic_found))
+            pic_found = pic_count >= 3  # 应有三张图片（绝对路径 + 透视取路径 + 通配符匹配）
+            pic_replaced = pic_replaced_count >= 3
+            checks.append(("页3 三张图片存在", pic_found))
             checks.append(("页3 图片全部已替换", pic_replaced))
 
             if pic_found:
-                print(f"  {GREEN}✓ 页3 两张图片存在（绝对路径 + 透视取路径）{RESET}")
+                print(f"  {GREEN}✓ 页3 三张图片存在（绝对路径 + 透视取路径 + 通配符）{RESET}")
             else:
-                print(f"  {RED}✗ 页3 图片数量不足（期望2张，实际{pic_count}张）{RESET}")
+                print(f"  {RED}✗ 页3 图片数量不足（期望3张，实际{pic_count}张）{RESET}")
             if pic_replaced:
                 print(f"  {GREEN}✓ 页3 图片全部已替换{RESET}")
             else:
@@ -1410,6 +1410,15 @@ def _create_test_template(template_path):
             Inches(5.5), Inches(1.5), Inches(4), Inches(3.5)
         )
         pic_shape2.name = "{{图片:地区图片.图片路径.华东}}"
+
+    # 方式3: 通配符匹配 — 文件名带时间戳时模糊查找
+    # _test_image*.png 匹配 _test_image.png（验证通配符功能）
+    if test_image_path:
+        pic_shape3 = slide3.shapes.add_picture(
+            test_image_path,
+            Inches(10.5), Inches(1.5), Inches(3), Inches(3.5)
+        )
+        pic_shape3.name = "{{图片:_test_image*.png}}"
 
     # 页3备注
     try:
