@@ -1248,6 +1248,54 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页7 图表选列失败{RESET}")
 
+        # ---------- 页8: 计算占位符（v2.18.15 核心验证） ----------
+        if len(prs.slides) >= 8:
+            slide8 = prs.slides[7]
+            slide8_text = ""
+            for shape in slide8.shapes:
+                if shape.has_text_frame:
+                    slide8_text += shape.text_frame.text + "\n"
+
+            # 验证8-1: 页8 计算占位符全部替换（不应有 {{ 残留）
+            page8_no_placeholder = "{{" not in slide8_text
+            checks.append(("页8 计算占位符已替换", page8_no_placeholder))
+            if page8_no_placeholder:
+                print(f"  {GREEN}✓ 页8 计算占位符已替换{RESET}")
+            else:
+                print(f"  {RED}✗ 页8 存在未替换的计算占位符{RESET}")
+
+            # 验证8-2: 华东销售额占比 = 4800/12750 ≈ 37.65%
+            calc8a_ok = "37.65%" in slide8_text
+            checks.append(("页8 占比计算正确(37.65%)", calc8a_ok))
+            if calc8a_ok:
+                print(f"  {GREEN}✓ 页8 占比计算正确（华东 4800/12750=37.65%）{RESET}")
+            else:
+                print(f"  {RED}✗ 页8 占比计算不正确{RESET}")
+
+            # 验证8-3: 华东-华北差额 = 1500
+            calc8b_ok = "1500" in slide8_text
+            checks.append(("页8 差额计算正确(1500)", calc8b_ok))
+            if calc8b_ok:
+                print(f"  {GREEN}✓ 页8 差额计算正确（4800-3300=1500）{RESET}")
+            else:
+                print(f"  {RED}✗ 页8 差额计算不正确{RESET}")
+
+            # 验证8-4: 极差取整 = 1500
+            calc8c_ok = "销售额极差: 1500" in slide8_text
+            checks.append(("页8 极差计算正确(1500)", calc8c_ok))
+            if calc8c_ok:
+                print(f"  {GREEN}✓ 页8 极差计算正确（max-min=1500，取整）{RESET}")
+            else:
+                print(f"  {RED}✗ 页8 极差计算不正确{RESET}")
+
+            # 验证8-5: 默认区块单段列名运算（390/1030≈37.86%）
+            calc8d_ok = "37.86%" in slide8_text
+            checks.append(("页8 默认区块运算正确(37.86%)", calc8d_ok))
+            if calc8d_ok:
+                print(f"  {GREEN}✓ 页8 默认区块运算正确（华东销量 390/1030=37.86%）{RESET}")
+            else:
+                print(f"  {RED}✗ 页8 默认区块运算不正确{RESET}")
+
         # ---------- 整体文件检查 ----------
         # 验证点N: 输出文件大小合理（>0）
         file_size = os.path.getsize(output_path)
@@ -1606,6 +1654,40 @@ def _create_test_template(template_path):
 
     try:
         slide7.notes_slide.notes_text_frame.text = "# 选列替换测试\n"
+    except Exception:
+        pass
+
+    # ========== 页8: 计算占位符（v2.18.15 核心验证） ==========
+    # 区块 "按地区汇总" 数据：华东 4800/390, 华北 3300/270, 华南 4650/370
+    # 用 {{计算:表达式}} 做两数运算（占比/差额/极差）
+    # 用 {{计算:表达式|格式}} 控制输出格式（.2%/.0f）
+    slide8 = prs.slides.add_slide(blank_layout)
+
+    title8 = slide8.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
+    title8.text_frame.text = "计算占位符测试"
+    for para in title8.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(24)
+            run.font.bold = True
+
+    # 文本1：行值相除算占比（4800/12750≈37.65%）
+    text8a = slide8.shapes.add_textbox(Inches(0.5), Inches(1.2), Inches(12), Inches(0.5))
+    text8a.text_frame.text = "华东销售额占比: {{计算:按地区汇总.总销售额.华东 / 按地区汇总.总销售额.sum | .2%}}"
+
+    # 文本2：两行值相减算差额（4800-3300=1500）
+    text8b = slide8.shapes.add_textbox(Inches(0.5), Inches(1.8), Inches(12), Inches(0.5))
+    text8b.text_frame.text = "华东-华北差额: {{计算:按地区汇总.总销售额.华东 - 按地区汇总.总销售额.华北}}"
+
+    # 文本3：聚合极差取整（max-min=1500）
+    text8c = slide8.shapes.add_textbox(Inches(0.5), Inches(2.4), Inches(12), Inches(0.5))
+    text8c.text_frame.text = "销售额极差: {{计算:按地区汇总.总销售额.max - 按地区汇总.总销售额.min | .0f}}"
+
+    # 文本4：使用 default_block（备注区声明 区块=按地区汇总），单段列名
+    text8d = slide8.shapes.add_textbox(Inches(0.5), Inches(3.0), Inches(12), Inches(0.5))
+    text8d.text_frame.text = "华东销量占比: {{计算:总销量.华东 / 总销量.sum | .2%}}"
+
+    try:
+        slide8.notes_slide.notes_text_frame.text = "# 计算占位符测试\n区块=按地区汇总\n"
     except Exception:
         pass
 

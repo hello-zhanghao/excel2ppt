@@ -41,6 +41,16 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
         {{区块名.列名.max}}          最大
         {{区块名.列名.min}}          最小
 
+    计算占位符（在文本框中，标识符沿用上述文本占位符语法）：
+        {{计算:表达式}}               默认智能格式化（整数显示整数，小数2位）
+        {{计算:表达式|.2f}}           保留2位小数
+        {{计算:表达式|.0f}}           整数
+        {{计算:表达式|.1%}}           百分比（值×100 后加 %）
+        示例：
+            {{计算:(本月-上月)/上月*100}}            环比提升%
+            {{计算:利润/销售额|.2%}}                 利润率
+            {{计算:A.销售额.max - A.销售额.min}}     极差
+
 PPT 备注配置（每页备注区可写）：
     数据源=透视结果.xlsx
     区块=按地区汇总                # 声明本页默认区块，占位符可省略前缀
@@ -249,6 +259,116 @@ def _filter_df_columns(df: pd.DataFrame, cols: Optional[List[str]]) -> pd.DataFr
     return df[keep]
 
 
+def _smart_format_number(value) -> str:
+    """智能格式化数字：整数显示整数，小数保留2位"""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and value == int(value):
+            return str(int(value))
+        if isinstance(value, int):
+            return str(value)
+        return f"{value:.2f}"
+    return str(value)
+
+
+def _format_calc_result(value, fmt: str) -> str:
+    """按格式化字符串格式化计算结果
+
+    支持的格式：
+        .0f / .1f / .2f / .3f    固定小数位
+        int / d                  整数
+        .0% / .1% / .2%          百分比（原值×100 后加 %）
+        其它                     当作 Python format spec 用
+    """
+    fmt = fmt.strip()
+    pct_formats = {".0%", ".1%", ".2%", ".3%"}
+    if fmt in pct_formats:
+        # Python format spec ".2%" 本身会自动乘 100 并加 %
+        try:
+            return format(float(value), fmt)
+        except Exception:
+            pass
+    if fmt in ("int", "d"):
+        return str(int(value))
+    try:
+        return format(value, fmt)
+    except Exception:
+        return _smart_format_number(value)
+
+
+def _resolve_calc_expr(expr: str, pivot_data: Dict[str, pd.DataFrame],
+                       default_block: Optional[str]) -> str:
+    """解析 {{计算:表达式}} 占位符，返回计算结果字符串
+
+    语法：
+        {{计算:表达式}}              默认智能格式化（整数显示整数，小数2位）
+        {{计算:表达式|.2f}}          保留2位小数
+        {{计算:表达式|.0f}}          整数
+        {{计算:表达式|.1%}}          百分比（值×100 后加 %，保留1位小数）
+
+    表达式中的标识符沿用现有文本占位符语法（至少含2段以 . 分隔）：
+        区块名.列名                  数值列求和 / 非数值列首行
+        区块名.列名.行值             精确取某行某列
+        区块名.列名.聚合             显式聚合（sum/avg/max/min/count）
+        Sheet名.区块名.列名          精确指定 sheet 内区块
+        标量.标量名                  取标量值
+        列名                         使用 default_block（仅当 default_block 存在）
+
+    支持的运算符：+ - * / () 以及小数和整数常量。
+    找不到值的标识符按 0 处理；除零等异常返回空字符串。
+
+    示例：
+        {{计算:(本月-上月)/上月*100}}               默认格式
+        {{计算:(本月.华东-上月.华东)/上月.华东*100|.2f}}
+        {{计算:利润/销售额|.2%}}                    百分比格式
+        {{计算:A.销售额.max - A.销售额.min|.0f}}    极差取整
+    """
+    # 分离表达式与格式（仅最后一个 | 视为格式分隔符）
+    fmt = None
+    if "|" in expr:
+        expr_part, fmt_candidate = expr.rsplit("|", 1)
+        fmt_candidate = fmt_candidate.strip()
+        # 仅当候选项符合已知格式时才视为格式串，否则当表达式的一部分
+        known_fmts = {".0f", ".1f", ".2f", ".3f", "int", "d", ".0%", ".1%", ".2%", ".3%"}
+        if fmt_candidate in known_fmts:
+            expr = expr_part.strip()
+            fmt = fmt_candidate
+
+    # 标识符正则：1段或多段以 . 分隔，第一段必须含字母/汉字/下划线（排除 3.14 这类纯数字）
+    # 单段如 "本月"（依赖 default_block），多段如 "区块.列"、"Sheet.区块.列.行值"
+    ident_pattern = re.compile(
+        r'[\u4e00-\u9fa5a-zA-Z_][\u4e00-\u9fa5\w]*'
+        r'(?:\.[\u4e00-\u9fa5\w]+)*'
+    )
+
+    missing_any = False
+
+    def _replace_ident(m):
+        nonlocal missing_any
+        ident = m.group(0)
+        value = _resolve_text_placeholder(ident, pivot_data, default_block)
+        if not value:
+            missing_any = True
+            return "(0)"
+        try:
+            return f"({float(value)})"
+        except (ValueError, TypeError):
+            missing_any = True
+            return "(0)"
+
+    safe_expr = ident_pattern.sub(_replace_ident, expr)
+
+    try:
+        result = eval(safe_expr, {"__builtins__": {}}, {})
+    except Exception:
+        return ""
+
+    if fmt:
+        return _format_calc_result(result, fmt)
+    return _smart_format_number(result)
+
+
 def _resolve_text_placeholder(expr: str, pivot_data: Dict[str, pd.DataFrame],
                               default_block: Optional[str] = None) -> str:
     """解析文本占位符表达式，返回替换值字符串
@@ -419,6 +539,13 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
                 image_collector.append(expr[2:].lstrip(":：").strip())
                 replace_count += 1
                 return ""
+            # 计算占位符：{{计算:表达式|格式}}
+            if expr.startswith("计算:") or expr.startswith("计算："):
+                calc_expr = expr[3:].lstrip(":：").strip()
+                value = _resolve_calc_expr(calc_expr, pivot_data, default_block)
+                if value:
+                    replace_count += 1
+                return value or ""
             value = _resolve_text_placeholder(expr, pivot_data, default_block)
             if value:
                 replace_count += 1
