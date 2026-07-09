@@ -10,6 +10,8 @@ Excel 统一分析工具 — PPT 生成 + 透视分析 + HTML报告
   python main.py html -c 配置.xlsx        ← 生成HTML报告（自动模式）
   python main.py html --pivot-file 分析.xlsx --ppt-file 报告.pptx
   python main.py template 模板.pptx --pivot 透视结果.xlsx   ← 基于PPT模板填充数据
+  python main.py template 模板.pptx                           ← 自动找目录下最新 xlsx
+  python main.py template 模板.pptx --pivot latest            ← 同上，显式触发
   python main.py 文件夹路径               ← 自动检测配置类型，分发到对应模式
 """
 import os
@@ -19,8 +21,8 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.18.19"
-__UPDATE_DATE__ = "2026-07-09"
+__VERSION__ = "2.18.20"
+__UPDATE_DATE__ = "2026-07-10"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -94,6 +96,33 @@ def _ensure_output_dir(config_dir):
     out_dir = os.path.join(config_dir, f"output_{timestamp}")
     os.makedirs(out_dir, exist_ok=True)
     return out_dir
+
+
+def _auto_find_latest_pivot(search_dir):
+    """递归扫描目录及子目录下所有 xlsx，按文件修改时间取最新。
+
+    排除：临时文件（~$）、配置文件（含"配置"/"config"）、模板文件（含"模板"/"template"）。
+    """
+    candidates = []
+    for root, dirs, files in os.walk(search_dir):
+        for f in files:
+            if not f.lower().endswith(".xlsx"):
+                continue
+            if f.startswith("~$"):
+                continue
+            basename_lower = f.lower()
+            if "配置" in basename_lower or "config" in basename_lower:
+                continue
+            if "模板" in basename_lower or "template" in basename_lower:
+                continue
+            full_path = os.path.join(root, f)
+            candidates.append(full_path)
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=os.path.getmtime, reverse=True)
+    return candidates[0]
 
 
 def _resolve_config_path(args):
@@ -1047,23 +1076,18 @@ def _run_template_mode(template_path, pivot_file=None, output_path=None):
 
     template_dir = os.path.dirname(os.path.abspath(template_path))
 
-    # 自动查找透视结果文件
-    if not pivot_file:
-        # 优先查找同目录下 _分析_ 命名的文件
-        candidates = []
-        for f in os.listdir(template_dir):
-            if f.endswith(".xlsx") and "_分析_" in f and not f.startswith("~$"):
-                candidates.append(os.path.join(template_dir, f))
-        if len(candidates) == 1:
-            pivot_file = candidates[0]
-            print(f"[信息] 自动找到透视结果: {os.path.basename(pivot_file)}")
-        elif len(candidates) > 1:
-            print(f"[信息] 找到多个透视结果文件，请用 --pivot 指定:")
-            for c in candidates:
-                print(f"  - {os.path.basename(c)}")
-            sys.exit(1)
+    # 自动查找透视结果文件（--pivot 未指定或为 "latest"）
+    if not pivot_file or pivot_file.strip().lower() == "latest":
+        latest = _auto_find_latest_pivot(template_dir)
+        if latest:
+            pivot_file = latest
+            mtime = datetime.fromtimestamp(os.path.getmtime(pivot_file))
+            print(f"[信息] 自动找到最新数据文件:")
+            print(f"       文件名:   {os.path.basename(pivot_file)}")
+            print(f"       修改时间: {mtime.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"       路径:     {pivot_file}")
         else:
-            print("[错误] 未找到透视结果文件，请用 --pivot 指定")
+            print("[错误] 未找到可用数据文件（.xlsx），请用 --pivot 指定")
             sys.exit(1)
     elif not os.path.exists(pivot_file):
         # 相对路径处理
@@ -1128,7 +1152,7 @@ def main():
         tpl_p = sub.add_parser("template", help="基于PPT模板填充数据")
         tpl_p.add_argument("template_path", help="PPT模板文件路径 (.pptx)")
         tpl_p.add_argument("--pivot", dest="pivot_file", default=None,
-                           help="透视分析结果文件路径 (.xlsx)")
+                           help="透视分析结果文件路径 (.xlsx)，填 latest 自动找目录下最新 xlsx")
         tpl_p.add_argument("-o", "--output", default=None, help="输出PPT路径")
         parser.parse_args()
         return
