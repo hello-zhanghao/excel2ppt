@@ -1328,6 +1328,58 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页8 文本占位符百分比格式不正确{RESET}")
 
+        # ---------- 页9: 图表标题文本占位符（v2.18.18 验证） ----------
+        if len(prs.slides) >= 9:
+            slide9 = prs.slides[8]
+            # 找到页9的图表，读取标题文本
+            chart9_title = ""
+            chart9_data_ok = False
+            for shape in slide9.shapes:
+                if shape.has_chart:
+                    try:
+                        if shape.chart.has_title and shape.chart.chart_title.has_text_frame:
+                            chart9_title = shape.chart.chart_title.text_frame.text
+                        # 验证图表数据已替换（3个类别：华东/华北/华南）
+                        try:
+                            cats = list(shape.chart.plots[0].categories)
+                            chart9_data_ok = "华东" in [str(c) for c in cats]
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+                    break
+
+            # 验证9-1: 图表标题文本占位符已替换（华东4800万元）
+            title9a_ok = "华东销售额4800万元" in chart9_title
+            checks.append(("页9 图表标题文本占位符", title9a_ok))
+            if title9a_ok:
+                print(f"  {GREEN}✓ 页9 图表标题文本占位符正确（华东销售额4800万元）{RESET}")
+            else:
+                print(f"  {RED}✗ 页9 图表标题文本占位符不正确: {repr(chart9_title)}{RESET}")
+
+            # 验证9-2: 图表标题计算占位符带格式后缀（占比37.65%）
+            title9b_ok = "占比37.65%" in chart9_title
+            checks.append(("页9 图表标题计算占位符", title9b_ok))
+            if title9b_ok:
+                print(f"  {GREEN}✓ 页9 图表标题计算占位符正确（占比37.65%）{RESET}")
+            else:
+                print(f"  {RED}✗ 页9 图表标题计算占位符不正确: {repr(chart9_title)}{RESET}")
+
+            # 验证9-3: 图表标题无 {{ 残留
+            title9c_ok = "{{" not in chart9_title
+            checks.append(("页9 图表标题无残留", title9c_ok))
+            if title9c_ok:
+                print(f"  {GREEN}✓ 页9 图表标题无占位符残留{RESET}")
+            else:
+                print(f"  {RED}✗ 页9 图表标题有占位符残留: {repr(chart9_title)}{RESET}")
+
+            # 验证9-4: 图表数据源也已替换
+            checks.append(("页9 图表数据源替换", chart9_data_ok))
+            if chart9_data_ok:
+                print(f"  {GREEN}✓ 页9 图表数据源替换成功（华东类别存在）{RESET}")
+            else:
+                print(f"  {RED}✗ 页9 图表数据源未替换{RESET}")
+
         # ---------- 整体文件检查 ----------
         # 验证点N: 输出文件大小合理（>0）
         file_size = os.path.getsize(output_path)
@@ -1736,6 +1788,36 @@ def _create_test_template(template_path):
 
     try:
         slide8.notes_slide.notes_text_frame.text = "# 计算占位符测试\n区块=按地区汇总\n别名.华东销售额=按地区汇总.总销售额.华东\n别名.利润率=计算:按地区汇总.总销售额.华东 / 按地区汇总.总销售额.sum | .2%\n"
+    except Exception:
+        pass
+
+    # ========== 页9: 图表标题文本占位符（v2.18.18 验证） ==========
+    slide9 = prs.slides.add_slide(blank_layout)
+
+    title9 = slide9.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
+    title9.text_frame.text = "图表标题占位符测试"
+
+    # 图表标题内嵌文本占位符 + 计算占位符 + 格式后缀
+    chart_data9 = CategoryChartData()
+    chart_data9.categories = ["A", "B", "C"]
+    chart_data9.add_series("占位", (1, 2, 3))
+    chart9_shape = slide9.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED,
+        Inches(0.5), Inches(1.2), Inches(12), Inches(5.5),
+        chart_data9
+    )
+    chart9 = chart9_shape.chart
+    try:
+        chart9.has_title = True
+        # 标题里混用：文本占位符 + 计算占位符（带格式后缀） + 普通文字
+        chart9.chart_title.text_frame.text = "华东销售额{{按地区汇总.总销售额.华东}}万元 占比{{计算:按地区汇总.总销售额.华东 / 按地区汇总.总销售额.sum|.2%}}"
+    except Exception:
+        pass
+    # 数据源占位符写在形状名称
+    chart9_shape.name = "{{图表:按地区汇总}}"
+
+    try:
+        slide9.notes_slide.notes_text_frame.text = "# 图表标题占位符测试\n区块=按地区汇总\n"
     except Exception:
         pass
 

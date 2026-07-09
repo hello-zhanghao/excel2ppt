@@ -31,6 +31,11 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
         {{图表:Sheet名.区块名}}      精确指定 sheet 内区块
         {{图表:区块名|列1,列2}}      只使用指定列（第一列自动作为X轴类别）
 
+    图表标题（chart title）：
+        标题文本框支持所有文本占位符语法（{{区块.列}}、{{计算:...}}、别名、格式后缀等）
+        示例：标题写 "华东{{按地区汇总.总销售额.华东}}万元销售情况"
+              替换后 "华东4800万元销售情况"
+
     图片占位符（在图片替代文字/名称中，或在文本框中）：
         {{图片:文件路径}}            替换为指定图片（绝对路径或相对模板目录）
         {{图片:@output/相对路径}}    从输出目录查找（解决带时间戳的动态输出目录）
@@ -639,10 +644,13 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
 
 
 def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
-                        default_block: Optional[str]) -> int:
+                        default_block: Optional[str],
+                        alias_map: Optional[Dict[str, str]] = None) -> int:
     """替换幻灯片中的图表数据，返回替换次数
 
-    图表占位符只从形状名称/替代文字读取，不修改图表标题（保留模板原标题）。
+    - 图表数据源占位符 {{图表:xxx}} 从形状名称/替代文字读取（不污染图表标题）
+    - 图表标题支持文本占位符（{{区块.列}}、{{计算:...}}、别名、格式后缀等），
+      与正文文本框共用替换逻辑
     """
     replace_count = 0
     for shape in slide.shapes:
@@ -673,6 +681,19 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                         target_expr = m.group(1).strip()
             except Exception:
                 pass
+
+        # 替换图表标题中的文本占位符（与正文文本框共用逻辑）
+        try:
+            if chart.has_title and chart.chart_title.has_text_frame:
+                title_count = _replace_in_text_frame(
+                    chart.chart_title.text_frame, pivot_data, default_block,
+                    image_collector=None, alias_map=alias_map
+                )
+                if title_count > 0:
+                    replace_count += title_count
+                    print(f"    [OK] 图表标题文本替换: {title_count} 处")
+        except Exception:
+            pass
 
         if not target_expr:
             continue
@@ -1082,7 +1103,7 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
                 continue
             text_count += _replace_in_text_frame(shape.text_frame, pivot_data, default_block, image_collector, alias_map)
 
-        chart_count = _replace_chart_data(slide, pivot_data, default_block)
+        chart_count = _replace_chart_data(slide, pivot_data, default_block, alias_map)
 
         picture_count = _replace_pictures(slide, pivot_data, default_block, template_dir, image_collector, output_dir)
 
