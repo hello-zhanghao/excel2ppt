@@ -1312,6 +1312,22 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页8 别名计算表达式不正确{RESET}")
 
+            # 验证8-8: 文本占位符带格式后缀（华东销售额4800 → .2f 显示 4800.00）
+            calc8g_ok = "文本格式-2位小数: 4800.00" in slide8_text
+            checks.append(("页8 文本占位符格式后缀(.2f)", calc8g_ok))
+            if calc8g_ok:
+                print(f"  {GREEN}✓ 页8 文本占位符格式后缀正确（4800 → 4800.00）{RESET}")
+            else:
+                print(f"  {RED}✗ 页8 文本占位符格式后缀不正确{RESET}")
+
+            # 验证8-9: 文本占位符百分比格式（占比列华东值0.3765 → .2% 显示 37.65%）
+            calc8h_ok = "文本格式-百分比: 37.65%" in slide8_text
+            checks.append(("页8 文本占位符格式后缀(.2%)", calc8h_ok))
+            if calc8h_ok:
+                print(f"  {GREEN}✓ 页8 文本占位符百分比格式正确（0.3765 → 37.65%）{RESET}")
+            else:
+                print(f"  {RED}✗ 页8 文本占位符百分比格式不正确{RESET}")
+
         # ---------- 整体文件检查 ----------
         # 验证点N: 输出文件大小合理（>0）
         file_size = os.path.getsize(output_path)
@@ -1709,6 +1725,14 @@ def _create_test_template(template_path):
     # 文本6：使用别名引用计算表达式（备注区声明 别名.利润率=计算:利润/销售额|.2%）
     text8f = slide8.shapes.add_textbox(Inches(0.5), Inches(4.2), Inches(12), Inches(0.5))
     text8f.text_frame.text = "别名-利润率: {{利润率}}"
+
+    # 文本7：文本占位符带格式后缀（华东销售额4800 → .2f 显示 4800.00）
+    text8g = slide8.shapes.add_textbox(Inches(0.5), Inches(4.8), Inches(12), Inches(0.5))
+    text8g.text_frame.text = "文本格式-2位小数: {{按地区汇总.总销售额.华东|.2f}}"
+
+    # 文本8：文本占位符带百分比格式（地区占比区块.销售额占比列.华东=0.3765 → .2% 显示 37.65%）
+    text8h = slide8.shapes.add_textbox(Inches(0.5), Inches(5.4), Inches(12), Inches(0.5))
+    text8h.text_frame.text = "文本格式-百分比: {{地区占比.销售额占比.华东|.2%}}"
 
     try:
         slide8.notes_slide.notes_text_frame.text = "# 计算占位符测试\n区块=按地区汇总\n别名.华东销售额=按地区汇总.总销售额.华东\n别名.利润率=计算:按地区汇总.总销售额.华东 / 按地区汇总.总销售额.sum | .2%\n"

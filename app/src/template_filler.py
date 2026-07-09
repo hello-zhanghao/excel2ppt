@@ -19,6 +19,13 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
         {{Sheet名.区块名.列名}}      精确指定 sheet 内区块（同名区块不冲突）
         {{Sheet名.区块名.列名.行值}} 精确指定 sheet 内区块的某行
 
+    文本占位符可选格式后缀（仅取到数值时生效）：
+        {{区块名.列名|.2f}}          保留2位小数
+        {{区块名.列名|.0f}}          取整
+        {{区块名.列名|.2%}}          百分比（值×100 加 %）
+        {{区块名.列名|int}}          整数
+        格式与计算占位符共用，详见 _KNOWN_FMTS
+
     图表占位符（在图表形状名称/替代文字中）：
         {{图表:区块名}}              用该区块数据替换图表数据源
         {{图表:Sheet名.区块名}}      精确指定 sheet 内区块
@@ -279,6 +286,38 @@ def _smart_format_number(value) -> str:
     return str(value)
 
 
+# 已知的格式化字符串集合（计算占位符和文本占位符共用）
+# 同时支持半角 | 和全角 ｜ 作为格式分隔符
+_KNOWN_FMTS = {
+    # 小数位格式
+    ".0f", ".1f", ".2f", ".3f", ".4f", ".5f", ".6f",
+    # 整数格式
+    "int", "d",
+    # 百分比格式（自动 ×100 加 %）
+    ".0%", ".1%", ".2%", ".3%", ".4%",
+    # 科学计数法
+    ".0e", ".1e", ".2e", ".3e", ".0E", ".1E", ".2E", ".3E",
+    # 千分位
+    ",.0f", ",.1f", ",.2f", ",.3f", ",.0%", ",.1%", ",.2%", ",.3%",
+}
+
+
+def _split_expr_and_fmt(expr: str) -> Tuple[str, Optional[str]]:
+    """从表达式中分离格式后缀，返回 (表达式, 格式或None)
+
+    仅当最后一个 | 或 ｜ 后的内容命中 _KNOWN_FMTS 时才视为格式串，
+    否则保持原样（| 视为表达式的一部分）。
+    同时支持半角 | (U+007C) 和全角 ｜ (U+FF5C)。
+    """
+    last_pipe_idx = max(expr.rfind("|"), expr.rfind("｜"))
+    if last_pipe_idx == -1:
+        return expr, None
+    fmt_candidate = expr[last_pipe_idx + 1:].strip()
+    if fmt_candidate in _KNOWN_FMTS:
+        return expr[:last_pipe_idx].strip(), fmt_candidate
+    return expr, None
+
+
 def _format_calc_result(value, fmt: str) -> str:
     """按格式化字符串格式化计算结果
 
@@ -333,30 +372,8 @@ def _resolve_calc_expr(expr: str, pivot_data: Dict[str, pd.DataFrame],
         {{计算:利润/销售额|.2%}}                    百分比格式
         {{计算:A.销售额.max - A.销售额.min|.0f}}    极差取整
     """
-    # 分离表达式与格式（仅最后一个 | 或 ｜ 视为格式分隔符）
-    # 同时支持半角 | (U+007C) 和全角 ｜ (U+FF5C)，中文输入法常误打全角
-    fmt = None
-    # 找最后一个 | 或 ｜ 的位置
-    last_pipe_idx = max(expr.rfind("|"), expr.rfind("｜"))
-    if last_pipe_idx != -1:
-        expr_part = expr[:last_pipe_idx]
-        fmt_candidate = expr[last_pipe_idx + 1:].strip()
-        # 仅当候选项符合已知格式时才视为格式串，否则当表达式的一部分
-        known_fmts = {
-            # 小数位格式
-            ".0f", ".1f", ".2f", ".3f", ".4f", ".5f", ".6f",
-            # 整数格式
-            "int", "d",
-            # 百分比格式（自动 ×100 加 %）
-            ".0%", ".1%", ".2%", ".3%", ".4%",
-            # 科学计数法
-            ".0e", ".1e", ".2e", ".3e", ".0E", ".1E", ".2E", ".3E",
-            # 千分位
-            ",.0f", ",.1f", ",.2f", ",.3f", ",.0%", ",.1%", ",.2%", ",.3%",
-        }
-        if fmt_candidate in known_fmts:
-            expr = expr_part.strip()
-            fmt = fmt_candidate
+    # 分离表达式与格式（复用模块级 _split_expr_and_fmt）
+    expr, fmt = _split_expr_and_fmt(expr)
 
     # 标识符正则：1段或多段以 . 分隔，第一段必须含字母/汉字/下划线（排除 3.14 这类纯数字）
     # 单段如 "本月"（依赖 default_block），多段如 "区块.列"、"Sheet.区块.列.行值"
@@ -397,7 +414,8 @@ def _resolve_calc_expr(expr: str, pivot_data: Dict[str, pd.DataFrame],
 
 
 def _resolve_text_placeholder(expr: str, pivot_data: Dict[str, pd.DataFrame],
-                              default_block: Optional[str] = None) -> str:
+                              default_block: Optional[str] = None,
+                              raw: bool = False) -> str:
     """解析文本占位符表达式，返回替换值字符串
 
     支持的格式：
@@ -414,6 +432,10 @@ def _resolve_text_placeholder(expr: str, pivot_data: Dict[str, pd.DataFrame],
 
     查找优先级：先尝试 "Sheet名.区块名" 双段精确匹配，
     再回退到 "区块名" 单段跨 sheet 匹配。
+
+    raw=True 时返回原始 Python 值（int/float/str），不经过 _parse_value 截断，
+    用于带格式后缀的文本占位符（避免精度丢失，如 0.3765 被截成 "0.38"）。
+    找不到值时仍返回空字符串 ""。
     """
     expr = expr.strip()
     parts = expr.split(".")
@@ -426,7 +448,8 @@ def _resolve_text_placeholder(expr: str, pivot_data: Dict[str, pd.DataFrame],
         # 标量存放在无行维度的结果里（单行），遍历所有 sheet 查找
         for sheet_name, df in pivot_data.items():
             if scalar_name in df.columns and len(df) == 1:
-                return _parse_value(df[scalar_name].iloc[0])
+                v = df[scalar_name].iloc[0]
+                return v if raw else _parse_value(v)
         return ""
 
     # 尝试 "Sheet名.区块名" 双段形式（至少3段：Sheet.区块.列）
@@ -499,7 +522,7 @@ def _resolve_text_placeholder(expr: str, pivot_data: Dict[str, pd.DataFrame],
 
     # 特殊列名：行数
     if col == "行数":
-        return str(len(df))
+        return len(df) if raw else str(len(df))
 
     if col not in df.columns:
         return ""
@@ -512,13 +535,15 @@ def _resolve_text_placeholder(expr: str, pivot_data: Dict[str, pd.DataFrame],
         if len(matched) == 0:
             return ""
         value = matched[col].iloc[0]
-        return _parse_value(value)
+        return value if raw else _parse_value(value)
 
     # 聚合
     if agg:
         result = _aggregate_column(df, col, agg)
         if result is None:
             return ""
+        if raw:
+            return result
         if isinstance(result, float):
             if result == int(result):
                 return str(int(result))
@@ -528,8 +553,10 @@ def _resolve_text_placeholder(expr: str, pivot_data: Dict[str, pd.DataFrame],
     # 默认：数值列求和，非数值列取首行
     numeric_series = pd.to_numeric(df[col], errors="coerce")
     if not numeric_series.isna().all():
-        return _parse_value(float(numeric_series.sum()))
-    return _parse_value(df[col].iloc[0])
+        v = float(numeric_series.sum())
+        return v if raw else _parse_value(v)
+    v = df[col].iloc[0]
+    return v if raw else _parse_value(v)
 
 
 def _parse_slide_notes(notes_text: str) -> Dict[str, str]:
@@ -586,7 +613,19 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
                 if value:
                     replace_count += 1
                 return value or ""
-            value = _resolve_text_placeholder(expr, pivot_data, default_block)
+            # 文本占位符：支持可选格式后缀 {{区块.列|格式}}
+            text_expr, text_fmt = _split_expr_and_fmt(expr)
+            if text_fmt:
+                # 带格式后缀：用 raw=True 取原始值，避免 _parse_value 截断精度
+                raw_value = _resolve_text_placeholder(text_expr, pivot_data, default_block, raw=True)
+                if raw_value == "" or raw_value is None:
+                    return ""
+                try:
+                    value = _format_calc_result(float(raw_value), text_fmt)
+                except (ValueError, TypeError):
+                    value = str(raw_value)
+            else:
+                value = _resolve_text_placeholder(text_expr, pivot_data, default_block)
             if value:
                 replace_count += 1
             return value
