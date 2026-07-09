@@ -326,11 +326,14 @@ def _resolve_calc_expr(expr: str, pivot_data: Dict[str, pd.DataFrame],
         {{计算:利润/销售额|.2%}}                    百分比格式
         {{计算:A.销售额.max - A.销售额.min|.0f}}    极差取整
     """
-    # 分离表达式与格式（仅最后一个 | 视为格式分隔符）
+    # 分离表达式与格式（仅最后一个 | 或 ｜ 视为格式分隔符）
+    # 同时支持半角 | (U+007C) 和全角 ｜ (U+FF5C)，中文输入法常误打全角
     fmt = None
-    if "|" in expr:
-        expr_part, fmt_candidate = expr.rsplit("|", 1)
-        fmt_candidate = fmt_candidate.strip()
+    # 找最后一个 | 或 ｜ 的位置
+    last_pipe_idx = max(expr.rfind("|"), expr.rfind("｜"))
+    if last_pipe_idx != -1:
+        expr_part = expr[:last_pipe_idx]
+        fmt_candidate = expr[last_pipe_idx + 1:].strip()
         # 仅当候选项符合已知格式时才视为格式串，否则当表达式的一部分
         known_fmts = {
             # 小数位格式
