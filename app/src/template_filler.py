@@ -856,13 +856,14 @@ def _write_chart_data(chart, df: pd.DataFrame):
 
 def _resolve_image_path(expr: str, pivot_data: Dict[str, pd.DataFrame],
                         default_block: Optional[str], template_dir: str,
-                        output_dir: Optional[str] = None) -> Optional[str]:
+                        output_dir: Optional[str] = None,
+                        image_dir: Optional[str] = None) -> Optional[str]:
     """解析 {{图片:...}} 表达式，返回图片文件绝对路径或 None
 
     路径解析顺序：
     1. 绝对路径 → 直接用
     2. @output/... 前缀 → 拼接到输出目录（解决带时间戳的动态输出目录）
-    3. 其他相对路径 → 拼接到模板目录
+    3. 其他相对路径 → 优先在 image_dir 查找，找不到回退到 template_dir
     4. 透视数据解析 → 取到的值再按 1/2/3 查
 
     支持通配符 * 和 ?（用于文件名或目录名带时间戳的模糊匹配）：
@@ -877,7 +878,7 @@ def _resolve_image_path(expr: str, pivot_data: Dict[str, pd.DataFrame],
         return None
 
     def _try_resolve(path_str: str) -> Optional[str]:
-        """对单个路径字符串尝试解析（绝对 / @output / 相对模板目录），支持通配符"""
+        """对单个路径字符串尝试解析（绝对 / @output / 相对目录），支持通配符"""
         path_str = path_str.strip()
         if not path_str:
             return None
@@ -892,14 +893,19 @@ def _resolve_image_path(expr: str, pivot_data: Dict[str, pd.DataFrame],
             # 绝对路径
             candidate = path_str
         else:
-            # 相对模板目录
-            candidate = os.path.join(template_dir, path_str)
+            # 相对路径：优先 image_dir，回退 template_dir
+            candidate = os.path.join(image_dir or template_dir, path_str)
 
         # 含通配符：用 glob 模糊匹配
         if "*" in candidate or "?" in candidate:
             matches = sorted(glob.glob(candidate))
             if not matches:
-                return None
+                # 回退到 template_dir
+                if image_dir:
+                    fallback = os.path.join(template_dir, path_str)
+                    matches = sorted(glob.glob(fallback))
+                if not matches:
+                    return None
             if len(matches) > 1:
                 print(f"    [信息] 通配符匹配到 {len(matches)} 个文件，使用第一个: {os.path.basename(matches[0])}")
             return os.path.abspath(matches[0])
@@ -907,6 +913,11 @@ def _resolve_image_path(expr: str, pivot_data: Dict[str, pd.DataFrame],
         # 无通配符：精确匹配
         if os.path.isfile(candidate):
             return os.path.abspath(candidate)
+        # 相对路径回退：image_dir 找不到时尝试 template_dir
+        if image_dir and not os.path.isabs(path_str):
+            fallback = os.path.join(template_dir, path_str)
+            if os.path.isfile(fallback):
+                return os.path.abspath(fallback)
         return None
 
     # 1) 直接尝试解析表达式本身作为路径
@@ -929,13 +940,16 @@ def _replace_pictures(slide, pivot_data: Dict[str, pd.DataFrame],
                       template_dir: str,
                       text_image_exprs: Optional[List[str]] = None,
                       output_dir: Optional[str] = None,
-                      shape_block_map: Optional[Dict[str, str]] = None) -> int:
+                      shape_block_map: Optional[Dict[str, str]] = None,
+                      image_dir: Optional[str] = None) -> int:
     """替换幻灯片中的图片，返回替换次数。
 
     匹配优先级：
     1. 图片形状的 name 或 alternative_text 中含 {{图片:...}}
     2. 备注区声明的 形状名=图片路径（shape_block_map）
     3. 文本框中收集到的 {{图片:...}} 表达式 → 匹配同页第一张未被其他方式匹配的图片
+
+    路径解析时，相对路径优先在 image_dir 查找，找不到再回退到 template_dir。
     """
     if text_image_exprs is None:
         text_image_exprs = []
@@ -970,7 +984,7 @@ def _replace_pictures(slide, pivot_data: Dict[str, pd.DataFrame],
         if not expr:
             continue
 
-        image_path = _resolve_image_path(expr, pivot_data, default_block, template_dir, output_dir)
+        image_path = _resolve_image_path(expr, pivot_data, default_block, template_dir, output_dir, image_dir)
         if not image_path:
             print(f"    [警告] 图片路径无效 [{expr}]: 文件不存在")
             continue
@@ -982,7 +996,7 @@ def _replace_pictures(slide, pivot_data: Dict[str, pd.DataFrame],
 
     # 文本关联模式：{{图片:...}} 在文本框中 → 替换同页第一张未被匹配的图片
     for expr in text_image_exprs:
-        image_path = _resolve_image_path(expr, pivot_data, default_block, template_dir, output_dir)
+        image_path = _resolve_image_path(expr, pivot_data, default_block, template_dir, output_dir, image_dir)
         if not image_path:
             continue
         for shape in slide.shapes:
@@ -1182,13 +1196,14 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
     return replace_count
 
 
-def fill_template(template_path: str, pivot_data_path: str, output_path: str) -> Dict:
+def fill_template(template_path: str, pivot_data_path: str, output_path: str, image_dir: Optional[str] = None) -> Dict:
     """填充 PPT 模板
 
     Args:
         template_path: PPT 模板文件路径
         pivot_data_path: 透视结果 xlsx 路径
         output_path: 输出 PPT 路径
+        image_dir: 图片搜索目录（相对路径图片在此目录查找，为 None 时回退到模板所在目录）
 
     Returns:
         dict: 替换统计 {slides, text_replacements, chart_replacements, picture_replacements, table_replacements}
@@ -1241,7 +1256,7 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
 
         chart_count = _replace_chart_data(slide, pivot_data, default_block, alias_map, shape_block_map)
 
-        picture_count = _replace_pictures(slide, pivot_data, default_block, template_dir, image_collector, output_dir, shape_block_map)
+        picture_count = _replace_pictures(slide, pivot_data, default_block, template_dir, image_collector, output_dir, shape_block_map, image_dir)
 
         table_count = _replace_table_data(slide, pivot_data, default_block, shape_block_map)
 

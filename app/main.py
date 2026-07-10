@@ -22,7 +22,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.19.1"
+__VERSION__ = "2.19.2"
 __UPDATE_DATE__ = "2026-07-10"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1107,7 +1107,10 @@ def _run_template_mode(template_path, pivot_file=None, output_path=None, pivot_d
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = os.path.join(template_dir, f"{base_name}_填充_{ts}.pptx")
 
-    fill_template(template_path, pivot_file, output_path)
+    # 图片搜索目录：复用 pivot_dir（数据图片同目录场景），否则模板所在目录
+    abs_image_dir = os.path.abspath(pivot_dir) if pivot_dir else None
+
+    fill_template(template_path, pivot_file, output_path, image_dir=abs_image_dir)
 
 
 def main():
@@ -1213,7 +1216,7 @@ def main():
         tpl_parser = argparse.ArgumentParser(add_help=False)
         tpl_parser.add_argument("template_path", help="PPT模板文件路径")
         tpl_parser.add_argument("--pivot", dest="pivot_file", default=None)
-        tpl_parser.add_argument("--pivot-dir", dest="pivot_dir", default=None)
+        tpl_parser.add_argument("--pivot-dir", dest="pivot_dir", default=None, help="数据文件和图片的搜索目录")
         tpl_parser.add_argument("-o", "--output", default=None)
         tpl_args = tpl_parser.parse_args(raw_args)
         _run_template_mode(tpl_args.template_path, tpl_args.pivot_file, tpl_args.output, tpl_args.pivot_dir)
