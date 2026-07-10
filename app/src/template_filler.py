@@ -789,17 +789,35 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
     return replace_count
 
 
+_PCT_KEYWORDS = ["占比", "pct", "百分比", "比例"]
+
+
+def _is_pct_column(col_name: str, values: list) -> bool:
+    """判断列是否为百分比数据：列名含占比关键词且值域在 0~1 之间"""
+    if not col_name:
+        return False
+    name = str(col_name)
+    if not any(kw in name for kw in _PCT_KEYWORDS):
+        return False
+    nums = [float(v) for v in values if isinstance(v, (int, float))]
+    if not nums:
+        return False
+    return all(0 <= v <= 1 for v in nums)
+
+
 def _write_chart_data(chart, df: pd.DataFrame):
-    """将 DataFrame 写入图表的内嵌 WorkBook"""
+    """将 DataFrame 写入图表的内嵌 WorkBook，并同步数据标签格式"""
     from pptx.chart.data import CategoryChartData
 
     # 第一列作为类别（X轴），其余列作为系列（Y轴）
     categories = df.iloc[:, 0].astype(str).tolist()
     series_data = {}
+    pct_flags = {}  # 记录每个系列是否为百分比列
     for col_idx in range(1, len(df.columns)):
         col_name = df.columns[col_idx]
         values = pd.to_numeric(df.iloc[:, col_idx], errors="coerce").fillna(0).tolist()
         series_data[col_name] = values
+        pct_flags[col_name] = _is_pct_column(col_name, values)
 
     chart_data = CategoryChartData()
     chart_data.categories = categories
@@ -807,6 +825,33 @@ def _write_chart_data(chart, df: pd.DataFrame):
         chart_data.add_series(name, values)
 
     chart.replace_data(chart_data)
+
+    # 同步数据标签格式：百分比列显示 0.0%
+    try:
+        plot = chart.plots[0]
+        if plot.has_data_labels:
+            data_labels = plot.data_labels
+        else:
+            plot.has_data_labels = True
+            data_labels = plot.data_labels
+
+        # 所有系列都是百分比 → 用 0.0% 格式
+        all_pct = all(pct_flags.values()) if pct_flags else False
+        any_pct = any(pct_flags.values()) if pct_flags else False
+
+        if all_pct:
+            data_labels.number_format = '0.0%'
+            data_labels.number_format_is_linked = False
+        elif any_pct:
+            # 混合场景：逐系列设置（python-pptx 限制，仅能设 plot 级别）
+            # 取多数：如果超过一半是百分比，用百分比格式
+            data_labels.number_format = '#,##0.##'
+            data_labels.number_format_is_linked = False
+        else:
+            data_labels.number_format = '#,##0.##'
+            data_labels.number_format_is_linked = False
+    except Exception:
+        pass
 
 
 def _resolve_image_path(expr: str, pivot_data: Dict[str, pd.DataFrame],
@@ -883,15 +928,19 @@ def _replace_pictures(slide, pivot_data: Dict[str, pd.DataFrame],
                       default_block: Optional[str],
                       template_dir: str,
                       text_image_exprs: Optional[List[str]] = None,
-                      output_dir: Optional[str] = None) -> int:
+                      output_dir: Optional[str] = None,
+                      shape_block_map: Optional[Dict[str, str]] = None) -> int:
     """替换幻灯片中的图片，返回替换次数。
 
     匹配优先级：
     1. 图片形状的 name 或 alternative_text 中含 {{图片:...}}
-    2. 文本框中收集到的 {{图片:...}} 表达式 → 匹配同页第一张未被其他方式匹配的图片
+    2. 备注区声明的 形状名=图片路径（shape_block_map）
+    3. 文本框中收集到的 {{图片:...}} 表达式 → 匹配同页第一张未被其他方式匹配的图片
     """
     if text_image_exprs is None:
         text_image_exprs = []
+    if shape_block_map is None:
+        shape_block_map = {}
 
     replaced = 0
     matched_shape_ids = set()
@@ -901,12 +950,22 @@ def _replace_pictures(slide, pivot_data: Dict[str, pd.DataFrame],
             continue
 
         expr = None
+        # 优先级1：形状名称/替代文字中的 {{图片:...}}
         for attr in ("name", "alternative_text"):
             val = (getattr(shape, attr, None) or "")
             m = _IMAGE_PLACEHOLDER_RE.search(val)
             if m:
                 expr = m.group(1).strip()
                 break
+
+        # 优先级2：备注区声明的 形状名=图片路径
+        if not expr and shape_block_map:
+            try:
+                mapped = shape_block_map.get(shape.name)
+                if mapped:
+                    expr = mapped
+            except Exception:
+                pass
 
         if not expr:
             continue
@@ -1182,7 +1241,7 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str) ->
 
         chart_count = _replace_chart_data(slide, pivot_data, default_block, alias_map, shape_block_map)
 
-        picture_count = _replace_pictures(slide, pivot_data, default_block, template_dir, image_collector, output_dir)
+        picture_count = _replace_pictures(slide, pivot_data, default_block, template_dir, image_collector, output_dir, shape_block_map)
 
         table_count = _replace_table_data(slide, pivot_data, default_block, shape_block_map)
 
