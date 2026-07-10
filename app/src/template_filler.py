@@ -586,64 +586,114 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
                            image_collector: Optional[List[str]] = None,
                            alias_map: Optional[Dict[str, str]] = None) -> int:
     """替换文本框中的占位符，返回替换次数。
+
+    保留各 run 的原始格式（颜色、字号、加粗等），仅替换占位符所在的 run 文本，
+    不影响同段落中其他 run 的格式。
+
     如果 image_collector 不为 None，{{图片:...}} 会被收集到列表中并从文本中移除。
     alias_map: 备注区声明的别名映射（{别名: 表达式}），正文 {{别名}} 会被展开为对应表达式再解析。
     """
     replace_count = 0
     for para in text_frame.paragraphs:
-        full_text = "".join(run.text for run in para.runs)
+        if not para.runs:
+            continue
+
+        runs = para.runs
+        # 构建完整文本和各 run 的位置映射
+        full_text = ""
+        run_positions = []  # [(start, end) for each run]
+        for run in runs:
+            start = len(full_text)
+            full_text += run.text
+            end = len(full_text)
+            run_positions.append((start, end))
+
         if not _PLACEHOLDER_RE.search(full_text):
             continue
 
-        def _replacer(m):
-            nonlocal replace_count
+        # 查找所有占位符匹配，逆序处理避免位置偏移
+        matches = list(_PLACEHOLDER_RE.finditer(full_text))
+        for m in reversed(matches):
             expr = m.group(1).strip()
+            match_start = m.start()
+            match_end = m.end()
+
+            # 解析占位符，获取替换值
+            replacement = None  # None = 保留原文（不替换）
+            should_count = False
+
             if expr.startswith("图表") or expr.startswith("图表:"):
-                return m.group(0)
-            if (expr.startswith("图片") or expr.startswith("图片:")) and image_collector is not None:
+                continue  # 保留原文
+            elif (expr.startswith("图片") or expr.startswith("图片:")) and image_collector is not None:
                 image_collector.append(expr[2:].lstrip(":：").strip())
-                replace_count += 1
-                return ""
-            # 计算占位符：{{计算:表达式|格式}}
-            if expr.startswith("计算:") or expr.startswith("计算："):
+                replacement = ""
+                should_count = True
+            elif expr.startswith("计算:") or expr.startswith("计算："):
                 calc_expr = expr[3:].lstrip(":：").strip()
                 value = _resolve_calc_expr(calc_expr, pivot_data, default_block)
-                if value:
-                    replace_count += 1
-                return value or ""
-            # 别名展开：{{别名}} → 用备注区声明的表达式替换后再解析
-            if alias_map and expr in alias_map:
+                replacement = value or ""
+                should_count = bool(value)
+            elif alias_map and expr in alias_map:
                 alias_expr = alias_map[expr]
                 if alias_expr.startswith("计算:") or alias_expr.startswith("计算："):
                     calc_expr = alias_expr[3:].lstrip(":：").strip()
                     value = _resolve_calc_expr(calc_expr, pivot_data, default_block)
                 else:
                     value = _resolve_text_placeholder(alias_expr, pivot_data, default_block)
-                if value:
-                    replace_count += 1
-                return value or ""
-            # 文本占位符：支持可选格式后缀 {{区块.列|格式}}
-            text_expr, text_fmt = _split_expr_and_fmt(expr)
-            if text_fmt:
-                # 带格式后缀：用 raw=True 取原始值，避免 _parse_value 截断精度
-                raw_value = _resolve_text_placeholder(text_expr, pivot_data, default_block, raw=True)
-                if raw_value == "" or raw_value is None:
-                    return ""
-                try:
-                    value = _format_calc_result(float(raw_value), text_fmt)
-                except (ValueError, TypeError):
-                    value = str(raw_value)
+                replacement = value or ""
+                should_count = bool(value)
             else:
-                value = _resolve_text_placeholder(text_expr, pivot_data, default_block)
-            if value:
-                replace_count += 1
-            return value
+                # 文本占位符：支持可选格式后缀 {{区块.列|格式}}
+                text_expr, text_fmt = _split_expr_and_fmt(expr)
+                if text_fmt:
+                    raw_value = _resolve_text_placeholder(text_expr, pivot_data, default_block, raw=True)
+                    if raw_value == "" or raw_value is None:
+                        replacement = ""
+                        should_count = False
+                    else:
+                        try:
+                            value = _format_calc_result(float(raw_value), text_fmt)
+                        except (ValueError, TypeError):
+                            value = str(raw_value)
+                        replacement = value
+                        should_count = bool(value)
+                else:
+                    value = _resolve_text_placeholder(text_expr, pivot_data, default_block)
+                    replacement = value or ""
+                    should_count = bool(value)
 
-        new_text = _PLACEHOLDER_RE.sub(_replacer, full_text)
-        if new_text != full_text and para.runs:
-            para.runs[0].text = new_text
-            for run in para.runs[1:]:
-                run.text = ""
+            if should_count:
+                replace_count += 1
+
+            # 定位占位符跨越的 run 范围
+            first_run_idx = None
+            last_run_idx = None
+            for i, (rs, re_) in enumerate(run_positions):
+                if first_run_idx is None and rs <= match_start < re_:
+                    first_run_idx = i
+                if rs < match_end <= re_:
+                    last_run_idx = i
+                    break
+
+            if first_run_idx is None:
+                continue
+            if last_run_idx is None:
+                last_run_idx = len(runs) - 1
+
+            # 替换第一个 run 中的占位符部分为替换值
+            rs, re_ = run_positions[first_run_idx]
+            run = runs[first_run_idx]
+            local_start = match_start - rs
+            local_end = min(match_end, re_) - rs
+            run.text = run.text[:local_start] + replacement + run.text[local_end:]
+
+            # 清除后续 run 中的占位符残留部分
+            for i in range(first_run_idx + 1, last_run_idx + 1):
+                rs_i, re_i = run_positions[i]
+                run_i = runs[i]
+                local_end_i = min(match_end, re_i) - rs_i
+                run_i.text = run_i.text[local_end_i:]
+
     return replace_count
 
 
