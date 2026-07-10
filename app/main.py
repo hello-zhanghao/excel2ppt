@@ -22,7 +22,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.19.2"
+__VERSION__ = "2.19.3"
 __UPDATE_DATE__ = "2026-07-10"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1107,8 +1107,13 @@ def _run_template_mode(template_path, pivot_file=None, output_path=None, pivot_d
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = os.path.join(template_dir, f"{base_name}_填充_{ts}.pptx")
 
-    # 图片搜索目录：复用 pivot_dir（数据图片同目录场景），否则模板所在目录
-    abs_image_dir = os.path.abspath(pivot_dir) if pivot_dir else None
+    # 图片搜索目录：pivot_dir > pivot_file 所在目录 > 模板所在目录
+    if pivot_dir:
+        abs_image_dir = os.path.abspath(pivot_dir)
+    elif pivot_file and os.path.exists(pivot_file):
+        abs_image_dir = os.path.dirname(os.path.abspath(pivot_file))
+    else:
+        abs_image_dir = None
 
     fill_template(template_path, pivot_file, output_path, image_dir=abs_image_dir)
 
