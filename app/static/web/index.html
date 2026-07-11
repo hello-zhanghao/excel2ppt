@@ -110,7 +110,11 @@ body { font-family:'Microsoft YaHei',sans-serif; background:#f0f2f5; color:#333;
 </div>
 
 <script>
-const SID = 'sid_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+const SID = (() => {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+})();
 let pptPage = 1;
 let pptTotal = 0;
 
@@ -171,13 +175,19 @@ function handleFiles(files) {
 
 function updateFileList(data) {
   const el = document.getElementById('fileList');
-  el.innerHTML = data.uploaded.map(f => {
+  el.replaceChildren();
+  data.uploaded.forEach(f => {
     const isConfig = data.configs.includes(f);
     const cls = isConfig ? 'badge-config' : 'badge-data';
     const label = isConfig ? '配置' : '数据';
-    return `<div class="file"><span class="badge ${cls}">${label}</span> ${f}</div>`;
-  }).join('');
-  if (data.uploaded.length === 0) el.innerHTML = '';
+    const item = document.createElement('div');
+    item.className = 'file';
+    const badge = document.createElement('span');
+    badge.className = `badge ${cls}`;
+    badge.textContent = label;
+    item.append(badge, document.createTextNode(` ${f}`));
+    el.appendChild(item);
+  });
 }
 
 // ========== 一键执行 ==========
@@ -217,8 +227,10 @@ function appendLog(msg) {
   if (msg.startsWith('[OK]') || msg.includes('✓') || msg.includes('✅')) cls = 'ok';
   else if (msg.includes('错误') || msg.includes('❌')) cls = 'err';
   else if (msg.includes('警告') || msg.includes('⚠')) cls = 'warn';
-  const span = cls ? `<span class="${cls}">${msg}</span>` : msg;
-  box.innerHTML += span + '\n';
+  const line = document.createElement(cls ? 'span' : 'div');
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  box.append(line, document.createElement('br'));
   box.scrollTop = box.scrollHeight;
 }
 

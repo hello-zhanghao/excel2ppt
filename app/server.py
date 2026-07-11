@@ -8,6 +8,9 @@ import threading
 import time
 import io
 import queue
+from html import escape as html_escape
+import re
+from contextlib import redirect_stdout
 from datetime import datetime
 from flask import Flask, request, jsonify, send_file, render_template_string, Response
 
@@ -23,6 +26,16 @@ if not os.path.exists(TEMP_ROOT):
 
 sessions = {}
 sessions_lock = threading.Lock()
+analysis_lock = threading.Lock()
+_SID_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+
+
+def _get_sid(raw_sid):
+    """Reject malformed identifiers instead of silently sharing a default job."""
+    sid = str(raw_sid or "")
+    if not _SID_RE.fullmatch(sid):
+        return None
+    return sid
 
 
 def _get_or_create_session(sid):
@@ -58,7 +71,9 @@ def index():
 
 @app.route("/api/upload", methods=["POST"])
 def api_upload():
-    sid = request.form.get("sid", "default")
+    sid = _get_sid(request.form.get("sid"))
+    if not sid:
+        return jsonify({"ok": False, "error": "无效会话，请刷新页面后重试"}), 400
     s = _get_or_create_session(sid)
     uploaded = []
 
@@ -101,13 +116,16 @@ def api_upload():
 
 @app.route("/api/analyze", methods=["POST"])
 def api_analyze():
-    sid = request.json.get("sid", "default")
+    payload = request.get_json(silent=True) or {}
+    sid = _get_sid(payload.get("sid"))
+    if not sid:
+        return jsonify({"ok": False, "error": "无效会话，请刷新页面后重试"}), 400
     s = _get_or_create_session(sid)
 
     if s["status"] == "running":
         return jsonify({"ok": False, "error": "已有任务在运行"})
 
-    config_name = request.json.get("config", "")
+    config_name = payload.get("config", "")
     config_path = s["files"].get(config_name) or _find_config(s["work_dir"])
     if not config_path or not os.path.exists(config_path):
         return jsonify({"ok": False, "error": "未找到配置文件，请先上传"})
@@ -170,50 +188,48 @@ def _run_analysis_web(sid, config_path):
         def flush(self):
             pass
 
-    old_stdout = sys.stdout
-    sys.stdout = WebLogRedirector()
-
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = os.path.basename(config_path).rsplit(".", 1)[0]
-
-    detected = _detect_mode_web(config_path)
-    _push_log(sid, f"配置类型: {detected}")
-
-    # pivot 分析
-    if detected in ("pivot", "all"):
+    # The legacy generators use print(). stdout is process-global, so jobs are
+    # serialised while it is redirected; without this, two users receive each
+    # other's logs and an exception can leave stdout redirected forever.
+    with analysis_lock, redirect_stdout(WebLogRedirector()):
         try:
-            pivot_out = os.path.join(s["work_dir"], f"{base}_分析_{ts}.xlsx")
-            _run_pivot_mode(config_path, pivot_out)
-            s["output"]["pivot"] = pivot_out
-        except SystemExit:
-            pass
-        except Exception as e:
-            _push_log(sid, f"透视分析失败: {e}")
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            base = os.path.basename(config_path).rsplit(".", 1)[0]
+            detected = _detect_mode_web(config_path)
+            _push_log(sid, f"配置类型: {detected}")
 
-    # ppt 生成
-    if detected in ("ppt", "all"):
-        try:
-            ppt_out = os.path.join(s["work_dir"], f"{base}_报告_{ts}.pptx")
-            pivot_src = s["output"].get("pivot")
-            _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_src)
-            s["output"]["ppt"] = ppt_out
-        except SystemExit:
-            _push_log(sid, "⚠ PPT 生成未完成（数据可能不完整）")
-        except Exception as e:
-            _push_log(sid, f"PPT 生成失败: {e}")
-            import traceback
-            for line in traceback.format_exc().split("\n")[:3]:
-                if line.strip():
-                    _push_log(sid, line)
+            if detected in ("pivot", "all"):
+                try:
+                    pivot_out = os.path.join(s["work_dir"], f"{base}_分析_{ts}.xlsx")
+                    _run_pivot_mode(config_path, pivot_out)
+                    s["output"]["pivot"] = pivot_out
+                except SystemExit:
+                    pass
+                except Exception as e:
+                    _push_log(sid, f"透视分析失败: {e}")
 
-    _push_log(sid, "✅ 分析完成！" if s["output"] else "⚠ 无输出文件")
-    sys.stdout = old_stdout
-    s["status"] = "done"
+            if detected in ("ppt", "all"):
+                try:
+                    ppt_out = os.path.join(s["work_dir"], f"{base}_报告_{ts}.pptx")
+                    _run_ppt_mode(config_path, ppt_out, pivot_data_file=s["output"].get("pivot"))
+                    s["output"]["ppt"] = ppt_out
+                except SystemExit:
+                    _push_log(sid, "⚠ PPT 生成未完成（数据可能不完整）")
+                except Exception as e:
+                    _push_log(sid, f"PPT 生成失败: {e}")
+
+            _push_log(sid, "✅ 分析完成！" if s["output"] else "⚠ 无输出文件")
+            s["status"] = "done"
+        except Exception as e:
+            _push_log(sid, f"❌ 分析失败: {e}")
+            s["status"] = "error"
 
 
 @app.route("/api/logs")
 def api_logs():
-    sid = request.args.get("sid", "default")
+    sid = _get_sid(request.args.get("sid"))
+    if not sid:
+        return "无效会话", 400
     s = _get_or_create_session(sid)
 
     def generate():
@@ -233,7 +249,9 @@ def api_logs():
 
 @app.route("/api/status")
 def api_status():
-    sid = request.args.get("sid", "default")
+    sid = _get_sid(request.args.get("sid"))
+    if not sid:
+        return jsonify({"error": "无效会话"}), 400
     s = _get_or_create_session(sid)
     return jsonify({
         "status": s["status"],
@@ -243,7 +261,9 @@ def api_status():
 
 @app.route("/api/preview/excel")
 def api_preview_excel():
-    sid = request.args.get("sid", "default")
+    sid = _get_sid(request.args.get("sid"))
+    if not sid:
+        return "无效会话", 400
     s = _get_or_create_session(sid)
     file_key = request.args.get("file", "pivot")
     filepath = s["output"].get(file_key)
@@ -267,7 +287,7 @@ def _excel_to_html(filepath):
 
         max_col = max(len(row) for row in rows) if rows else 1
 
-        html = f'<div class="sheet-name">{sname}</div>\n<table>'
+        html = f'<div class="sheet-name">{html_escape(sname)}</div>\n<table>'
         for ri, row in enumerate(rows):
             html += "<tr>"
             is_header = (ri == 0)
@@ -283,7 +303,7 @@ def _excel_to_html(filepath):
                         val = f"{val:.1%}"
                     elif abs(val) < 1 and val != 0:
                         val = round(val, 4)
-                html += f"<{tag}>{val}</{tag}>"
+                html += f"<{tag}>{html_escape(str(val))}</{tag}>"
             html += "</tr>\n"
         html += "</table>"
         sheets_html.append(html)
@@ -304,7 +324,9 @@ def _excel_to_html(filepath):
 
 @app.route("/api/preview/ppt/<int:page>")
 def api_preview_ppt_page(page):
-    sid = request.args.get("sid", "default")
+    sid = _get_sid(request.args.get("sid"))
+    if not sid:
+        return "无效会话", 400
     s = _get_or_create_session(sid)
     filepath = s["output"].get("ppt")
     if not filepath or not os.path.exists(filepath):
@@ -465,7 +487,9 @@ def _render_slide_pillow(slide, prs):
 
 @app.route("/api/preview/ppt/info")
 def api_preview_ppt_info():
-    sid = request.args.get("sid", "default")
+    sid = _get_sid(request.args.get("sid"))
+    if not sid:
+        return jsonify({"error": "无效会话"}), 400
     s = _get_or_create_session(sid)
     filepath = s["output"].get("ppt")
     if not filepath or not os.path.exists(filepath):
@@ -478,7 +502,11 @@ def api_preview_ppt_info():
 
 @app.route("/api/download/<filetype>")
 def api_download(filetype):
-    sid = request.args.get("sid", "default")
+    if filetype not in {"pivot", "ppt"}:
+        return "不支持的文件类型", 404
+    sid = _get_sid(request.args.get("sid"))
+    if not sid:
+        return "无效会话", 400
     s = _get_or_create_session(sid)
     filepath = s["output"].get(filetype)
     if not filepath or not os.path.exists(filepath):
@@ -488,14 +516,14 @@ def api_download(filetype):
 
 # ==================== 启动 ====================
 
-def start_server(port=8899, open_browser=True):
+def start_server(port=8899, open_browser=True, host="127.0.0.1"):
     if open_browser:
         import webbrowser
         threading.Timer(1.0, lambda: webbrowser.open(f"http://localhost:{port}")).start()
     print(f"\n🌐 Excel 统一分析工具 Web 模式 v{__VERSION__}")
     print(f"   访问地址: http://localhost:{port}")
     print(f"   按 Ctrl+C 停止服务\n")
-    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+    app.run(host=host, port=port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
@@ -503,5 +531,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("port", nargs="?", type=int, default=8899)
     parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
+    parser.add_argument("--host", default="127.0.0.1", help="监听地址，默认仅本机访问")
     args = parser.parse_args()
-    start_server(args.port, open_browser=not args.no_browser)
+    start_server(args.port, open_browser=not args.no_browser, host=args.host)

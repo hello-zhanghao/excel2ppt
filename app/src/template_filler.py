@@ -87,6 +87,7 @@ import pandas as pd
 from pptx import Presentation
 from pptx.util import Pt
 from pptx.enum.shapes import MSO_SHAPE_TYPE
+from src.safe_math import evaluate_numeric_expression
 
 
 # 占位符正则：{{...}}
@@ -413,7 +414,7 @@ def _resolve_calc_expr(expr: str, pivot_data: Dict[str, pd.DataFrame],
     safe_expr = ident_pattern.sub(_replace_ident, expr)
 
     try:
-        result = eval(safe_expr, {"__builtins__": {}}, {})
+        result = evaluate_numeric_expression(safe_expr)
     except Exception:
         return ""
 

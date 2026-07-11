@@ -9,6 +9,8 @@ cd app
 
 # 🆕 Web 模式（推荐）：浏览器界面，支持拖拽上传 + 在线预览
 python server.py                # 自动打开 http://localhost:8899
+# 如需局域网访问，显式指定监听地址（默认仅本机访问）
+python server.py --host 0.0.0.0
 
 # GUI 模式：点击「在浏览器中打开」可切换到 Web 界面
 python main.py                  # 启动 Tkinter GUI

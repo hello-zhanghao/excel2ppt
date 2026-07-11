@@ -2,6 +2,7 @@ import os
 import openpyxl
 import pandas as pd
 import glob
+from difflib import SequenceMatcher
 
 
 # ==================== 通用数据文件读取 ====================
@@ -103,27 +104,31 @@ def _calculate_match_score(query, candidate):
     if candidate_lower in query_lower:
         return 0.7
     
-    # 关键词匹配（中文分词效果较差，用简单包含判断）
+    # 中文文件名没有天然的空格分词边界；用全文相似度兜底，
+    # 使“网络指标_7月”能匹配“网络指标_六月”等近似命名。
+    sequence_score = SequenceMatcher(None, query_lower, candidate_lower).ratio()
+
+    # 英文/驼峰名称再叠加关键词匹配。
     query_parts = _split_identifier(query_lower)
     candidate_parts = _split_identifier(candidate_lower)
     
     matched = sum(1 for qp in query_parts if any(qp in cp or cp in qp for cp in candidate_parts))
     if query_parts:
-        return 0.5 * (matched / len(query_parts))
-    
-    return 0.0
+        return max(sequence_score, 0.5 * (matched / len(query_parts)))
+
+    return sequence_score
 
 
 def _split_identifier(s):
     """拆分标识符为关键词部分"""
     import re
-    # 按中文字符、下划线、大写字母分割
-    parts = re.split(r'[\u4e00-\u9fff_]', s)
+    # 仅按分隔符拆分；不能把每一个中文字符都当作分隔符。
+    parts = re.split(r'[_\-\s]+', s)
     # 进一步按大写字母分割（驼峰命名）
     result = []
     for p in parts:
         if p:
-            sub_parts = re.findall(r'[a-z]+|[A-Z][a-z]*|[A-Z]+', p)
+            sub_parts = re.findall(r'[\u4e00-\u9fff]+|[a-z]+|[A-Z][a-z]*|[A-Z]+', p)
             result.extend([sp.lower() for sp in sub_parts if len(sp) > 1])
     return [p for p in result if p]
 

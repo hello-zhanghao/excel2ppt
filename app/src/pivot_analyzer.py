@@ -3,6 +3,7 @@ import re
 import openpyxl
 import pandas as pd
 import numpy as np
+from src.safe_math import evaluate_numeric_expression
 
 
 AGG_MAP = {
@@ -1495,34 +1496,25 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                                 # 部分匹配失败也跳过，避免表达式不完整
                                 continue
 
-                        # 逐行计算：将每行列值注入表达式命名空间
+                        # 使用 AST 白名单一次性计算 Series，避免逐行 iterrows/eval。
                         safe_expr = expr
-                        temp_names = {}
+                        namespace = {}
                         for i, (orig_name, actual_col) in enumerate(col_mapping.items()):
                             temp_name = f"_C{i}_"
                             safe_expr = safe_expr.replace(orig_name, temp_name)
-                            temp_names[temp_name] = actual_col
-
-                        results_list = []
-                        for _, row in calc_df.iterrows():
-                            namespace = {}
-                            for temp_name, actual_col in temp_names.items():
-                                if actual_col == "__SCALAR__":
-                                    for token, col in col_mapping.items():
-                                        if col == "__SCALAR__" and token in scalar_context:
-                                            namespace[temp_name] = float(scalar_context[token])
-                                else:
-                                    namespace[temp_name] = float(row[actual_col])
-                            try:
-                                results_list.append(eval(safe_expr, {"__builtins__": {}}, namespace))
-                            except Exception as e:
-                                print(f"    [警告] 值计算表达式'{expr}'执行失败: {e}")
-                                print(f"           替换后表达式: {safe_expr}")
-                                print(f"           列名映射: {col_mapping}")
-                                print(f"           行列值: {namespace}")
-                                break
-
-                        calc_result = pd.Series(results_list, index=calc_df.index)
+                            if actual_col == "__SCALAR__":
+                                namespace[temp_name] = float(scalar_context[orig_name])
+                            else:
+                                namespace[temp_name] = pd.to_numeric(calc_df[actual_col], errors="coerce")
+                        try:
+                            calc_result = evaluate_numeric_expression(safe_expr, namespace)
+                            if not isinstance(calc_result, pd.Series):
+                                calc_result = pd.Series(calc_result, index=calc_df.index)
+                        except Exception as e:
+                            print(f"    [警告] 值计算表达式'{expr}'执行失败: {e}")
+                            print(f"           替换后表达式: {safe_expr}")
+                            print(f"           列名映射: {col_mapping}")
+                            continue
 
                         if calc_result is None:
                             continue
