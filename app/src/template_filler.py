@@ -807,8 +807,41 @@ def _is_pct_column(col_name: str, values: list) -> bool:
 
 
 def _write_chart_data(chart, df: pd.DataFrame):
-    """将 DataFrame 写入图表的内嵌 WorkBook，并同步数据标签格式"""
-    from pptx.chart.data import CategoryChartData
+    """将 DataFrame 写入图表的内嵌 WorkBook，并同步数据标签格式
+
+    按图表类型分支：
+    - 散点图（XY_SCATTER）：用 XyChartData，第一列作 X 数值，其余列各成一个 Y 系列
+    - 其他图表：用 CategoryChartData，第一列作类别，其余列作系列
+    """
+    from pptx.chart.data import CategoryChartData, XyChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+
+    # 散点图分支：X 轴必须为数值，不能用字符串类别
+    try:
+        is_scatter = chart.chart_type == XL_CHART_TYPE.XY_SCATTER
+    except Exception:
+        is_scatter = False
+
+    if is_scatter:
+        x_values = pd.to_numeric(df.iloc[:, 0], errors="coerce").fillna(0).tolist()
+        chart_data = XyChartData()
+        for col_idx in range(1, len(df.columns)):
+            col_name = df.columns[col_idx]
+            y_values = pd.to_numeric(df.iloc[:, col_idx], errors="coerce").fillna(0).tolist()
+            series = chart_data.add_series(col_name)
+            for x_val, y_val in zip(x_values, y_values):
+                series.add_data_point(float(x_val), float(y_val))
+        chart.replace_data(chart_data)
+        # 散点图数据标签：默认显示数值
+        try:
+            plot = chart.plots[0]
+            if not plot.has_data_labels:
+                plot.has_data_labels = True
+            plot.data_labels.number_format = '#,##0.##'
+            plot.data_labels.number_format_is_linked = False
+        except Exception:
+            pass
+        return
 
     # 第一列作为类别（X轴），其余列作为系列（Y轴）
     categories = df.iloc[:, 0].astype(str).tolist()
