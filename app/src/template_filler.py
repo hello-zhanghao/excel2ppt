@@ -811,31 +811,68 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
         if not target_expr:
             continue
 
-        # 解析 "区块名|列1,列2" 语法，并提取 |xy 标志（散点图独立 xy 对模式）
-        target_expr, xy_pair = _extract_xy_pair_flag(target_expr)
-        target_block, cols = _parse_block_and_cols(target_expr)
-        df = _lookup_block(pivot_data, target_block)
-        if df is None:
-            print(f"    [警告] 图表数据区块 '{target_block}' 未在透视结果中找到")
-            continue
-        if df.empty:
-            continue
-        # 按指定列筛选
-        df = _filter_df_columns(df, cols)
+        # 支持多区块：用 ; 分隔多个区块表达式（仅散点图有意义，每区块形成一个系列）
+        # 语法示例：SheetA.区块A|xy|X,Y ; SheetB.区块B|xy|X,Y ; 区块C
+        sub_exprs = [s.strip() for s in target_expr.split(";") if s.strip()]
 
-        try:
-            _write_chart_data(chart, df, xy_pair=xy_pair)
-            replace_count += 1
-            cols_info = f", 仅列: {cols}" if cols else ""
-            print(f"    [OK] 图表数据替换: {target_block} ({df.shape[0]}行 x {df.shape[1]}列{cols_info})")
-            # 清除形状名称中的占位符（不动图表标题）
+        if len(sub_exprs) <= 1:
+            # 单区块：维持原逻辑
+            sub_expr = sub_exprs[0] if sub_exprs else target_expr
+            sub_expr, xy_pair = _extract_xy_pair_flag(sub_expr)
+            target_block, cols = _parse_block_and_cols(sub_expr)
+            df = _lookup_block(pivot_data, target_block)
+            if df is None:
+                print(f"    [警告] 图表数据区块 '{target_block}' 未在透视结果中找到")
+                continue
+            if df.empty:
+                continue
+            df = _filter_df_columns(df, cols)
+
             try:
-                if shape.name and _CHART_PLACEHOLDER_RE.search(shape.name):
-                    shape.name = _CHART_PLACEHOLDER_RE.sub(target_block, shape.name)
-            except Exception:
-                pass
-        except Exception as e:
-            print(f"    [警告] 图表数据替换失败 [{target_block}]: {e}")
+                _write_chart_data(chart, df, xy_pair=xy_pair)
+                replace_count += 1
+                cols_info = f", 仅列: {cols}" if cols else ""
+                print(f"    [OK] 图表数据替换: {target_block} ({df.shape[0]}行 x {df.shape[1]}列{cols_info})")
+                try:
+                    if shape.name and _CHART_PLACEHOLDER_RE.search(shape.name):
+                        shape.name = _CHART_PLACEHOLDER_RE.sub(target_block, shape.name)
+                except Exception:
+                    pass
+            except Exception as e:
+                print(f"    [警告] 图表数据替换失败 [{target_block}]: {e}")
+        else:
+            # 多区块：散点图专属，每区块解析后形成一个独立系列
+            block_dfs = []  # [(df, xy_pair, cols, block_name), ...]
+            for sub_expr in sub_exprs:
+                sub_expr_clean, xy_pair = _extract_xy_pair_flag(sub_expr)
+                target_block, cols = _parse_block_and_cols(sub_expr_clean)
+                df = _lookup_block(pivot_data, target_block)
+                if df is None:
+                    print(f"    [警告] 图表数据区块 '{target_block}' 未在透视结果中找到")
+                    continue
+                if df.empty:
+                    continue
+                df = _filter_df_columns(df, cols)
+                block_dfs.append((df, xy_pair, cols, target_block))
+
+            if not block_dfs:
+                print(f"    [警告] 多区块表达式无有效数据: {target_expr}")
+                continue
+
+            try:
+                _write_chart_data_multi(chart, block_dfs)
+                replace_count += 1
+                blocks_info = ", ".join(f"{b[3]}({b[0].shape[0]}行)" for b in block_dfs)
+                print(f"    [OK] 图表多区块替换: {blocks_info}")
+                # 清除形状名称中的占位符
+                try:
+                    if shape.name and _CHART_PLACEHOLDER_RE.search(shape.name):
+                        shape.name = _CHART_PLACEHOLDER_RE.sub(
+                            "+".join(b[3] for b in block_dfs), shape.name)
+                except Exception:
+                    pass
+            except Exception as e:
+                print(f"    [警告] 图表多区块替换失败: {e}")
     return replace_count
 
 
@@ -903,6 +940,117 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False):
 
         chart.replace_data(chart_data)
         # 散点图数据标签：默认显示数值
+        try:
+            plot = chart.plots[0]
+            if not plot.has_data_labels:
+                plot.has_data_labels = True
+            plot.data_labels.number_format = '#,##0.##'
+            plot.data_labels.number_format_is_linked = False
+        except Exception:
+            pass
+        return
+
+
+def _write_chart_data_multi(chart, block_dfs: list):
+    """多区块写入图表（散点图专属，每区块形成一个独立系列）
+
+    Args:
+        block_dfs: [(df, xy_pair, cols, block_name), ...]
+            - df: DataFrame
+            - xy_pair: 是否为独立 xy 对模式
+            - cols: 指定列（可选）
+            - block_name: 区块名（用于系列名）
+    """
+    from pptx.chart.data import XyChartData, CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+
+    try:
+        is_scatter = chart.chart_type == XL_CHART_TYPE.XY_SCATTER
+    except Exception:
+        is_scatter = False
+
+    if is_scatter:
+        # 散点图：每区块形成一个或多个系列
+        chart_data = XyChartData()
+        for df, xy_pair, cols, block_name in block_dfs:
+            if xy_pair and len(df.columns) >= 2 and len(df.columns) % 2 == 0:
+                # xy 对模式：列按 (X1,Y1,X2,Y2,...) 配对
+                for i in range(0, len(df.columns), 2):
+                    y_col = df.columns[i + 1]
+                    x_vals = pd.to_numeric(df.iloc[:, i], errors="coerce").fillna(0).tolist()
+                    y_vals = pd.to_numeric(df.iloc[:, i + 1], errors="coerce").fillna(0).tolist()
+                    series = chart_data.add_series(f"{block_name}.{y_col}")
+                    for x_val, y_val in zip(x_vals, y_vals):
+                        series.add_data_point(float(x_val), float(y_val))
+            else:
+                # 共享 X 模式：第一列作 X，其余列各成一个系列
+                x_values = pd.to_numeric(df.iloc[:, 0], errors="coerce").fillna(0).tolist()
+                for col_idx in range(1, len(df.columns)):
+                    col_name = df.columns[col_idx]
+                    y_values = pd.to_numeric(df.iloc[:, col_idx], errors="coerce").fillna(0).tolist()
+                    series = chart_data.add_series(f"{block_name}.{col_name}")
+                    for x_val, y_val in zip(x_values, y_values):
+                        series.add_data_point(float(x_val), float(y_val))
+
+        chart.replace_data(chart_data)
+        try:
+            plot = chart.plots[0]
+            if not plot.has_data_labels:
+                plot.has_data_labels = True
+            plot.data_labels.number_format = '#,##0.##'
+            plot.data_labels.number_format_is_linked = False
+        except Exception:
+            pass
+    else:
+        # 非散点图：取第一个区块走原逻辑
+        df, xy_pair, cols, block_name = block_dfs[0]
+        _write_chart_data(chart, df, xy_pair=xy_pair)
+
+
+def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False):
+    """将 DataFrame 写入图表的内嵌 WorkBook，并同步数据标签格式
+
+    按图表类型分支：
+    - 散点图（XY_SCATTER）：用 XyChartData
+        - xy_pair=False（默认）：第一列作共享 X，其余列各成一个 Y 系列
+        - xy_pair=True：列按 (X1,Y1,X2,Y2,...) 顺序配对，每对形成一个独立系列
+    - 其他图表：用 CategoryChartData，第一列作类别，其余列作系列
+    """
+    from pptx.chart.data import CategoryChartData, XyChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+
+    # 散点图分支：X 轴必须为数值，不能用字符串类别
+    try:
+        is_scatter = chart.chart_type == XL_CHART_TYPE.XY_SCATTER
+    except Exception:
+        is_scatter = False
+
+    if is_scatter:
+        chart_data = XyChartData()
+        if xy_pair:
+            if len(df.columns) >= 2 and len(df.columns) % 2 == 0:
+                for i in range(0, len(df.columns), 2):
+                    x_col = df.columns[i]
+                    y_col = df.columns[i + 1]
+                    x_vals = pd.to_numeric(df.iloc[:, i], errors="coerce").fillna(0).tolist()
+                    y_vals = pd.to_numeric(df.iloc[:, i + 1], errors="coerce").fillna(0).tolist()
+                    series = chart_data.add_series(f"{y_col}")
+                    for x_val, y_val in zip(x_vals, y_vals):
+                        series.add_data_point(float(x_val), float(y_val))
+            else:
+                print(f"    [警告] xy 对模式要求列数为偶数(>=2)，当前 {len(df.columns)} 列，回退到共享 X 模式")
+                xy_pair = False
+
+        if not xy_pair:
+            x_values = pd.to_numeric(df.iloc[:, 0], errors="coerce").fillna(0).tolist()
+            for col_idx in range(1, len(df.columns)):
+                col_name = df.columns[col_idx]
+                y_values = pd.to_numeric(df.iloc[:, col_idx], errors="coerce").fillna(0).tolist()
+                series = chart_data.add_series(col_name)
+                for x_val, y_val in zip(x_values, y_values):
+                    series.add_data_point(float(x_val), float(y_val))
+
+        chart.replace_data(chart_data)
         try:
             plot = chart.plots[0]
             if not plot.has_data_labels:
