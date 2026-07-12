@@ -908,6 +908,24 @@ def _trim_extra_series(chart, expected_count: int):
         pass
 
 
+def _ensure_vary_colors(chart):
+    """确保图表 varyColors=true，使不同系列自动分配不同颜色"""
+    try:
+        _ns = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+        plot = chart.plots[0]
+        root = plot._element
+        vc = root.find("{%s}varyColors" % _ns)
+        if vc is None:
+            from lxml import etree
+            vc = etree.Element("{%s}varyColors" % _ns, {"val": "true"})
+            root.insert(0, vc)
+        else:
+            if vc.get("val") != "1" and vc.get("val") != "true":
+                vc.set("val", "1")
+    except Exception:
+        pass
+
+
 def _fix_plot_by(chart):
     """修正图表 plotBy 方向为 col，防止模板行列方向与新数据不一致
 
@@ -1100,6 +1118,7 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
 
     chart.replace_data(chart_data)
     _trim_extra_series(chart, len(series_data))
+    _ensure_vary_colors(chart)
 
     # 同步数据标签格式：百分比列显示 0.0%
     try:
