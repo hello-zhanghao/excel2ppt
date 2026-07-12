@@ -879,6 +879,19 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
 _PCT_KEYWORDS = ["占比", "pct", "百分比", "比例"]
 
 
+def _trim_extra_series(chart, expected_count: int):
+    """replace_data 后剪除模板遗留的多余系列（模板6系列→数据4系列时剪掉2个空系列）"""
+    from pptx.oxml.ns import qn
+    try:
+        plot = chart.plots[0]
+        ser_elements = plot._element.findall(qn("c:ser"))
+        if len(ser_elements) > expected_count and expected_count > 0:
+            for extra in ser_elements[expected_count:]:
+                plot._element.remove(extra)
+    except Exception:
+        pass
+
+
 def _is_pct_column(col_name: str, values: list) -> bool:
     """判断列是否为百分比数据：列名含占比关键词且值域在 0~1 之间"""
     if not col_name:
@@ -912,6 +925,7 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False):
 
     if is_scatter:
         chart_data = XyChartData()
+        series_count = 0
         if xy_pair:
             # 方案 C：独立 xy 对模式，列按 (X1,Y1,X2,Y2,...) 配对
             # 列数必须为偶数且 >= 2，否则回退到共享 X 模式
@@ -924,6 +938,7 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False):
                     series = chart_data.add_series(f"{y_col}")
                     for x_val, y_val in zip(x_vals, y_vals):
                         series.add_data_point(float(x_val), float(y_val))
+                    series_count += 1
             else:
                 print(f"    [警告] xy 对模式要求列数为偶数(>=2)，当前 {len(df.columns)} 列，回退到共享 X 模式")
                 xy_pair = False
@@ -937,8 +952,10 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False):
                 series = chart_data.add_series(col_name)
                 for x_val, y_val in zip(x_values, y_values):
                     series.add_data_point(float(x_val), float(y_val))
+                series_count += 1
 
         chart.replace_data(chart_data)
+        _trim_extra_series(chart, series_count)
         # 散点图数据标签：默认显示数值
         try:
             plot = chart.plots[0]
@@ -972,6 +989,7 @@ def _write_chart_data_multi(chart, block_dfs: list):
     if is_scatter:
         # 散点图：每区块形成一个或多个系列
         chart_data = XyChartData()
+        multi_series_count = 0
         for df, xy_pair, cols, block_name in block_dfs:
             if xy_pair and len(df.columns) >= 2 and len(df.columns) % 2 == 0:
                 # xy 对模式：列按 (X1,Y1,X2,Y2,...) 配对
@@ -982,6 +1000,7 @@ def _write_chart_data_multi(chart, block_dfs: list):
                     series = chart_data.add_series(f"{block_name}.{y_col}")
                     for x_val, y_val in zip(x_vals, y_vals):
                         series.add_data_point(float(x_val), float(y_val))
+                    multi_series_count += 1
             else:
                 # 共享 X 模式：第一列作 X，其余列各成一个系列
                 x_values = pd.to_numeric(df.iloc[:, 0], errors="coerce").fillna(0).tolist()
@@ -991,8 +1010,10 @@ def _write_chart_data_multi(chart, block_dfs: list):
                     series = chart_data.add_series(f"{block_name}.{col_name}")
                     for x_val, y_val in zip(x_values, y_values):
                         series.add_data_point(float(x_val), float(y_val))
+                    multi_series_count += 1
 
         chart.replace_data(chart_data)
+        _trim_extra_series(chart, multi_series_count)
         try:
             plot = chart.plots[0]
             if not plot.has_data_labels:
@@ -1051,6 +1072,7 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False):
                     series.add_data_point(float(x_val), float(y_val))
 
         chart.replace_data(chart_data)
+        # 散点图数据标签：默认显示数值
         try:
             plot = chart.plots[0]
             if not plot.has_data_labels:
@@ -1085,6 +1107,7 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False):
         chart_data.add_series(name, values)
 
     chart.replace_data(chart_data)
+    _trim_extra_series(chart, len(series_data))
 
     # 同步数据标签格式：百分比列显示 0.0%
     try:
