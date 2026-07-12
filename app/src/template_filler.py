@@ -896,21 +896,24 @@ def _fix_plot_by(chart):
     """修正图表 plotBy 方向为 col，防止模板行列方向与新数据不一致
 
     若已有 plotBy 元素（可能为 "row"）→ 改为 "col"；
-    若不存在 plotBy → 创建并设为 "col"。
+    若不存在 plotBy → 在 plotArea 下创建并设为 "col"。
     """
     try:
         _ns = "http://schemas.openxmlformats.org/drawingml/2006/chart"
         plot = chart.plots[0]
-        root = plot._element
-        for elem in root.iter():
+        # plotBy 在 plotArea 下，barChart/pieChart 等具体类型之上
+        plot_area = plot._element.getparent()
+        if plot_area is None:
+            return
+        for elem in plot_area.iter():
             if elem.tag == f"{{{_ns}}}plotBy":
                 if elem.get("val") != "col":
                     elem.set("val", "col")
                 return
-        # 不存在 plotBy 时创建
+        # 不存在 plotBy 时创建，插入到 plotArea 的第一个子元素前
         from lxml import etree
-        pb = etree.SubElement(root, f"{{{_ns}}}plotBy", {"val": "col"})
-        root.insert(0, pb)
+        pb = etree.Element(f"{{{_ns}}}plotBy", {"val": "col"})
+        plot_area.insert(0, pb)
     except Exception:
         pass
 
