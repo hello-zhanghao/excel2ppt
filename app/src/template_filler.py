@@ -893,15 +893,24 @@ def _trim_extra_series(chart, expected_count: int):
 
 
 def _fix_plot_by(chart):
-    """修正图表 plotBy 方向为 col，防止模板行列方向与新数据不一致"""
+    """修正图表 plotBy 方向为 col，防止模板行列方向与新数据不一致
+
+    若已有 plotBy 元素（可能为 "row"）→ 改为 "col"；
+    若不存在 plotBy → 创建并设为 "col"。
+    """
     try:
         _ns = "http://schemas.openxmlformats.org/drawingml/2006/chart"
         plot = chart.plots[0]
-        for elem in plot._element.iter():
+        root = plot._element
+        for elem in root.iter():
             if elem.tag == f"{{{_ns}}}plotBy":
                 if elem.get("val") != "col":
                     elem.set("val", "col")
                 return
+        # 不存在 plotBy 时创建
+        from lxml import etree
+        pb = etree.SubElement(root, f"{{{_ns}}}plotBy", {"val": "col"})
+        root.insert(0, pb)
     except Exception:
         pass
 
