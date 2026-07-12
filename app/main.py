@@ -22,7 +22,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.21.2"
+__VERSION__ = "2.21.3"
 __UPDATE_DATE__ = "2026-07-12"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1216,7 +1216,11 @@ def main():
             sys.exit(1)
         mode = detected
     else:
-        args = legacy.parse_args(raw_args)
+        if mode == "template":
+            # template 模式参数不兼容 legacy parser，跳过
+            pass
+        else:
+            args = legacy.parse_args(raw_args)
 
     # ===== template 模式：独立处理，不走 _resolve_config_path =====
     if mode == "template":
