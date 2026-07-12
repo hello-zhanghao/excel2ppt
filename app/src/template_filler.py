@@ -1134,7 +1134,6 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False):
 
     chart.replace_data(chart_data)
     _trim_extra_series(chart, len(series_data))
-    _fix_plot_by(chart)
 
     # 同步数据标签格式：百分比列显示 0.0%
     try:
