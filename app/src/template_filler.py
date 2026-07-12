@@ -1109,15 +1109,17 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
             series_name = str(df.iloc[row_idx, 0])
             values = pd.to_numeric(df.iloc[row_idx, 1:], errors="coerce").fillna(0).tolist()
             chart_data.add_series(series_name, values)
-            pct_flags_t[series_name] = False  # 转置后百分比判断过于复杂，统一用普通数值格式
+            pct_flags_t[series_name] = False
         pct_flags = pct_flags_t
+        actual_series_count = len(df)
     else:
         chart_data.categories = categories
         for name, values in series_data.items():
             chart_data.add_series(name, values)
+        actual_series_count = len(series_data)
 
     chart.replace_data(chart_data)
-    _trim_extra_series(chart, len(series_data))
+    _trim_extra_series(chart, actual_series_count)
     _ensure_vary_colors(chart)
 
     # 同步数据标签格式：百分比列显示 0.0%
