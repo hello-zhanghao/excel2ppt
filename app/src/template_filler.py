@@ -113,6 +113,10 @@ def load_pivot_results(pivot_data_path: str) -> Dict[str, pd.DataFrame]:
     1. 区块名（精确匹配，跨所有 sheet 查找）
     2. sheet 名（指向该 sheet 的第一个区块，兼容旧用法）
     3. "Sheet名.区块名"（精确指定 sheet 内的区块，新增）
+
+    每个 DataFrame 的 attrs 会携带百分比列信息：
+        df.attrs["pct_columns"] = set[str]   # 数字格式含 % 的列名集合
+    下游 _write_chart_data 优先使用此元信息识别百分比列，避免靠列名猜测。
     """
     if not os.path.exists(pivot_data_path):
         raise FileNotFoundError(f"透视结果文件不存在: {pivot_data_path}")
@@ -164,6 +168,26 @@ def load_pivot_results(pivot_data_path: str) -> Dict[str, pd.DataFrame]:
 
             headers = [str(c).strip() if c is not None else f"col_{i}" for i, c in enumerate(rows[header_row_idx])]
             df = pd.DataFrame(data_rows, columns=headers)
+
+            # 读取数据行的单元格数字格式，识别百分比列（格式串含 %）
+            # 表头单元格是文本格式无意义，必须读数据行
+            # 取第一个数据行的格式作为整列格式（Excel 列格式通常一致）
+            pct_cols = set()
+            try:
+                data_row_idx_1based = header_row_idx + 2  # 表头+1 = 第一个数据行（1-based）
+                if data_row_idx_1based <= ws.max_row:
+                    headers_row = list(ws[header_row_idx + 1])
+                    data_cells = list(ws[data_row_idx_1based])
+                    for h_cell, d_cell in zip(headers_row, data_cells):
+                        if h_cell.value is None:
+                            continue
+                        col_name = str(h_cell.value).strip()
+                        fmt = str(d_cell.number_format or "")
+                        if "%" in fmt:
+                            pct_cols.add(col_name)
+            except Exception:
+                pass
+            df.attrs["pct_columns"] = pct_cols
 
             # 用区块名作为 key（后出现的同名区块覆盖先出现的，与 pivot 输出语义一致）
             result[block_name] = df
@@ -286,6 +310,7 @@ def _filter_df_columns(df: pd.DataFrame, cols: Optional[List[str]]) -> pd.DataFr
 
     无 cols 或 cols 为 None 时返回原 df。
     指定列不存在时跳过，至少保留第一列。
+    保留原 df 的 attrs（含 pct_columns 等元信息）。
     """
     if cols is None or df.empty:
         return df
@@ -297,7 +322,13 @@ def _filter_df_columns(df: pd.DataFrame, cols: Optional[List[str]]) -> pd.DataFr
             keep.append(c)
     if not keep:
         return df
-    return df[keep]
+    filtered = df[keep]
+    # df[keep] 切片会丢失 attrs，手动保留百分比列等元信息
+    try:
+        filtered.attrs = dict(df.attrs)
+    except Exception:
+        pass
+    return filtered
 
 
 def _smart_format_number(value) -> str:
@@ -886,11 +917,19 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False):
     categories = df.iloc[:, 0].astype(str).tolist()
     series_data = {}
     pct_flags = {}  # 记录每个系列是否为百分比列
+    # 优先使用 load_pivot_results 读取的单元格数字格式元信息（精确）
+    # 回退到列名关键词 + 值域检测（兜底）
+    attr_pct_cols = df.attrs.get("pct_columns") if hasattr(df, "attrs") else None
     for col_idx in range(1, len(df.columns)):
         col_name = df.columns[col_idx]
         values = pd.to_numeric(df.iloc[:, col_idx], errors="coerce").fillna(0).tolist()
         series_data[col_name] = values
-        pct_flags[col_name] = _is_pct_column(col_name, values)
+        if attr_pct_cols is not None:
+            # 有元信息时以元信息为准
+            pct_flags[col_name] = col_name in attr_pct_cols
+        else:
+            # 无元信息时回退到关键词 + 值域检测
+            pct_flags[col_name] = _is_pct_column(col_name, values)
 
     chart_data = CategoryChartData()
     chart_data.categories = categories
@@ -909,16 +948,15 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False):
             data_labels = plot.data_labels
 
         # 所有系列都是百分比 → 用 0.0% 格式
+        # 多数系列是百分比（超过一半）→ 也用 0.0% 格式
+        # 否则用普通数值格式
         all_pct = all(pct_flags.values()) if pct_flags else False
-        any_pct = any(pct_flags.values()) if pct_flags else False
+        pct_count = sum(1 for v in pct_flags.values() if v)
+        total_count = len(pct_flags)
+        majority_pct = total_count > 0 and pct_count * 2 > total_count
 
-        if all_pct:
+        if all_pct or majority_pct:
             data_labels.number_format = '0.0%'
-            data_labels.number_format_is_linked = False
-        elif any_pct:
-            # 混合场景：逐系列设置（python-pptx 限制，仅能设 plot 级别）
-            # 取多数：如果超过一半是百分比，用百分比格式
-            data_labels.number_format = '#,##0.##'
             data_labels.number_format_is_linked = False
         else:
             data_labels.number_format = '#,##0.##'
