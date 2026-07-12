@@ -892,6 +892,20 @@ def _trim_extra_series(chart, expected_count: int):
         pass
 
 
+def _fix_plot_by(chart):
+    """修正图表 plotBy 方向为 col，防止模板行列方向与新数据不一致"""
+    try:
+        _ns = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+        plot = chart.plots[0]
+        for elem in plot._element.iter():
+            if elem.tag == f"{{{_ns}}}plotBy":
+                if elem.get("val") != "col":
+                    elem.set("val", "col")
+                return
+    except Exception:
+        pass
+
+
 def _is_pct_column(col_name: str, values: list) -> bool:
     """判断列是否为百分比数据：列名含占比关键词且值域在 0~1 之间"""
     if not col_name:
@@ -1108,6 +1122,7 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False):
 
     chart.replace_data(chart_data)
     _trim_extra_series(chart, len(series_data))
+    _fix_plot_by(chart)
 
     # 同步数据标签格式：百分比列显示 0.0%
     try:
