@@ -1404,6 +1404,52 @@ def verify_template_mode(pivot_excel_path):
                     break
             checks.append(("页10 表格备注区声明", table10_ok))
 
+        # ---------- 页11: 散点图单区块替换 ----------
+        if len(prs.slides) >= 11:
+            slide11 = prs.slides[10]
+            scatter11_ok = False
+            scatter11_series = 0
+            for shape in slide11.shapes:
+                if shape.has_chart:
+                    chart = shape.chart
+                    try:
+                        if chart.chart_type == XL_CHART_TYPE.XY_SCATTER:
+                            scatter11_ok = True
+                            scatter11_series = len(chart.series)
+                    except Exception:
+                        pass
+                    break
+            checks.append(("页11 散点图存在", scatter11_ok))
+            checks.append(("页11 散点图系列数>=1", scatter11_ok and scatter11_series >= 1))
+            if scatter11_ok:
+                print(f"  {GREEN}✓ 页11 散点图数据替换成功（{scatter11_series}个系列）{RESET}")
+            else:
+                print(f"  {RED}✗ 页11 散点图未找到或替换失败{RESET}")
+
+        # ---------- 页12: 多区块散点图跨Sheet ----------
+        if len(prs.slides) >= 12:
+            slide12 = prs.slides[11]
+            scatter12_ok = False
+            scatter12_series = 0
+            scatter12_names = []
+            for shape in slide12.shapes:
+                if shape.has_chart:
+                    chart = shape.chart
+                    try:
+                        if chart.chart_type == XL_CHART_TYPE.XY_SCATTER:
+                            scatter12_ok = True
+                            scatter12_series = len(chart.series)
+                            scatter12_names = [s.name for s in chart.series]
+                    except Exception:
+                        pass
+                    break
+            checks.append(("页12 多区块散点图存在", scatter12_ok))
+            checks.append(("页12 系列数>=2(多区块)", scatter12_ok and scatter12_series >= 2))
+            if scatter12_ok:
+                print(f"  {GREEN}✓ 页12 多区块散点图替换成功（{scatter12_series}个系列={scatter12_names}）{RESET}")
+            else:
+                print(f"  {RED}✗ 页12 多区块散点图未找到或替换失败{RESET}")
+
         # ---------- 整体文件检查 ----------
         # 验证点N: 输出文件大小合理（>0）
         file_size = os.path.getsize(output_path)
@@ -1433,7 +1479,7 @@ def verify_template_mode(pivot_excel_path):
 
 
 def _create_test_template(template_path):
-    """创建带占位符的测试 PPT 模板（10页，覆盖文本/图表/表格/图片四类替换）
+    """创建带占位符的测试 PPT 模板（12页，覆盖文本/图表/表格/图片四类替换）
 
     页1 - 文本占位符 + 图表占位符（原基础场景）
     页2 - 表格整体替换 + 表格行数扩展
@@ -1445,6 +1491,8 @@ def _create_test_template(template_path):
     页8 - 计算占位符 + 别名 + 文本占位符格式后缀
     页9 - 图表标题文本占位符 + 备注区声明图表数据源（方案C）
     页10 - 备注区声明表格数据源（方案C）+ 选列
+    页11 - 散点图数据替换（单区块 + 多区块跨Sheet）
+    页12 - 多区块散点图跨Sheet（备注区 ; 分隔）
     """
     from pptx import Presentation
     from pptx.util import Inches, Pt, Emu
@@ -1871,6 +1919,55 @@ def _create_test_template(template_path):
 
     try:
         slide10.notes_slide.notes_text_frame.text = "# 表格备注区声明测试\n表格1=地区多维统计|总销售额,平均销售额\n"
+    except Exception:
+        pass
+
+    # ========== 页11: 散点图单区块替换 ==========
+    slide11 = prs.slides.add_slide(blank_layout)
+
+    title11 = slide11.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
+    title11.text_frame.text = "散点图测试（城市销售额 vs 销量）"
+    for para in title11.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(24)
+            run.font.bold = True
+
+    from pptx.chart.data import XyChartData
+    scatter_data = XyChartData()
+    scatter_data.add_series("占位").add_data_point(0, 0)
+    scatter_shape = slide11.shapes.add_chart(
+        XL_CHART_TYPE.XY_SCATTER,
+        Inches(1), Inches(1.2), Inches(11), Inches(5.5),
+        scatter_data
+    )
+    scatter_shape.name = "散点图1"
+
+    try:
+        slide11.notes_slide.notes_text_frame.text = "# 散点图单区块替换\n散点图1=城市散点数据|销售额,销量\n"
+    except Exception:
+        pass
+
+    # ========== 页12: 多区块散点图跨Sheet ==========
+    slide12 = prs.slides.add_slide(blank_layout)
+
+    title12 = slide12.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
+    title12.text_frame.text = "多区块散点图（跨Sheet合并）"
+    for para in title12.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(24)
+            run.font.bold = True
+
+    scatter2_data = XyChartData()
+    scatter2_data.add_series("占位").add_data_point(0, 0)
+    scatter2_shape = slide12.shapes.add_chart(
+        XL_CHART_TYPE.XY_SCATTER,
+        Inches(1), Inches(1.2), Inches(11), Inches(5.5),
+        scatter2_data
+    )
+    scatter2_shape.name = "散点图2"
+
+    try:
+        slide12.notes_slide.notes_text_frame.text = "# 多区块散点图跨Sheet\n散点图2=城市散点数据|销售额,销量 ; 地区多维统计|总销售额,平均销售额\n"
     except Exception:
         pass
 
