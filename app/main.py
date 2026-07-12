@@ -22,7 +22,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.21.1"
+__VERSION__ = "2.21.2"
 __UPDATE_DATE__ = "2026-07-12"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1105,7 +1105,9 @@ def _run_template_mode(template_path, pivot_file=None, output_path=None, pivot_d
     if not output_path:
         base_name = os.path.splitext(os.path.basename(template_path))[0]
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = os.path.join(template_dir, f"{base_name}_填充_{ts}.pptx")
+        # 输出到数据文件同目录（而非模板目录），方便数据与产出统一管理
+        out_dir = os.path.dirname(os.path.abspath(pivot_file)) if pivot_file else template_dir
+        output_path = os.path.join(out_dir, f"{base_name}_填充_{ts}.pptx")
 
     # 图片搜索目录：pivot_dir > pivot_file 所在目录 > 模板所在目录
     if pivot_dir:
