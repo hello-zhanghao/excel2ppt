@@ -1273,11 +1273,14 @@ def _replace_pictures(slide, pivot_data: Dict[str, pd.DataFrame],
 
 
 def _do_replace_picture(slide, old_shape, image_path: str):
-    """删除旧图片，在原位置插入新图片"""
+    """删除旧图片，在原位置插入新图片，保留旋转角度"""
     left, top, width, height = old_shape.left, old_shape.top, old_shape.width, old_shape.height
+    rotation = old_shape.rotation
     sp = old_shape._element
     sp.getparent().remove(sp)
-    slide.shapes.add_picture(image_path, left, top, width, height)
+    new_shape = slide.shapes.add_picture(image_path, left, top, width, height)
+    if rotation:
+        new_shape.rotation = rotation
 
 
 def _expand_table_columns(table, target_col_count: int):
