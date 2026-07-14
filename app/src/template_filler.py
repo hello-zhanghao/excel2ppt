@@ -88,6 +88,7 @@ import openpyxl
 import pandas as pd
 from pptx import Presentation
 from pptx.util import Pt
+from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from src.safe_math import evaluate_numeric_expression
 
@@ -100,6 +101,38 @@ _CHART_PLACEHOLDER_RE = re.compile(r"\{\{图表[:：]([^{}]+)\}\}")
 _IMAGE_PLACEHOLDER_RE = re.compile(r"\{\{图片[:：]([^{}]+)\}\}")
 # 表格占位符正则：{{表格:xxx}}
 _TABLE_PLACEHOLDER_RE = re.compile(r"\{\{表格[:：]([^{}]+)\}\}")
+
+# 缺失标注样式（黄底高亮 [缺失:...]）
+_MISSING_HIGHLIGHT = RGBColor(0xFF, 0xFF, 0x00)   # 黄色背景
+_MISSING_FONTCOLOR = RGBColor(0xC0, 0x00, 0x00)  # 深红字体
+
+
+def _mark_missing_text(run, expr: str):
+    """将一个 run 标注为缺失：文本=[缺失:expr]，红字加粗。
+    文本框黄底由调用方按需设置（避免过度影响混合内容框）。
+    """
+    run.text = f"[缺失:{expr}]"
+    try:
+        run.font.color.rgb = _MISSING_FONTCOLOR
+        run.font.bold = True
+    except Exception:
+        pass
+
+
+def _mark_missing_cell(cell, block_name: str):
+    """将表格单元格标注为缺失：文本=[缺失:block_name]，黄底红字加粗。"""
+    cell.text = f"[缺失:{block_name}]"
+    try:
+        # 黄色填充背景
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = _MISSING_HIGHLIGHT
+        # 红字加粗
+        for para in cell.text_frame.paragraphs:
+            for run in para.runs:
+                run.font.color.rgb = _MISSING_FONTCOLOR
+                run.font.bold = True
+    except Exception:
+        pass
 
 
 def load_pivot_results(pivot_data_path: str) -> Dict[str, pd.DataFrame]:
@@ -648,7 +681,8 @@ def _parse_slide_notes(notes_text: str) -> Dict[str, str]:
 def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
                            default_block: Optional[str],
                            image_collector: Optional[List[str]] = None,
-                           alias_map: Optional[Dict[str, str]] = None) -> int:
+                           alias_map: Optional[Dict[str, str]] = None,
+                           mark_missing: bool = True) -> int:
     """替换文本框中的占位符，返回替换次数。
 
     保留各 run 的原始格式（颜色、字号、加粗等），仅替换占位符所在的 run 文本，
@@ -685,6 +719,7 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
             # 解析占位符，获取替换值
             replacement = None  # None = 保留原文（不替换）
             should_count = False
+            is_missing = False  # 数据缺失（非图片正常移除）
 
             if expr.startswith("图表") or expr.startswith("图表:"):
                 continue  # 保留原文
@@ -697,6 +732,7 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
                 value = _resolve_calc_expr(calc_expr, pivot_data, default_block)
                 replacement = value or ""
                 should_count = bool(value)
+                is_missing = not bool(value)
             elif alias_map and expr in alias_map:
                 alias_expr = alias_map[expr]
                 if alias_expr.startswith("计算:") or alias_expr.startswith("计算："):
@@ -706,6 +742,7 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
                     value = _resolve_text_placeholder(alias_expr, pivot_data, default_block)
                 replacement = value or ""
                 should_count = bool(value)
+                is_missing = not bool(value)
             else:
                 # 文本占位符：支持可选格式后缀 {{区块.列|格式}}
                 text_expr, text_fmt = _split_expr_and_fmt(expr)
@@ -714,6 +751,7 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
                     if raw_value == "" or raw_value is None:
                         replacement = ""
                         should_count = False
+                        is_missing = True
                     else:
                         try:
                             value = _format_calc_result(float(raw_value), text_fmt)
@@ -721,10 +759,18 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
                             value = str(raw_value)
                         replacement = value
                         should_count = bool(value)
+                        is_missing = not bool(value)
                 else:
                     value = _resolve_text_placeholder(text_expr, pivot_data, default_block)
                     replacement = value or ""
                     should_count = bool(value)
+                    is_missing = not bool(value)
+
+            # 缺失标注：未替换的占位符标为 [缺失:expr] 红字加粗
+            mark_this = False
+            if is_missing and mark_missing:
+                replacement = f"[缺失:{expr}]"
+                mark_this = True
 
             if should_count:
                 replace_count += 1
@@ -751,6 +797,14 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
             local_end = min(match_end, re_) - rs
             run.text = run.text[:local_start] + replacement + run.text[local_end:]
 
+            # 缺失标注：给替换 run 设红字加粗
+            if mark_this:
+                try:
+                    run.font.color.rgb = _MISSING_FONTCOLOR
+                    run.font.bold = True
+                except Exception:
+                    pass
+
             # 清除后续 run 中的占位符残留部分
             for i in range(first_run_idx + 1, last_run_idx + 1):
                 rs_i, re_i = run_positions[i]
@@ -764,7 +818,8 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
 def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                         default_block: Optional[str],
                         alias_map: Optional[Dict[str, str]] = None,
-                        shape_block_map: Optional[Dict[str, str]] = None) -> int:
+                        shape_block_map: Optional[Dict[str, str]] = None,
+                        mark_missing: bool = True) -> int:
     """替换幻灯片中的图表数据，返回替换次数
 
     - 图表数据源占位符 {{图表:xxx}} 从形状名称/替代文字读取（不污染图表标题）
@@ -815,7 +870,7 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
             if chart.has_title and chart.chart_title.has_text_frame:
                 title_count = _replace_in_text_frame(
                     chart.chart_title.text_frame, pivot_data, default_block,
-                    image_collector=None, alias_map=alias_map
+                    image_collector=None, alias_map=alias_map, mark_missing=mark_missing
                 )
                 if title_count > 0:
                     replace_count += title_count
@@ -839,8 +894,18 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
             df = _lookup_block(pivot_data, target_block)
             if df is None:
                 print(f"    [警告] 图表数据区块 '{target_block}' 未在透视结果中找到")
+                if mark_missing:
+                    try:
+                        shape.name = f"{shape.name}[缺失:{target_block}]"
+                    except Exception:
+                        pass
                 continue
             if df.empty:
+                if mark_missing:
+                    try:
+                        shape.name = f"{shape.name}[缺失:{target_block}]"
+                    except Exception:
+                        pass
                 continue
             df = _filter_df_columns(df, cols)
 
@@ -873,6 +938,11 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
 
             if not block_dfs:
                 print(f"    [警告] 多区块表达式无有效数据: {target_expr}")
+                if mark_missing:
+                    try:
+                        shape.name = f"{shape.name}[缺失:{target_expr}]"
+                    except Exception:
+                        pass
                 continue
 
             try:
@@ -1408,7 +1478,8 @@ def _set_cell_text_preserve_format(cell, text: str):
 
 def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
                         default_block: Optional[str],
-                        shape_block_map: Optional[Dict[str, str]] = None) -> int:
+                        shape_block_map: Optional[Dict[str, str]] = None,
+                        mark_missing: bool = True) -> int:
     """替换幻灯片中的表格数据（整表替换），返回替换次数。
     通过表格形状的 name 或 alternative_text 中的 {{表格:区块名}} 匹配。
     形状名称/替代文字无占位符时，回退到 shape_block_map（备注区声明 形状名=区块名）。
@@ -1444,8 +1515,18 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
         df = _lookup_block(pivot_data, target_block)
         if df is None:
             print(f"    [警告] 表格数据区块 '{target_block}' 未在透视结果中找到")
+            if mark_missing:
+                try:
+                    _mark_missing_cell(shape.table.cell(0, 0), target_block)
+                except Exception:
+                    pass
             continue
         if df.empty:
+            if mark_missing:
+                try:
+                    _mark_missing_cell(shape.table.cell(0, 0), target_block)
+                except Exception:
+                    pass
             continue
         # 按指定列筛选
         df = _filter_df_columns(df, cols)
@@ -1494,7 +1575,7 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
     return replace_count
 
 
-def fill_template(template_path: str, pivot_data_path: str, output_path: str, image_dir: Optional[str] = None) -> Dict:
+def fill_template(template_path: str, pivot_data_path: str, output_path: str, image_dir: Optional[str] = None, mark_missing: bool = True) -> Dict:
     """填充 PPT 模板
 
     Args:
@@ -1502,6 +1583,7 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str, im
         pivot_data_path: 透视结果 xlsx 路径
         output_path: 输出 PPT 路径
         image_dir: 图片搜索目录（相对路径图片在此目录查找，为 None 时回退到模板所在目录）
+        mark_missing: 未替换的占位符是否以黄底[缺失:...]标注（默认 True）
 
     Returns:
         dict: 替换统计 {slides, text_replacements, chart_replacements, picture_replacements, table_replacements}
@@ -1550,13 +1632,13 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str, im
         for shape in slide.shapes:
             if not shape.has_text_frame:
                 continue
-            text_count += _replace_in_text_frame(shape.text_frame, pivot_data, default_block, image_collector, alias_map)
+            text_count += _replace_in_text_frame(shape.text_frame, pivot_data, default_block, image_collector, alias_map, mark_missing=mark_missing)
 
-        chart_count = _replace_chart_data(slide, pivot_data, default_block, alias_map, shape_block_map)
+        chart_count = _replace_chart_data(slide, pivot_data, default_block, alias_map, shape_block_map, mark_missing=mark_missing)
 
         picture_count = _replace_pictures(slide, pivot_data, default_block, template_dir, image_collector, output_dir, shape_block_map, image_dir)
 
-        table_count = _replace_table_data(slide, pivot_data, default_block, shape_block_map)
+        table_count = _replace_table_data(slide, pivot_data, default_block, shape_block_map, mark_missing=mark_missing)
 
         total_text += text_count
         total_chart += chart_count

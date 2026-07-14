@@ -20,8 +20,8 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.24.1"
-__UPDATE_DATE__ = "2026-07-12"
+__VERSION__ = "2.25.0"
+__UPDATE_DATE__ = "2026-07-14"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -1036,7 +1036,7 @@ def _dispatch_from_gui(raw_args):
         _run_ppt_mode(config_path, _apply_timestamp(output_path, add_ts), data_dir=data_dir)
 
 
-def _run_template_mode(template_path, pivot_file=None, output_path=None, pivot_dir=None):
+def _run_template_mode(template_path, pivot_file=None, output_path=None, pivot_dir=None, mark_missing=True):
     """基于 PPT 模板和透视结果进行数据替换"""
     from src.template_filler import fill_template
 
@@ -1086,7 +1086,7 @@ def _run_template_mode(template_path, pivot_file=None, output_path=None, pivot_d
     else:
         abs_image_dir = None
 
-    fill_template(template_path, pivot_file, output_path, image_dir=abs_image_dir)
+    fill_template(template_path, pivot_file, output_path, image_dir=abs_image_dir, mark_missing=mark_missing)
 
 
 def main():
@@ -1132,7 +1132,8 @@ def main():
         print("  -o, --output <路径>      输出PPT路径\n")
         print("template 可选参数:")
         print("  --pivot-file <路径>      透视分析结果文件路径（支持 --pivot 别名，填 latest 自动找最新）")
-        print("  --ts                     输出文件名追加时间戳\n")
+        print("  --ts                     输出文件名追加时间戳")
+        print("  --no-mark                关闭缺失标注（默认未替换占位符以黄底[缺失:...]标注）\n")
         print("示例:")
         print("  python main.py pivot -c 配置.xlsx --data-dir 数据目录 -o 结果.xlsx")
         print("  python main.py pivot -c 配置.xlsx --data-dir 数据目录 -o 结果.xlsx --ts")
@@ -1153,13 +1154,16 @@ def main():
         tpl_parser.add_argument("-o", "--output", default=None, help="输出PPT路径")
         tpl_parser.add_argument("--ts", dest="timestamp", action="store_true",
                                 help="输出文件名追加时间戳（格式: _YYYYMMDD_HHMMSS）")
+        tpl_parser.add_argument("--no-mark", dest="mark_missing", action="store_false", default=True,
+                                help="关闭缺失标注（默认未替换的占位符以黄底[缺失:...]标注）")
         tpl_args = tpl_parser.parse_args(raw_args)
         # template 模式必填 --image-dir 和 -o
         _require_arg(tpl_args.image_dir, "--image-dir <图片/数据搜索目录>", "template")
         _require_arg(tpl_args.output, "-o/--output <输出PPT路径>", "template")
         _run_template_mode(tpl_args.template_path, tpl_args.pivot_file,
                            _apply_timestamp(tpl_args.output, getattr(tpl_args, 'timestamp', False)),
-                           tpl_args.image_dir)
+                           tpl_args.image_dir,
+                           mark_missing=getattr(tpl_args, 'mark_missing', True))
         return
 
     # ===== auto/ppt/pivot 模式：共享公共参数 parser =====
