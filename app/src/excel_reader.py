@@ -175,13 +175,17 @@ def read_data_file(file_path, sheet_name=None):
     ext = os.path.splitext(file_path)[1].lower()
     
     if ext == ".csv":
-        return pd.read_csv(file_path, encoding="utf-8-sig")
+        df = pd.read_csv(file_path, encoding="utf-8-sig")
     else:
         # Excel 文件
         if sheet_name:
-            return pd.read_excel(file_path, sheet_name=sheet_name)
+            df = pd.read_excel(file_path, sheet_name=sheet_name)
         else:
-            return pd.read_excel(file_path)
+            df = pd.read_excel(file_path)
+    
+    # 统一清理列名首尾空格，避免配置字段名与数据列名因空格不匹配
+    df.columns = [str(c).strip() if c is not None else c for c in df.columns]
+    return df
 
 
 def get_data_file_sheets(file_path):
