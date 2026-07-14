@@ -1,5 +1,5 @@
 """
-Excel 统一分析工具 — PPT 生成 + 透视分析 + HTML报告
+Excel 统一分析工具 — PPT 生成 + 透视分析 + 模板填充
 用法：
   python main.py ppt 文件夹路径           ← PPT 生成（自动找配置和数据）
   python main.py ppt -c 配置.xlsx         ← PPT 生成（指定配置）
@@ -7,8 +7,6 @@ Excel 统一分析工具 — PPT 生成 + 透视分析 + HTML报告
   python main.py pivot 文件夹路径         ← 透视分析（自动找配置和数据）
   python main.py pivot -c 配置.xlsx       ← 透视分析（指定配置）
   python main.py pivot -c 配置.xlsx -o out.xlsx
-  python main.py html -c 配置.xlsx        ← 生成HTML报告（自动模式）
-  python main.py html --pivot-file 分析.xlsx --ppt-file 报告.pptx
   python main.py template 模板.pptx --pivot 透视结果.xlsx   ← 基于PPT模板填充数据
   python main.py template 模板.pptx                           ← 自动找模板目录下最新 xlsx
   python main.py template 模板.pptx --pivot latest            ← 同上，显式触发
@@ -22,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.23.0"
+__VERSION__ = "2.23.1"
 __UPDATE_DATE__ = "2026-07-12"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -474,103 +472,6 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
     if errors:
         print(f"   失败详情见「错误信息」Sheet")
     return output_path
-
-
-def _run_html_mode(config_path, output_path=None, pivot_file=None, ppt_file=None):
-    """
-    生成HTML报告。
-    :param config_path: 配置文件路径
-    :param output_path: 输出HTML路径
-    :param pivot_file: 透视分析结果文件路径
-    :param ppt_file: PPT文件路径（可选）
-    """
-    from src.html_builder import generate_html_report, start_preview_server
-    from src.excel_reader import read_ppt_config
-
-    config_dir = os.path.dirname(config_path)
-    print(f"[HTML/1] 读取配置: {config_path}")
-
-    ppt_pages = []
-    try:
-        ppt_pages = read_ppt_config(config_path)
-        print(f"    → PPT 配置: {len(ppt_pages)} 页")
-    except Exception as e:
-        print(f"    [警告] 读取 PPT 配置失败: {e}")
-
-    pivot_excel = None
-    if pivot_file:
-        if os.path.isabs(pivot_file):
-            pivot_excel = pivot_file
-        else:
-            pivot_excel = os.path.join(config_dir, pivot_file)
-        if os.path.exists(pivot_excel):
-            print(f"    → 透视结果文件: {os.path.basename(pivot_excel)}")
-        else:
-            print(f"    [警告] 指定的透视结果文件不存在: {pivot_excel}")
-            pivot_excel = None
-
-    if not pivot_excel:
-        print(f"[HTML/2] 自动查找透视分析结果...")
-        output_dirs = glob.glob(os.path.join(config_dir, "output_*"))
-        if output_dirs:
-            latest_dir = max(output_dirs, key=os.path.getmtime)
-            excel_files = glob.glob(os.path.join(latest_dir, "*_分析_*.xlsx"))
-            if excel_files:
-                pivot_excel = excel_files[0]
-                print(f"    → 找到透视结果: {os.path.basename(pivot_excel)}")
-            else:
-                excel_files = glob.glob(os.path.join(latest_dir, "*.xlsx"))
-                if excel_files:
-                    pivot_excel = excel_files[0]
-                    print(f"    → 使用最新Excel: {os.path.basename(pivot_excel)}")
-
-    if not pivot_excel:
-        print(f"    未找到透视结果，自动运行透视分析...")
-        pivot_excel = _run_pivot_mode(config_path)
-
-    ppt_path = None
-    if ppt_file:
-        if os.path.isabs(ppt_file):
-            ppt_path = ppt_file
-        else:
-            ppt_path = os.path.join(config_dir, ppt_file)
-        if os.path.exists(ppt_path):
-            print(f"    → PPT文件: {os.path.basename(ppt_path)}")
-        else:
-            print(f"    [警告] 指定的PPT文件不存在: {ppt_path}")
-            ppt_path = None
-
-    if not output_path:
-        out_dir = os.path.dirname(pivot_excel) if pivot_excel else config_dir
-        os.makedirs(out_dir, exist_ok=True)
-        base_name = os.path.splitext(os.path.basename(config_path))[0]
-        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = os.path.join(out_dir, f"{base_name}_报告_{timestamp_str}.html")
-
-    print(f"[HTML/3] 生成HTML报告...")
-    html_path = generate_html_report(
-        excel_path=pivot_excel,
-        ppt_path=ppt_path,
-        ppt_config=ppt_pages if ppt_pages else None,
-        output_dir=os.path.dirname(output_path),
-        report_title=f"{os.path.splitext(os.path.basename(config_path))[0]} - 数据分析报告",
-        report_subtitle="透视分析结果",
-    )
-
-    if html_path:
-        print(f"\n[OK] 完成！HTML报告已保存至: {html_path}")
-        print(f"[HTML] 启动预览服务器...")
-        start_preview_server(html_path)
-        print(f"\n[提示] 报告包含：")
-        print(f"  • 目录导航（点击跳转）")
-        print(f"  • 数据摘要卡片")
-        print(f"  • 图表切换（柱状图/折线图/饼图/表格）")
-        print(f"  • 数据详情表格")
-        if ppt_path:
-            print(f"  • PPT页面预览（点击缩放）")
-    else:
-        print(f"[错误] HTML报告生成失败")
-        sys.exit(1)
 
 
 class _GuiLogRedirector:
@@ -1044,7 +945,7 @@ def _run_analysis_thread(raw_args, log_text, run_btn, run_state):
 
 
 def _make_config_parser():
-    """创建配置类模式（auto/ppt/pivot/html）的公共参数 parser。
+    """创建配置类模式（auto/ppt/pivot）的公共参数 parser。
 
     template 模式因位置参数语义不同（模板文件 vs 配置文件夹），单独处理。
     所有子命令共享 --pivot-file/--pivot、--data-dir、--output、--check 等参数，
@@ -1058,8 +959,6 @@ def _make_config_parser():
                    help="数据文件所在目录（配置中数据源相对路径基于此目录，默认配置文件所在目录）")
     p.add_argument("--pivot-file", "--pivot", dest="pivot_file", default=None,
                    help="透视分析结果文件路径 (.xlsx)")
-    p.add_argument("--ppt-file", dest="ppt_file", default=None,
-                   help="PPT 文件路径（html 模式用于预览截图）")
     p.add_argument("--check", action="store_true", help="仅校验配置，不执行")
     return p
 
@@ -1159,7 +1058,7 @@ def main():
 
     # 检测子命令
     mode = "auto"
-    if raw_args and raw_args[0] in ("ppt", "pivot", "html", "template"):
+    if raw_args and raw_args[0] in ("ppt", "pivot", "template"):
         mode = raw_args[0]
         raw_args = raw_args[1:]
     elif raw_args and raw_args[0] in ("-h", "--help"):
@@ -1167,21 +1066,19 @@ def main():
 
     # ===== help 模式：打印统一帮助 =====
     if mode == "help":
-        print("Excel 统一分析工具 — PPT生成 & 透视分析 & HTML报告 & 模板填充\n")
+        print("Excel 统一分析工具 — PPT生成 & 透视分析 & 模板填充\n")
         print("用法:")
         print("  python main.py [子命令] <文件夹或配置> [选项]\n")
         print("子命令:")
         print("  (无)      自动检测配置类型并执行")
         print("  ppt       生成PPT报告")
         print("  pivot     透视分析")
-        print("  html      生成HTML报告")
         print("  template  基于PPT模板填充数据\n")
-        print("公共选项 (ppt/pivot/html/auto):")
+        print("公共选项 (ppt/pivot/auto):")
         print("  -c, --config <路径>      配置文件路径")
         print("  -o, --output <路径>      输出路径")
         print("  --data-dir <目录>        数据文件所在目录（数据源相对路径基于此目录）")
         print("  --pivot-file <路径>      透视分析结果文件路径 (.xlsx)")
-        print("  --ppt-file <路径>        PPT文件路径（html 模式用于预览截图）")
         print("  --check                  仅校验配置，不执行\n")
         print("template 模式选项:")
         print("  <模板.pptx>              PPT模板文件路径 (位置参数)")
@@ -1209,7 +1106,7 @@ def main():
                            tpl_args.output, tpl_args.image_dir)
         return
 
-    # ===== auto/ppt/pivot/html 模式：共享公共参数 parser =====
+    # ===== auto/ppt/pivot 模式：共享公共参数 parser =====
     parser = _make_config_parser()
     args = parser.parse_args(raw_args)
     config_path = _resolve_config_path(args)
@@ -1238,12 +1135,6 @@ def main():
             if not validate_only:
                 print()
                 _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out, data_dir=data_dir)
-                # 自动生成 HTML 报告（供手机预览）
-                print()
-                try:
-                    _run_html_mode(config_path, None, pivot_file=pivot_out, ppt_file=ppt_out)
-                except Exception as e:
-                    print(f"[警告] HTML 报告生成失败: {e}")
             return
         print(f"[信息] 自动检测配置类型: {detected}")
         if detected == "unknown":
@@ -1253,10 +1144,6 @@ def main():
 
     if mode == "pivot":
         _run_pivot_mode(config_path, output_path, validate_only=validate_only, data_dir=data_dir)
-    elif mode == "html":
-        _run_html_mode(config_path, output_path,
-                       pivot_file=getattr(args, "pivot_file", None),
-                       ppt_file=getattr(args, "ppt_file", None))
     else:
         _run_ppt_mode(config_path, output_path,
                       pivot_data_file=getattr(args, "pivot_file", None),
