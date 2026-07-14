@@ -22,7 +22,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.22.2"
+__VERSION__ = "2.22.3"
 __UPDATE_DATE__ = "2026-07-12"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -366,7 +366,7 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_
     print(f"   提示: 双击PPT中的图表可查看和编辑数据")
 
 
-def _run_pivot_mode(config_path, output_path=None, validate_only=False):
+def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir=None):
     from src.pivot_analyzer import (
         read_pivot_config, run_analysis, find_data_files,
         validate_pivot_config, print_validation_results,
@@ -375,7 +375,11 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False):
     from src.excel_writer import write_results
 
     config_dir = os.path.dirname(config_path)
+    # 数据源相对路径基准：优先用 --data-dir，否则回退到配置文件所在目录
+    eff_data_dir = data_dir if data_dir else config_dir
     print(f"[Pivot/1] 读取配置: {config_path}")
+    if data_dir:
+        print(f"    → 数据目录: {data_dir}")
     tasks = read_pivot_config(config_path)
     print(f"    → 共 {len(tasks)} 个分析任务")
 
@@ -383,13 +387,13 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False):
         print("[错误] 没有有效的分析任务。")
         sys.exit(1)
 
-    data_files = find_data_files(config_dir, config_path)
+    data_files = find_data_files(eff_data_dir, config_path)
     if data_files:
         print(f"    → 找到数据文件: {[os.path.basename(f) for f in data_files]}")
 
     # 配置校验
     print(f"[Pivot/校验] 检查配置...")
-    val_results = validate_pivot_config(tasks, config_dir)
+    val_results = validate_pivot_config(tasks, eff_data_dir)
     all_ok = print_validation_results(val_results)
     
     if validate_only:
@@ -418,7 +422,7 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False):
             continue
         
         try:
-            result, error = run_analysis(task, config_dir, scalar_context)
+            result, error = run_analysis(task, eff_data_dir, scalar_context)
             if error:
                 print(f"    [FAIL] [任务{seq}] {error}")
                 errors.append({"序号": seq, "错误": error})
@@ -1042,6 +1046,8 @@ def _dispatch_from_gui(raw_args):
     legacy.add_argument("folder_or_config", nargs="?", default=None)
     legacy.add_argument("-c", "--config", default=None)
     legacy.add_argument("-o", "--output", default=None)
+    legacy.add_argument("--data-dir", dest="data_dir", default=None,
+                        help="数据文件所在目录（配置中数据源相对路径基于此目录）")
     args = legacy.parse_args(raw_args)
     config_path = _resolve_config_path(args)
     detected = _detect_mode(config_path)
@@ -1053,7 +1059,7 @@ def _dispatch_from_gui(raw_args):
         base = os.path.basename(config_path).rsplit(".", 1)[0]
         ppt_out = os.path.join(out_dir, f"{base}_报告_{ts}.pptx")
         pivot_out = os.path.join(out_dir, f"{base}_分析_{ts}.xlsx")
-        _run_pivot_mode(config_path, pivot_out)
+        _run_pivot_mode(config_path, pivot_out, data_dir=getattr(args, 'data_dir', None))
         print()
         _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out)
         return
@@ -1062,7 +1068,7 @@ def _dispatch_from_gui(raw_args):
         print("[错误] 未识别的配置类型，请确认 Excel 包含正确的配置 Sheet")
         sys.exit(1)
     if detected == "pivot":
-        _run_pivot_mode(config_path, args.output)
+        _run_pivot_mode(config_path, args.output, data_dir=getattr(args, 'data_dir', None))
     else:
         _run_ppt_mode(config_path, args.output)
 
@@ -1154,6 +1160,8 @@ def main():
         pivot_p.add_argument("folder_or_config", nargs="?", default=None)
         pivot_p.add_argument("-c", "--config", default=None)
         pivot_p.add_argument("-o", "--output", default=None)
+        pivot_p.add_argument("--data-dir", dest="data_dir", default=None,
+                           help="数据文件所在目录（配置中数据源相对路径基于此目录，默认配置文件所在目录）")
         pivot_p.add_argument("--check", action="store_true", help="仅校验配置，不执行")
         html_p = sub.add_parser("html", help="生成HTML报告")
         html_p.add_argument("folder_or_config", nargs="?", default=None)
@@ -1179,6 +1187,8 @@ def main():
     legacy.add_argument("-o", "--output", default=None, help="输出路径")
     legacy.add_argument("--pivot-file", dest="pivot_file", default=None,
                         help="透视分析结果文件路径，用于 {pivot} 数据源引用")
+    legacy.add_argument("--data-dir", dest="data_dir", default=None,
+                        help="数据文件所在目录（配置中数据源相对路径基于此目录，默认配置文件所在目录）")
     legacy.add_argument("--check", action="store_true", help="仅校验配置，不执行")
 
     if mode == "auto":
@@ -1199,7 +1209,8 @@ def main():
                 base_name = os.path.basename(args.output).rsplit(".", 1)[0]
                 ppt_out = os.path.join(out_dir, f"{base_name}.pptx")
                 pivot_out = os.path.join(out_dir, f"{base_name}_分析.xlsx")
-            _run_pivot_mode(config_path, pivot_out, validate_only=getattr(args, 'check', False))
+            _run_pivot_mode(config_path, pivot_out, validate_only=getattr(args, 'check', False),
+                            data_dir=getattr(args, 'data_dir', None))
             if not getattr(args, 'check', False):
                 print()
                 _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out)
@@ -1238,7 +1249,8 @@ def main():
     validate_only = getattr(args, 'check', False)
 
     if mode == "pivot":
-        _run_pivot_mode(config_path, output_path, validate_only=validate_only)
+        _run_pivot_mode(config_path, output_path, validate_only=validate_only,
+                        data_dir=getattr(args, 'data_dir', None))
     elif mode == "html":
         _run_html_mode(config_path, output_path,
                        pivot_file=getattr(args, "pivot_file", None),
