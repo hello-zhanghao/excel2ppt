@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.24.0"
+__VERSION__ = "2.24.1"
 __UPDATE_DATE__ = "2026-07-12"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -154,6 +154,25 @@ def _require_arg(value, arg_name, mode):
     if not value:
         print(f"[错误] {mode} 模式必须指定 {arg_name}")
         sys.exit(1)
+
+
+def _apply_timestamp(output_path: str, add_ts: bool) -> str:
+    """给输出文件路径追加时间戳。
+
+    未启用时原样返回。启用时在文件名 stem 和扩展名之间插入 _YYYYMMDD_HHMMSS。
+    示例: out/报告.pptx → out/报告_20260714_173000.pptx
+    """
+    if not add_ts or not output_path:
+        return output_path
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dirname = os.path.dirname(output_path)
+    basename = os.path.basename(output_path)
+    if "." in basename:
+        stem, ext = basename.rsplit(".", 1)
+        new_basename = f"{stem}_{ts}.{ext}"
+    else:
+        new_basename = f"{basename}_{ts}"
+    return os.path.join(dirname, new_basename) if dirname else new_basename
 
 
 def _validate_required_args(args, mode):
@@ -979,6 +998,8 @@ def _make_config_parser():
     p.add_argument("--pivot-file", "--pivot", dest="pivot_file", default=None,
                    help="透视分析结果文件路径 (.xlsx)")
     p.add_argument("--check", action="store_true", help="仅校验配置，不执行")
+    p.add_argument("--ts", dest="timestamp", action="store_true",
+                   help="输出文件名追加时间戳（格式: _YYYYMMDD_HHMMSS）")
     return p
 
 
@@ -991,14 +1012,16 @@ def _dispatch_from_gui(raw_args):
     detected = _detect_mode(config_path)
     data_dir = getattr(args, 'data_dir', None)
     output_path = getattr(args, 'output', None)
+    add_ts = getattr(args, 'timestamp', False)
     if detected == "all":
         print("[信息] 检测到综合配置（PPT + 透视分析），执行全部模式")
         # auto 模式 -o 指定输出目录，生成两个文件
         out_dir = output_path if os.path.isdir(output_path) else os.path.dirname(output_path)
         os.makedirs(out_dir, exist_ok=True)
         base = os.path.basename(config_path).rsplit(".", 1)[0]
-        ppt_out = os.path.join(out_dir, f"{base}_报告.pptx")
-        pivot_out = os.path.join(out_dir, f"{base}_分析.xlsx")
+        ts_suffix = f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}" if add_ts else ""
+        ppt_out = os.path.join(out_dir, f"{base}_报告{ts_suffix}.pptx")
+        pivot_out = os.path.join(out_dir, f"{base}_分析{ts_suffix}.xlsx")
         _run_pivot_mode(config_path, pivot_out, data_dir=data_dir)
         print()
         _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out, data_dir=data_dir)
@@ -1008,9 +1031,9 @@ def _dispatch_from_gui(raw_args):
         print("[错误] 未识别的配置类型，请确认 Excel 包含正确的配置 Sheet")
         sys.exit(1)
     if detected == "pivot":
-        _run_pivot_mode(config_path, output_path, data_dir=data_dir)
+        _run_pivot_mode(config_path, _apply_timestamp(output_path, add_ts), data_dir=data_dir)
     else:
-        _run_ppt_mode(config_path, output_path, data_dir=data_dir)
+        _run_ppt_mode(config_path, _apply_timestamp(output_path, add_ts), data_dir=data_dir)
 
 
 def _run_template_mode(template_path, pivot_file=None, output_path=None, pivot_dir=None):
@@ -1101,15 +1124,18 @@ def main():
         print("  -o, --output <路径>      输出路径（auto模式为输出目录）\n")
         print("公共可选参数:")
         print("  --pivot-file <路径>      透视分析结果文件路径 (.xlsx)")
-        print("  --check                  仅校验配置，不执行\n")
+        print("  --check                  仅校验配置，不执行")
+        print("  --ts                     输出文件名追加时间戳（格式: _YYYYMMDD_HHMMSS）\n")
         print("template 必填参数:")
         print("  <模板.pptx>              PPT模板文件路径 (位置参数)")
         print("  --image-dir <目录>       图片和透视结果文件的搜索目录")
         print("  -o, --output <路径>      输出PPT路径\n")
         print("template 可选参数:")
-        print("  --pivot-file <路径>      透视分析结果文件路径（支持 --pivot 别名，填 latest 自动找最新）\n")
+        print("  --pivot-file <路径>      透视分析结果文件路径（支持 --pivot 别名，填 latest 自动找最新）")
+        print("  --ts                     输出文件名追加时间戳\n")
         print("示例:")
         print("  python main.py pivot -c 配置.xlsx --data-dir 数据目录 -o 结果.xlsx")
+        print("  python main.py pivot -c 配置.xlsx --data-dir 数据目录 -o 结果.xlsx --ts")
         print("  python main.py ppt -c 配置.xlsx --data-dir 数据目录 -o 报告.pptx")
         print("  python main.py -c 配置.xlsx --data-dir 数据目录 -o 输出目录/")
         print("  python main.py template 模板.pptx --image-dir 数据目录 -o 输出.pptx")
@@ -1125,12 +1151,15 @@ def main():
         tpl_parser.add_argument("--image-dir", "--pivot-dir", dest="image_dir", default=None,
                                 help="图片和透视结果文件的搜索目录")
         tpl_parser.add_argument("-o", "--output", default=None, help="输出PPT路径")
+        tpl_parser.add_argument("--ts", dest="timestamp", action="store_true",
+                                help="输出文件名追加时间戳（格式: _YYYYMMDD_HHMMSS）")
         tpl_args = tpl_parser.parse_args(raw_args)
         # template 模式必填 --image-dir 和 -o
         _require_arg(tpl_args.image_dir, "--image-dir <图片/数据搜索目录>", "template")
         _require_arg(tpl_args.output, "-o/--output <输出PPT路径>", "template")
         _run_template_mode(tpl_args.template_path, tpl_args.pivot_file,
-                           tpl_args.output, tpl_args.image_dir)
+                           _apply_timestamp(tpl_args.output, getattr(tpl_args, 'timestamp', False)),
+                           tpl_args.image_dir)
         return
 
     # ===== auto/ppt/pivot 模式：共享公共参数 parser =====
@@ -1141,6 +1170,7 @@ def main():
     output_path = args.output
     validate_only = getattr(args, 'check', False)
     data_dir = getattr(args, 'data_dir', None)
+    add_ts = getattr(args, 'timestamp', False)
 
     if mode == "auto":
         detected = _detect_mode(config_path)
@@ -1150,8 +1180,9 @@ def main():
             out_dir = output_path if os.path.isdir(output_path) else os.path.dirname(output_path)
             os.makedirs(out_dir, exist_ok=True)
             base = os.path.basename(config_path).rsplit('.', 1)[0]
-            ppt_out = os.path.join(out_dir, f"{base}_报告.pptx")
-            pivot_out = os.path.join(out_dir, f"{base}_分析.xlsx")
+            ts_suffix = f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}" if add_ts else ""
+            ppt_out = os.path.join(out_dir, f"{base}_报告{ts_suffix}.pptx")
+            pivot_out = os.path.join(out_dir, f"{base}_分析{ts_suffix}.xlsx")
             _run_pivot_mode(config_path, pivot_out, validate_only=validate_only, data_dir=data_dir)
             if not validate_only:
                 print()
@@ -1164,9 +1195,10 @@ def main():
         mode = detected
 
     if mode == "pivot":
-        _run_pivot_mode(config_path, output_path, validate_only=validate_only, data_dir=data_dir)
+        _run_pivot_mode(config_path, _apply_timestamp(output_path, add_ts),
+                        validate_only=validate_only, data_dir=data_dir)
     else:
-        _run_ppt_mode(config_path, output_path,
+        _run_ppt_mode(config_path, _apply_timestamp(output_path, add_ts),
                       pivot_data_file=getattr(args, "pivot_file", None),
                       validate_only=validate_only, data_dir=data_dir)
 

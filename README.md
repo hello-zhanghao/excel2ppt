@@ -244,6 +244,31 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.24.1 (2026-07-14)
+
+**✨ 新增 --ts 时间戳开关**
+
+- 所有模式（auto/ppt/pivot/template）新增 `--ts` 可选参数
+- 启用后输出文件名追加 `_YYYYMMDD_HHMMSS` 时间戳
+- 默认不加时间戳（保持简洁文件名）
+- auto 模式综合配置时，两个输出文件共用同一时间戳
+
+**用法示例：**
+```bash
+# 默认（无时间戳）
+python main.py pivot -c 配置.xlsx --data-dir 数据 -o 结果.xlsx
+→ 输出: 结果.xlsx
+
+# 加时间戳
+python main.py pivot -c 配置.xlsx --data-dir 数据 -o 结果.xlsx --ts
+→ 输出: 结果_20260714_181410.xlsx
+
+# auto 模式加时间戳
+python main.py -c 配置.xlsx --data-dir 数据 -o 输出目录/ --ts
+→ 输出: 输出目录/配置_报告_20260714_181410.pptx
+       输出目录/配置_分析_20260714_181410.xlsx
+```
+
 ### v2.24.0 (2026-07-14)
 
 **🔧 强制必填参数，消除自动检测歧义**
