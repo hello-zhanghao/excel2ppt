@@ -244,6 +244,18 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.23.0 (2026-07-14)
+
+**🔧 命令行架构统一整合**
+
+- 消除原先 4 套 parser（help subparsers / legacy / template专用 / GUI专用），统一为 `_make_config_parser()` + template 专用 parser
+- 统一参数名：`--pivot-file` 全局共用（`--pivot` 作为别名保留兼容旧用法）
+- `--pivot-dir` 改名为 `--image-dir`（语义更准确，避免与 `--data-dir` 混淆），`--pivot-dir` 作为别名保留
+- ppt/pivot/html/auto 共享 `--data-dir`、`--pivot-file`、`--ppt-file`、`--check` 等公共参数
+- ppt 模式新增 `--data-dir` 支持（原先只有 pivot/auto 支持）
+- help 输出改为自定义格式，清晰区分子命令和选项
+- 向后兼容：所有旧参数名（`--pivot`、`--pivot-dir`）均保留别名
+
 ### v2.22.3 (2026-07-12)
 
 **✨ 透视分析支持 --data-dir 独立数据目录参数**

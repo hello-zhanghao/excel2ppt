@@ -22,7 +22,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.22.3"
+__VERSION__ = "2.23.0"
 __UPDATE_DATE__ = "2026-07-12"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -190,11 +190,12 @@ def _append_chart(chart_map, chart_title, chart_def, page_title):
     chart_map.append(chart_def)
 
 
-def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_only=False):
+def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_only=False, data_dir=None):
     """
     生成PPT。
     :param pivot_data_file: 透视分析结果文件路径，用于 {pivot} 数据源引用
     :param validate_only: 仅校验配置不执行生成
+    :param data_dir: 数据文件所在目录（数据源相对路径基于此目录，默认配置文件所在目录）
     """
     from src.excel_reader import (
         read_config, read_data, read_geo_data, find_data_file, get_data_file_info
@@ -202,6 +203,9 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_
     from src.ppt_builder import build_ppt, validate_ppt_config, print_ppt_validation_results
 
     config_dir = os.path.dirname(config_path)
+    eff_data_dir = data_dir if data_dir else config_dir
+    if data_dir:
+        print(f"    → 数据目录: {data_dir}")
     print(f"[PPT/1] 读取配置: {config_path}")
     config = read_config(config_path)
     general = config.get("general", {})
@@ -211,7 +215,7 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_
 
     # 配置校验
     print(f"[PPT/校验] 检查配置...")
-    val_results, all_ok = validate_ppt_config(config, config_dir, pivot_data_file)
+    val_results, all_ok = validate_ppt_config(config, eff_data_dir, pivot_data_file)
     print_ppt_validation_results(val_results)
 
     if validate_only:
@@ -251,11 +255,11 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_
     # 全局数据文件路径
     default_data_file = general.get("数据文件", general.get("excel_path", ""))
     if not default_data_file:
-        default_data_file = _auto_find_data_file(config_dir, config_path)
+        default_data_file = _auto_find_data_file(eff_data_dir, config_path)
         if default_data_file:
             print(f"    → 自动找到数据文件: {os.path.basename(default_data_file)}")
     elif not os.path.isabs(str(default_data_file)):
-        default_data_file = os.path.join(config_dir, str(default_data_file))
+        default_data_file = os.path.join(eff_data_dir, str(default_data_file))
 
     print(f"    → 数据文件: {os.path.basename(default_data_file) if default_data_file else '无'}")
 
@@ -286,7 +290,7 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_
                         print(f"    ! [{page_title}] {chart_title} 引用透视结果但未找到透视输出文件")
                         continue
                 else:
-                    file_path = find_data_file(data_source, config_dir)
+                    file_path = find_data_file(data_source, eff_data_dir)
                     if file_path:
                         print(f"    [信息] [{page_title}] {chart_title} 使用数据源: {os.path.basename(file_path)}")
                     else:
@@ -1039,18 +1043,34 @@ def _run_analysis_thread(raw_args, log_text, run_btn, run_state):
         log_text.after(0, lambda: log_text.see("end"))
 
 
+def _make_config_parser():
+    """创建配置类模式（auto/ppt/pivot/html）的公共参数 parser。
+
+    template 模式因位置参数语义不同（模板文件 vs 配置文件夹），单独处理。
+    所有子命令共享 --pivot-file/--pivot、--data-dir、--output、--check 等参数，
+    消除原先 4 套 parser 的重复定义。
+    """
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("folder_or_config", nargs="?", default=None, help="文件夹路径或配置文件")
+    p.add_argument("-c", "--config", default=None, help="配置文件路径")
+    p.add_argument("-o", "--output", default=None, help="输出路径")
+    p.add_argument("--data-dir", dest="data_dir", default=None,
+                   help="数据文件所在目录（配置中数据源相对路径基于此目录，默认配置文件所在目录）")
+    p.add_argument("--pivot-file", "--pivot", dest="pivot_file", default=None,
+                   help="透视分析结果文件路径 (.xlsx)")
+    p.add_argument("--ppt-file", dest="ppt_file", default=None,
+                   help="PPT 文件路径（html 模式用于预览截图）")
+    p.add_argument("--check", action="store_true", help="仅校验配置，不执行")
+    return p
+
+
 def _dispatch_from_gui(raw_args):
-    """从 GUI 调用的分析入口"""
-    mode = "auto"
-    legacy = argparse.ArgumentParser(add_help=False)
-    legacy.add_argument("folder_or_config", nargs="?", default=None)
-    legacy.add_argument("-c", "--config", default=None)
-    legacy.add_argument("-o", "--output", default=None)
-    legacy.add_argument("--data-dir", dest="data_dir", default=None,
-                        help="数据文件所在目录（配置中数据源相对路径基于此目录）")
-    args = legacy.parse_args(raw_args)
+    """从 GUI 调用的分析入口（auto 模式）"""
+    parser = _make_config_parser()
+    args = parser.parse_args(raw_args)
     config_path = _resolve_config_path(args)
     detected = _detect_mode(config_path)
+    data_dir = getattr(args, 'data_dir', None)
     if detected == "all":
         print("[信息] 检测到综合配置（PPT + 透视分析），执行全部模式")
         config_dir = os.path.dirname(config_path)
@@ -1059,18 +1079,18 @@ def _dispatch_from_gui(raw_args):
         base = os.path.basename(config_path).rsplit(".", 1)[0]
         ppt_out = os.path.join(out_dir, f"{base}_报告_{ts}.pptx")
         pivot_out = os.path.join(out_dir, f"{base}_分析_{ts}.xlsx")
-        _run_pivot_mode(config_path, pivot_out, data_dir=getattr(args, 'data_dir', None))
+        _run_pivot_mode(config_path, pivot_out, data_dir=data_dir)
         print()
-        _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out)
+        _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out, data_dir=data_dir)
         return
     print(f"[信息] 自动检测配置类型: {detected}")
     if detected == "unknown":
         print("[错误] 未识别的配置类型，请确认 Excel 包含正确的配置 Sheet")
         sys.exit(1)
     if detected == "pivot":
-        _run_pivot_mode(config_path, args.output, data_dir=getattr(args, 'data_dir', None))
+        _run_pivot_mode(config_path, args.output, data_dir=data_dir)
     else:
-        _run_ppt_mode(config_path, args.output)
+        _run_ppt_mode(config_path, args.output, data_dir=data_dir)
 
 
 def _run_template_mode(template_path, pivot_file=None, output_path=None, pivot_dir=None):
@@ -1136,84 +1156,88 @@ def main():
     _install_cli_log_tee()
 
     raw_args = sys.argv[1:]
-    mode = None
 
+    # 检测子命令
+    mode = "auto"
     if raw_args and raw_args[0] in ("ppt", "pivot", "html", "template"):
         mode = raw_args[0]
         raw_args = raw_args[1:]
     elif raw_args and raw_args[0] in ("-h", "--help"):
         mode = "help"
-    else:
-        mode = "auto"
 
+    # ===== help 模式：打印统一帮助 =====
     if mode == "help":
-        parser = argparse.ArgumentParser(description="Excel 统一分析工具 — PPT生成 & 透视分析 & HTML报告")
-        sub = parser.add_subparsers(dest="mode", help="子命令")
-        ppt_p = sub.add_parser("ppt", help="生成PPT报告")
-        ppt_p.add_argument("folder_or_config", nargs="?", default=None)
-        ppt_p.add_argument("-c", "--config", default=None)
-        ppt_p.add_argument("-o", "--output", default=None)
-        ppt_p.add_argument("--pivot-file", dest="pivot_file", default=None,
-                           help="透视分析结果文件路径，用于 {pivot} 数据源引用")
-        ppt_p.add_argument("--check", action="store_true", help="仅校验配置，不执行")
-        pivot_p = sub.add_parser("pivot", help="透视分析")
-        pivot_p.add_argument("folder_or_config", nargs="?", default=None)
-        pivot_p.add_argument("-c", "--config", default=None)
-        pivot_p.add_argument("-o", "--output", default=None)
-        pivot_p.add_argument("--data-dir", dest="data_dir", default=None,
-                           help="数据文件所在目录（配置中数据源相对路径基于此目录，默认配置文件所在目录）")
-        pivot_p.add_argument("--check", action="store_true", help="仅校验配置，不执行")
-        html_p = sub.add_parser("html", help="生成HTML报告")
-        html_p.add_argument("folder_or_config", nargs="?", default=None)
-        html_p.add_argument("-c", "--config", default=None)
-        html_p.add_argument("-o", "--output", default=None)
-        html_p.add_argument("--pivot-file", dest="pivot_file", default=None,
-                           help="透视分析结果文件路径")
-        html_p.add_argument("--ppt-file", dest="ppt_file", default=None,
-                           help="PPT文件路径（可选，用于预览截图）")
-        tpl_p = sub.add_parser("template", help="基于PPT模板填充数据")
-        tpl_p.add_argument("template_path", help="PPT模板文件路径 (.pptx)")
-        tpl_p.add_argument("--pivot", dest="pivot_file", default=None,
-                           help="透视分析结果文件路径 (.xlsx)，填 latest 自动找最新 xlsx")
-        tpl_p.add_argument("--pivot-dir", dest="pivot_dir", default=None,
-                           help="自动查找最新 xlsx 的搜索目录（默认模板所在目录）")
-        tpl_p.add_argument("-o", "--output", default=None, help="输出PPT路径")
-        parser.parse_args()
+        print("Excel 统一分析工具 — PPT生成 & 透视分析 & HTML报告 & 模板填充\n")
+        print("用法:")
+        print("  python main.py [子命令] <文件夹或配置> [选项]\n")
+        print("子命令:")
+        print("  (无)      自动检测配置类型并执行")
+        print("  ppt       生成PPT报告")
+        print("  pivot     透视分析")
+        print("  html      生成HTML报告")
+        print("  template  基于PPT模板填充数据\n")
+        print("公共选项 (ppt/pivot/html/auto):")
+        print("  -c, --config <路径>      配置文件路径")
+        print("  -o, --output <路径>      输出路径")
+        print("  --data-dir <目录>        数据文件所在目录（数据源相对路径基于此目录）")
+        print("  --pivot-file <路径>      透视分析结果文件路径 (.xlsx)")
+        print("  --ppt-file <路径>        PPT文件路径（html 模式用于预览截图）")
+        print("  --check                  仅校验配置，不执行\n")
+        print("template 模式选项:")
+        print("  <模板.pptx>              PPT模板文件路径 (位置参数)")
+        print("  --pivot-file <路径>      透视分析结果文件路径（支持 --pivot 别名）")
+        print("  --image-dir <目录>       图片和透视结果文件的搜索目录（支持 --pivot-dir 别名）")
+        print("  -o, --output <路径>      输出PPT路径\n")
+        print("示例:")
+        print("  python main.py cases/00_防护用例")
+        print("  python main.py pivot cases/00_防护用例 --data-dir 数据目录")
+        print("  python main.py ppt 配置.xlsx --pivot-file 透视结果.xlsx")
+        print("  python main.py template 模板.pptx --pivot-file 透视结果.xlsx -o 输出.pptx")
         return
 
-    legacy = argparse.ArgumentParser(add_help=False)
-    legacy.add_argument("folder_or_config", nargs="?", default=None, help="文件夹路径或配置文件")
-    legacy.add_argument("-c", "--config", default=None, help="配置文件路径")
-    legacy.add_argument("-o", "--output", default=None, help="输出路径")
-    legacy.add_argument("--pivot-file", dest="pivot_file", default=None,
-                        help="透视分析结果文件路径，用于 {pivot} 数据源引用")
-    legacy.add_argument("--data-dir", dest="data_dir", default=None,
-                        help="数据文件所在目录（配置中数据源相对路径基于此目录，默认配置文件所在目录）")
-    legacy.add_argument("--check", action="store_true", help="仅校验配置，不执行")
+    # ===== template 模式：位置参数为模板文件，单独解析 =====
+    if mode == "template":
+        tpl_parser = argparse.ArgumentParser(add_help=False)
+        tpl_parser.add_argument("template_path", help="PPT模板文件路径 (.pptx)")
+        tpl_parser.add_argument("--pivot-file", "--pivot", dest="pivot_file", default=None,
+                                help="透视分析结果文件路径 (.xlsx)，填 latest 自动找最新 xlsx")
+        tpl_parser.add_argument("--image-dir", "--pivot-dir", dest="image_dir", default=None,
+                                help="图片和透视结果文件的搜索目录（默认模板所在目录）")
+        tpl_parser.add_argument("-o", "--output", default=None, help="输出PPT路径")
+        tpl_args = tpl_parser.parse_args(raw_args)
+        _run_template_mode(tpl_args.template_path, tpl_args.pivot_file,
+                           tpl_args.output, tpl_args.image_dir)
+        return
+
+    # ===== auto/ppt/pivot/html 模式：共享公共参数 parser =====
+    parser = _make_config_parser()
+    args = parser.parse_args(raw_args)
+    config_path = _resolve_config_path(args)
+    output_path = args.output
+    validate_only = getattr(args, 'check', False)
+    data_dir = getattr(args, 'data_dir', None)
 
     if mode == "auto":
-        args = legacy.parse_args(raw_args)
-        config_path = _resolve_config_path(args)
         detected = _detect_mode(config_path)
         if detected == "all":
             print("[信息] 检测到综合配置（PPT + 透视分析），执行全部模式")
             config_dir = os.path.dirname(config_path)
-            if not args.output:
+            if not output_path:
                 out_dir = _ensure_output_dir(config_dir)
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                ppt_out = os.path.join(out_dir, f"{os.path.basename(config_path).rsplit('.',1)[0]}_报告_{ts}.pptx")
-                pivot_out = os.path.join(out_dir, f"{os.path.basename(config_path).rsplit('.',1)[0]}_分析_{ts}.xlsx")
+                base = os.path.basename(config_path).rsplit('.', 1)[0]
+                ppt_out = os.path.join(out_dir, f"{base}_报告_{ts}.pptx")
+                pivot_out = os.path.join(out_dir, f"{base}_分析_{ts}.xlsx")
             else:
-                out_dir = os.path.dirname(args.output) or "."
+                out_dir = os.path.dirname(output_path) or "."
                 os.makedirs(out_dir, exist_ok=True)
-                base_name = os.path.basename(args.output).rsplit(".", 1)[0]
+                base_name = os.path.basename(output_path).rsplit(".", 1)[0]
                 ppt_out = os.path.join(out_dir, f"{base_name}.pptx")
                 pivot_out = os.path.join(out_dir, f"{base_name}_分析.xlsx")
-            _run_pivot_mode(config_path, pivot_out, validate_only=getattr(args, 'check', False),
-                            data_dir=getattr(args, 'data_dir', None))
-            if not getattr(args, 'check', False):
+            _run_pivot_mode(config_path, pivot_out, validate_only=validate_only, data_dir=data_dir)
+            if not validate_only:
                 print()
-                _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out)
+                _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out, data_dir=data_dir)
                 # 自动生成 HTML 报告（供手机预览）
                 print()
                 try:
@@ -1226,38 +1250,17 @@ def main():
             print("[错误] 未识别的配置类型，请确认 Excel 包含正确的配置 Sheet")
             sys.exit(1)
         mode = detected
-    else:
-        if mode == "template":
-            # template 模式参数不兼容 legacy parser，跳过
-            pass
-        else:
-            args = legacy.parse_args(raw_args)
-
-    # ===== template 模式：独立处理，不走 _resolve_config_path =====
-    if mode == "template":
-        tpl_parser = argparse.ArgumentParser(add_help=False)
-        tpl_parser.add_argument("template_path", help="PPT模板文件路径")
-        tpl_parser.add_argument("--pivot", dest="pivot_file", default=None)
-        tpl_parser.add_argument("--pivot-dir", dest="pivot_dir", default=None, help="数据文件和图片的搜索目录")
-        tpl_parser.add_argument("-o", "--output", default=None)
-        tpl_args = tpl_parser.parse_args(raw_args)
-        _run_template_mode(tpl_args.template_path, tpl_args.pivot_file, tpl_args.output, tpl_args.pivot_dir)
-        return
-
-    config_path = _resolve_config_path(args)
-    output_path = args.output
-    validate_only = getattr(args, 'check', False)
 
     if mode == "pivot":
-        _run_pivot_mode(config_path, output_path, validate_only=validate_only,
-                        data_dir=getattr(args, 'data_dir', None))
+        _run_pivot_mode(config_path, output_path, validate_only=validate_only, data_dir=data_dir)
     elif mode == "html":
         _run_html_mode(config_path, output_path,
                        pivot_file=getattr(args, "pivot_file", None),
                        ppt_file=getattr(args, "ppt_file", None))
     else:
-        pivot_file = getattr(args, "pivot_file", None)
-        _run_ppt_mode(config_path, output_path, pivot_data_file=pivot_file, validate_only=validate_only)
+        _run_ppt_mode(config_path, output_path,
+                      pivot_data_file=getattr(args, "pivot_file", None),
+                      validate_only=validate_only, data_dir=data_dir)
 
 
 if __name__ == "__main__":
