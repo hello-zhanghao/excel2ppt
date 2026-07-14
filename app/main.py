@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.23.2"
+__VERSION__ = "2.24.0"
 __UPDATE_DATE__ = "2026-07-12"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -125,25 +125,45 @@ def _auto_find_latest_pivot(search_dir):
 
 
 def _resolve_config_path(args):
+    """解析配置文件路径。
+
+    为避免歧义，位置参数只接受配置文件路径，不再自动扫描文件夹找配置。
+    如需指定文件夹，请用 --data-dir 参数。
+    """
     config_path = args.config
     folder_or_config = getattr(args, "folder_or_config", None)
     if not config_path and folder_or_config:
         if os.path.isdir(folder_or_config):
-            config_path = find_config_file(folder_or_config)
-            if config_path:
-                print(f"[信息] 使用配置文件: {os.path.basename(config_path)}")
-            else:
-                print(f"[错误] 在 {folder_or_config} 里没找到 Excel 文件")
-                sys.exit(1)
+            # 传入文件夹时给出明确错误，避免自动选择错误的配置文件
+            print(f"[错误] 请直接指定配置文件路径，而非文件夹: {folder_or_config}")
+            print(f"       用法: python main.py pivot -c 配置文件.xlsx --data-dir 数据目录 -o 输出.xlsx")
+            sys.exit(1)
         elif os.path.isfile(folder_or_config):
             config_path = folder_or_config
     if not config_path:
-        print("[错误] 请指定文件夹路径或配置文件路径")
+        print("[错误] 必须指定配置文件路径（位置参数或 -c/--config）")
         sys.exit(1)
     if not os.path.exists(config_path):
         print(f"[错误] 配置文件不存在: {config_path}")
         sys.exit(1)
     return os.path.abspath(config_path)
+
+
+def _require_arg(value, arg_name, mode):
+    """校验必填参数，未提供时报错退出"""
+    if not value:
+        print(f"[错误] {mode} 模式必须指定 {arg_name}")
+        sys.exit(1)
+
+
+def _validate_required_args(args, mode):
+    """校验各模式的必填参数"""
+    if mode == "template":
+        # template 模式在调用处单独校验
+        return
+    # pivot/ppt/auto 模式：必须提供 --data-dir 和 -o
+    _require_arg(getattr(args, 'data_dir', None), "--data-dir <数据目录>", mode)
+    _require_arg(getattr(args, 'output', None), "-o/--output <输出路径>", mode)
 
 
 def _detect_mode(config_path):
@@ -201,9 +221,9 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_
     from src.ppt_builder import build_ppt, validate_ppt_config, print_ppt_validation_results
 
     config_dir = os.path.dirname(config_path)
-    eff_data_dir = data_dir if data_dir else config_dir
-    if data_dir:
-        print(f"    → 数据目录: {data_dir}")
+    # data_dir 必填（由 _validate_required_args 保证），直接使用
+    eff_data_dir = data_dir
+    print(f"    → 数据目录: {data_dir}")
     print(f"[PPT/1] 读取配置: {config_path}")
     config = read_config(config_path)
     general = config.get("general", {})
@@ -377,11 +397,10 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
     from src.excel_writer import write_results
 
     config_dir = os.path.dirname(config_path)
-    # 数据源相对路径基准：优先用 --data-dir，否则回退到配置文件所在目录
-    eff_data_dir = data_dir if data_dir else config_dir
+    # data_dir 必填（由 _validate_required_args 保证），直接使用
+    eff_data_dir = data_dir
     print(f"[Pivot/1] 读取配置: {config_path}")
-    if data_dir:
-        print(f"    → 数据目录: {data_dir}")
+    print(f"    → 数据目录: {data_dir}")
     tasks = read_pivot_config(config_path)
     print(f"    → 共 {len(tasks)} 个分析任务")
 
@@ -968,16 +987,18 @@ def _dispatch_from_gui(raw_args):
     parser = _make_config_parser()
     args = parser.parse_args(raw_args)
     config_path = _resolve_config_path(args)
+    _validate_required_args(args, "auto")
     detected = _detect_mode(config_path)
     data_dir = getattr(args, 'data_dir', None)
+    output_path = getattr(args, 'output', None)
     if detected == "all":
         print("[信息] 检测到综合配置（PPT + 透视分析），执行全部模式")
-        config_dir = os.path.dirname(config_path)
-        out_dir = _ensure_output_dir(config_dir)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # auto 模式 -o 指定输出目录，生成两个文件
+        out_dir = output_path if os.path.isdir(output_path) else os.path.dirname(output_path)
+        os.makedirs(out_dir, exist_ok=True)
         base = os.path.basename(config_path).rsplit(".", 1)[0]
-        ppt_out = os.path.join(out_dir, f"{base}_报告_{ts}.pptx")
-        pivot_out = os.path.join(out_dir, f"{base}_分析_{ts}.xlsx")
+        ppt_out = os.path.join(out_dir, f"{base}_报告.pptx")
+        pivot_out = os.path.join(out_dir, f"{base}_分析.xlsx")
         _run_pivot_mode(config_path, pivot_out, data_dir=data_dir)
         print()
         _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out, data_dir=data_dir)
@@ -987,9 +1008,9 @@ def _dispatch_from_gui(raw_args):
         print("[错误] 未识别的配置类型，请确认 Excel 包含正确的配置 Sheet")
         sys.exit(1)
     if detected == "pivot":
-        _run_pivot_mode(config_path, args.output, data_dir=data_dir)
+        _run_pivot_mode(config_path, output_path, data_dir=data_dir)
     else:
-        _run_ppt_mode(config_path, args.output, data_dir=data_dir)
+        _run_ppt_mode(config_path, output_path, data_dir=data_dir)
 
 
 def _run_template_mode(template_path, pivot_file=None, output_path=None, pivot_dir=None):
@@ -1068,28 +1089,31 @@ def main():
     if mode == "help":
         print("Excel 统一分析工具 — PPT生成 & 透视分析 & 模板填充\n")
         print("用法:")
-        print("  python main.py [子命令] <文件夹或配置> [选项]\n")
+        print("  python main.py [子命令] -c <配置文件> --data-dir <数据目录> -o <输出路径> [选项]\n")
         print("子命令:")
-        print("  (无)      自动检测配置类型并执行")
+        print("  (无)      自动检测配置类型并执行（综合配置时先透视后PPT）")
         print("  ppt       生成PPT报告")
         print("  pivot     透视分析")
         print("  template  基于PPT模板填充数据\n")
-        print("公共选项 (ppt/pivot/auto):")
-        print("  -c, --config <路径>      配置文件路径")
-        print("  -o, --output <路径>      输出路径")
+        print("公共必填参数 (ppt/pivot/auto):")
+        print("  -c, --config <路径>      配置文件路径（位置参数也接受配置文件）")
         print("  --data-dir <目录>        数据文件所在目录（数据源相对路径基于此目录）")
+        print("  -o, --output <路径>      输出路径（auto模式为输出目录）\n")
+        print("公共可选参数:")
         print("  --pivot-file <路径>      透视分析结果文件路径 (.xlsx)")
         print("  --check                  仅校验配置，不执行\n")
-        print("template 模式选项:")
+        print("template 必填参数:")
         print("  <模板.pptx>              PPT模板文件路径 (位置参数)")
-        print("  --pivot-file <路径>      透视分析结果文件路径（支持 --pivot 别名）")
-        print("  --image-dir <目录>       图片和透视结果文件的搜索目录（支持 --pivot-dir 别名）")
+        print("  --image-dir <目录>       图片和透视结果文件的搜索目录")
         print("  -o, --output <路径>      输出PPT路径\n")
+        print("template 可选参数:")
+        print("  --pivot-file <路径>      透视分析结果文件路径（支持 --pivot 别名，填 latest 自动找最新）\n")
         print("示例:")
-        print("  python main.py cases/00_防护用例")
-        print("  python main.py pivot cases/00_防护用例 --data-dir 数据目录")
-        print("  python main.py ppt 配置.xlsx --pivot-file 透视结果.xlsx")
-        print("  python main.py template 模板.pptx --pivot-file 透视结果.xlsx -o 输出.pptx")
+        print("  python main.py pivot -c 配置.xlsx --data-dir 数据目录 -o 结果.xlsx")
+        print("  python main.py ppt -c 配置.xlsx --data-dir 数据目录 -o 报告.pptx")
+        print("  python main.py -c 配置.xlsx --data-dir 数据目录 -o 输出目录/")
+        print("  python main.py template 模板.pptx --image-dir 数据目录 -o 输出.pptx")
+        print("  python main.py template 模板.pptx --pivot-file 透视结果.xlsx --image-dir 数据目录 -o 输出.pptx")
         return
 
     # ===== template 模式：位置参数为模板文件，单独解析 =====
@@ -1099,9 +1123,12 @@ def main():
         tpl_parser.add_argument("--pivot-file", "--pivot", dest="pivot_file", default=None,
                                 help="透视分析结果文件路径 (.xlsx)，填 latest 自动找最新 xlsx")
         tpl_parser.add_argument("--image-dir", "--pivot-dir", dest="image_dir", default=None,
-                                help="图片和透视结果文件的搜索目录（默认模板所在目录）")
+                                help="图片和透视结果文件的搜索目录")
         tpl_parser.add_argument("-o", "--output", default=None, help="输出PPT路径")
         tpl_args = tpl_parser.parse_args(raw_args)
+        # template 模式必填 --image-dir 和 -o
+        _require_arg(tpl_args.image_dir, "--image-dir <图片/数据搜索目录>", "template")
+        _require_arg(tpl_args.output, "-o/--output <输出PPT路径>", "template")
         _run_template_mode(tpl_args.template_path, tpl_args.pivot_file,
                            tpl_args.output, tpl_args.image_dir)
         return
@@ -1110,6 +1137,7 @@ def main():
     parser = _make_config_parser()
     args = parser.parse_args(raw_args)
     config_path = _resolve_config_path(args)
+    _validate_required_args(args, mode)
     output_path = args.output
     validate_only = getattr(args, 'check', False)
     data_dir = getattr(args, 'data_dir', None)
@@ -1118,19 +1146,12 @@ def main():
         detected = _detect_mode(config_path)
         if detected == "all":
             print("[信息] 检测到综合配置（PPT + 透视分析），执行全部模式")
-            config_dir = os.path.dirname(config_path)
-            if not output_path:
-                out_dir = _ensure_output_dir(config_dir)
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                base = os.path.basename(config_path).rsplit('.', 1)[0]
-                ppt_out = os.path.join(out_dir, f"{base}_报告_{ts}.pptx")
-                pivot_out = os.path.join(out_dir, f"{base}_分析_{ts}.xlsx")
-            else:
-                out_dir = os.path.dirname(output_path) or "."
-                os.makedirs(out_dir, exist_ok=True)
-                base_name = os.path.basename(output_path).rsplit(".", 1)[0]
-                ppt_out = os.path.join(out_dir, f"{base_name}.pptx")
-                pivot_out = os.path.join(out_dir, f"{base_name}_分析.xlsx")
+            # auto 模式 -o 指定输出目录，生成两个文件
+            out_dir = output_path if os.path.isdir(output_path) else os.path.dirname(output_path)
+            os.makedirs(out_dir, exist_ok=True)
+            base = os.path.basename(config_path).rsplit('.', 1)[0]
+            ppt_out = os.path.join(out_dir, f"{base}_报告.pptx")
+            pivot_out = os.path.join(out_dir, f"{base}_分析.xlsx")
             _run_pivot_mode(config_path, pivot_out, validate_only=validate_only, data_dir=data_dir)
             if not validate_only:
                 print()

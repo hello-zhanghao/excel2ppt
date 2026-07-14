@@ -244,6 +244,30 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.24.0 (2026-07-14)
+
+**🔧 强制必填参数，消除自动检测歧义**
+
+- pivot/ppt/auto 模式：`-c/--config`、`--data-dir`、`-o/--output` 三者均为必填，未提供时报错退出
+- template 模式：模板文件、`--image-dir`、`-o/--output` 三者均为必填
+- 位置参数不再接受文件夹（避免自动扫描选错配置文件），只接受配置文件路径
+- auto 模式 `-o` 改为指定输出目录（综合配置时在该目录下生成 `*_报告.pptx` 和 `*_分析.xlsx`）
+- 移除 `_auto_find_data_file` 的隐式回退逻辑（data_dir 必填后不再需要）
+
+**参数校验示例：**
+```
+# 正确
+python main.py pivot -c 配置.xlsx --data-dir 数据目录 -o 结果.xlsx
+
+# 错误（缺少 --data-dir）
+python main.py pivot -c 配置.xlsx -o 结果.xlsx
+→ [错误] pivot 模式必须指定 --data-dir <数据目录>
+
+# 错误（传文件夹而非配置文件）
+python main.py pivot cases/00_防护用例
+→ [错误] 请直接指定配置文件路径，而非文件夹
+```
+
 ### v2.23.2 (2026-07-14)
 
 **🐛 修复数据列名首尾空格导致字段匹配失败**
