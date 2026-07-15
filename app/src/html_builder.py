@@ -893,7 +893,7 @@ def generate_html_report(
 <title>{_escape_html(report_title)}</title>
 <style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif; background: #f0f2f5; color: #333; line-height: 1.6; }}
+  body {{ font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif; background: #f0f2f5; color: #333; line-height: 1.6; overflow-x: hidden; }}
   .header {{ background: linear-gradient(135deg, #2E75B6, #1a4a7a); color: #fff; padding: 20px 16px; text-align: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
   .header h1 {{ font-size: 18px; margin-bottom: 4px; font-weight: 600; }}
   .header p {{ font-size: 12px; opacity: 0.85; }}
