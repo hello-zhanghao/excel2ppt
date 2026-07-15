@@ -308,6 +308,65 @@ def _summary_icon(col_name: str) -> str:
     return "📌"
 
 
+def _build_category_data(category_cols: List[int], rows: List[List[str]]) -> Tuple[List[str], List[Dict]]:
+    """构建分类数据。返回 (categories, categoryGroups)。
+
+    - 单列分类：categories = 该列值，categoryGroups = []
+    - 多列分类：categories = 最后一列值（子分类），categoryGroups = 前面列合并的父分组
+      [{"name": "华东", "count": 2}, {"name": "华北", "count": 2}]
+      用于 ECharts 双 xAxis 实现多级分类轴（参考 PPT 的多分类 x 轴效果）。
+    """
+    if not category_cols:
+        return ["" for _ in rows], []
+
+    if len(category_cols) == 1:
+        cc = category_cols[0]
+        cats = []
+        for row in rows:
+            cats.append(str(row[cc]) if cc < len(row) and row[cc] != "" else "")
+        return cats, []
+
+    # 多列：最后一列作为子分类，前面的列合并作为父分组
+    child_col = category_cols[-1]
+    parent_cols = category_cols[:-1]
+
+    categories = []
+    groups = []
+    prev_parent = None
+
+    for row in rows:
+        child_val = str(row[child_col]) if child_col < len(row) and row[child_col] != "" else ""
+        categories.append(child_val)
+
+        parent_val = "-".join(
+            str(row[pc]) for pc in parent_cols if pc < len(row) and row[pc] != ""
+        ) if parent_cols else ""
+
+        if parent_val != prev_parent:
+            groups.append({"name": parent_val, "count": 1})
+            prev_parent = parent_val
+        else:
+            groups[-1]["count"] += 1
+
+    return categories, groups
+
+
+def _build_x_axis_option(categories: List[str], category_groups: List[Dict], multi_level: bool = True) -> Dict:
+    """构建 ECharts xAxis 配置。多列分类时返回双轴数组，单列返回普通对象。"""
+    if multi_level and category_groups:
+        # 多级分类轴：主轴显示子分类，副轴显示父分类
+        parent_data = []
+        for g in category_groups:
+            for j in range(g["count"]):
+                parent_data.append(g["name"] if j == 0 else "")
+        return [
+            {"type": "category", "data": categories, "axisLabel": {"interval": 0}},
+            {"type": "category", "data": parent_data, "axisLabel": {"interval": 0}, "offset": 28,
+             "axisLine": {"show": False}, "axisTick": {"show": False}},
+        ]
+    return {"type": "category", "data": categories, "axisLabel": {"rotate": 30}}
+
+
 def _detect_chart_columns(headers: List[str]) -> Tuple[List[int], List[int]]:
     """从表头自动检测分类列和数值列。返回 (category_cols: List[int], value_cols: List[int])。
     支持多列分类（多维度透视），category_cols = 非数值列（排除经纬度列）。
@@ -351,16 +410,9 @@ def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
     if not value_cols:
         return ""
 
-    categories = []
+    # 构建分类数据（多列分类时拆分为子分类+父分组，实现双 x 轴）
+    categories, category_groups = _build_category_data(category_cols, rows)
     series_data = []
-
-    for row in rows:
-        # 多列分类拼接：["华东", "产品A"] → "华东-产品A"
-        if category_cols:
-            parts = [str(row[cc]) for cc in category_cols if cc < len(row) and row[cc] != ""]
-            categories.append("-".join(parts) if parts else "")
-        else:
-            categories.append("")
 
     for vc in value_cols:
         values = []
@@ -376,7 +428,7 @@ def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
             "name": headers[vc],
             "data": values,
         })
-    
+
     # 通用 tooltip 样式（适配主题由 JS 端覆盖，此处为静态回退）
     tooltip_style = {
         "backgroundColor": "#ffffff",
@@ -385,7 +437,9 @@ def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
         "textStyle": {"color": "#1a1a2e"},
         "extraCssText": "box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 8px;"
     }
-    base_grid = {"left": "3%", "right": "4%", "bottom": "15%", "top": "15%", "containLabel": True}
+    # 多级分类轴时底部留更多空间
+    is_multi = bool(category_groups)
+    base_grid = {"left": "3%", "right": "4%", "bottom": "24%" if is_multi else "15%", "top": "15%", "containLabel": True}
     anim = {"animationDuration": 1000, "animationEasing": "cubicOut"}
 
     def _bar_gradient(color):
@@ -458,14 +512,14 @@ def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
                 "symbolSize": 8,
                 "lineStyle": {"width": 3, "color": c},
                 "itemStyle": {"color": c, "borderColor": "#fff", "borderWidth": 2},
-                "areaStyle": {"color": _area_gradient(c)},
+                "label": {"show": True, "position": "top", "fontSize": 11, "color": c},
             })
         return json.dumps({
             "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
             "tooltip": {"trigger": "axis", **tooltip_style},
             "legend": {"data": [sd["name"] for sd in series_data], "bottom": 0},
             "grid": base_grid,
-            "xAxis": {"type": "category", "data": categories, "axisLabel": {"rotate": 30}},
+            "xAxis": _build_x_axis_option(categories, category_groups),
             "yAxis": {"type": "value"},
             "series": series,
             **anim,
@@ -481,13 +535,14 @@ def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
                 "data": sd["data"],
                 "barWidth": "50%",
                 "itemStyle": {"color": _bar_gradient(c), "borderRadius": [6, 6, 0, 0]},
+                "label": {"show": True, "position": "top", "fontSize": 11, "color": "#555"},
             })
         return json.dumps({
             "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
             "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}, **tooltip_style},
             "legend": {"data": [sd["name"] for sd in series_data], "bottom": 0},
             "grid": base_grid,
-            "xAxis": {"type": "category", "data": categories, "axisLabel": {"rotate": 30}},
+            "xAxis": _build_x_axis_option(categories, category_groups),
             "yAxis": {"type": "value"},
             "series": series,
             **anim,
@@ -655,14 +710,8 @@ def _build_chart_data_js(sections: List[Dict]) -> str:
         if not value_cols:
             continue
 
-        categories = []
-        for row in rows:
-            # 多列分类拼接
-            if category_cols:
-                cat_parts = [str(row[cc]) for cc in category_cols if cc < len(row) and row[cc] != ""]
-                categories.append("-".join(cat_parts) if cat_parts else "")
-            else:
-                categories.append("")
+        # 多列分类拆分为子分类+父分组（用于双 xAxis 多级分类轴）
+        categories, category_groups = _build_category_data(category_cols, rows)
 
         series_list = []
         for vc in value_cols:
@@ -679,7 +728,8 @@ def _build_chart_data_js(sections: List[Dict]) -> str:
 
         col_labels = [headers[vc] for vc in value_cols]
         parts.append(f"chartData['{sid}'] = {{\"title\": {json.dumps(sec.get('title', ''))}, "
-                     f"\"categories\": {json.dumps(categories)}, "
+                     f"\"categories\": {json.dumps(categories, ensure_ascii=False)}, "
+                     f"\"categoryGroups\": {json.dumps(category_groups, ensure_ascii=False)}, "
                      f"\"series\": {json.dumps(series_list, ensure_ascii=False)}, "
                      f"\"colLabels\": {json.dumps(col_labels, ensure_ascii=False)}}};")
     return "\n".join(parts)
@@ -1296,7 +1346,7 @@ def generate_html_report(
   .table-tool-btn:hover {{ background: var(--primary); color: #fff; border-color: var(--primary); }}
   .table-wrap {{ overflow: auto; max-height: 380px; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: var(--radius-sm); }}
   table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-  th {{ background: var(--th-bg); color: var(--th-color); font-weight: 700; padding: 11px 14px; text-align: left; border-bottom: 2px solid var(--border); position: sticky; top: 0; z-index: 2; cursor: pointer; user-select: none; white-space: nowrap; }}
+  th {{ background: var(--th-bg); color: var(--th-color); font-weight: 700; padding: 11px 14px; text-align: center; border-bottom: 2px solid var(--border); position: sticky; top: 0; z-index: 2; cursor: pointer; user-select: none; white-space: nowrap; }}
   th:hover {{ background: var(--primary-light); color: var(--primary); }}
   th.dim-th {{ background: var(--dim-bg); color: var(--dim-color); }}
   .sort-arrow {{ font-size: 10px; color: var(--primary); margin-left: 4px; }}
@@ -1713,8 +1763,24 @@ def generate_html_report(
     var titleColor = getChartTextColor();
     var symbolBorder = isDarkTheme() ? '#16213e' : '#ffffff';
     var pieBorder = isDarkTheme() ? '#16213e' : '#ffffff';
-    var baseGrid = {{left: '3%', right: '4%', bottom: '15%', top: '15%', containLabel: true}};
-    function catAxis() {{ return {{type: 'category', data: d.categories, axisLabel: {{rotate: 30, color: axisColor}}, axisLine: {{lineStyle: {{color: axisColor}}}}, splitLine: {{lineStyle: {{color: splitColor}}}}}}; }}
+    var isMultiLevel = !!(d.categoryGroups && d.categoryGroups.length > 0);
+    var baseGrid = {{left: '3%', right: '4%', bottom: isMultiLevel ? '24%' : '15%', top: '15%', containLabel: true}};
+    function catAxis() {{
+      if (isMultiLevel) {{
+        // 多级分类轴：主轴显示子分类，副轴显示父分类
+        var parentData = [];
+        for (var g = 0; g < d.categoryGroups.length; g++) {{
+          for (var j = 0; j < d.categoryGroups[g].count; j++) {{
+            parentData.push(j === 0 ? d.categoryGroups[g].name : '');
+          }}
+        }}
+        return [
+          {{type: 'category', data: d.categories, axisLabel: {{interval: 0, color: axisColor}}, axisLine: {{lineStyle: {{color: axisColor}}}}, axisTick: {{alignWithLabel: true}}}},
+          {{type: 'category', data: parentData, axisLabel: {{interval: 0, color: axisColor, fontWeight: 'bold'}}, offset: 28, axisLine: {{show: false}}, axisTick: {{show: false}}}}
+        ];
+      }}
+      return {{type: 'category', data: d.categories, axisLabel: {{rotate: 30, color: axisColor}}, axisLine: {{lineStyle: {{color: axisColor}}}}, splitLine: {{lineStyle: {{color: splitColor}}}}}};
+    }}
     function valAxis() {{ return {{type: 'value', axisLabel: {{formatter: yAxisLabelFormatter, color: axisColor}}, axisLine: {{lineStyle: {{color: axisColor}}}}, splitLine: {{lineStyle: {{color: splitColor}}}}}}; }}
 
     if (chartType === 'pie') {{
@@ -1748,6 +1814,7 @@ def generate_html_report(
           name: activeSeries[i].name, type: 'line', data: activeSeries[i].data,
           smooth: true, symbol: 'circle', symbolSize: 8,
           lineStyle: {{width: 3, color: c}}, itemStyle: {{color: c, borderColor: symbolBorder, borderWidth: 2}},
+          label: {{show: true, position: 'top', fontSize: 11, color: c, formatter: function(p){{ return formatNumber(p.value, isPctName(p.seriesName)); }}}},
         }});
       }}
       return {{
@@ -1772,6 +1839,7 @@ def generate_html_report(
           smooth: true, symbol: 'circle', symbolSize: 8,
           lineStyle: {{width: 3, color: c}}, itemStyle: {{color: c, borderColor: symbolBorder, borderWidth: 2}},
           areaStyle: {{color: areaGradient(c), opacity: 0.5}},
+          label: {{show: true, position: 'top', fontSize: 11, color: c, formatter: function(p){{ return formatNumber(p.value, isPctName(p.seriesName)); }}}},
         }});
       }}
       return {{
@@ -1840,6 +1908,7 @@ def generate_html_report(
       var item = {{
         name: activeSeries[i].name, type: 'bar', data: activeSeries[i].data,
         barWidth: '50%', itemStyle: {{color: barGradient(c), borderRadius: [6, 6, 0, 0]}},
+        label: {{show: true, position: 'top', fontSize: 11, color: '#555', formatter: function(p){{ return formatNumber(p.value, isPctName(p.seriesName)); }}}},
       }};
       if (stackKey) item.stack = stackKey;
       series.push(item);
