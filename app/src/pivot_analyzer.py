@@ -629,7 +629,32 @@ def validate_pivot_config(tasks, config_dir):
             - column: 问题所在列（可选）
     """
     results = []
-    
+
+    # 列名/字段名禁用的特殊字符（会破坏配置解析或值计算表达式）
+    # - , 逗号：值字段/值映射/聚合方式/值计算的多元素分隔符
+    # - = 等号：值计算的 表达式=结果列名 语法
+    # - @ at：已废弃的标量引用前缀（保留禁用以防误用）
+    # - {} 花括号：值映射的 {区块.列.行值|格式} 占位符
+    # - \n \r 换行：值计算会把换行转成逗号
+    _FORBIDDEN_NAME_CHARS = [",", "=", "@", "{", "}", "\n", "\r"]
+
+    def _check_forbidden_chars(name_str, col_label, seq):
+        """检查字段名列表是否含禁用字符，有则追加 error 到 results。"""
+        if not name_str:
+            return
+        items = [s.strip() for s in str(name_str).split(",") if s.strip()]
+        for item in items:
+            bad_chars = [c for c in _FORBIDDEN_NAME_CHARS if c in item]
+            if bad_chars:
+                # 换行符显示为 \n 方便阅读
+                display_chars = [repr(c)[1:-1] if c in "\n\r" else c for c in bad_chars]
+                results.append({
+                    "task_seq": seq,
+                    "level": "error",
+                    "message": f"字段名 '{item}' 含禁用字符 {display_chars}（会破坏配置解析或值计算）",
+                    "column": col_label
+                })
+
     if not tasks:
         results.append({
             "task_seq": "-",
@@ -668,7 +693,12 @@ def validate_pivot_config(tasks, config_dir):
                 "message": "值字段不能为空",
                 "column": "值字段"
             })
-        
+
+        # 1.1 检查字段名禁用字符（在读取数据前校验，避免数据文件不存在时漏检）
+        _check_forbidden_chars(值字段_str, "值字段", seq)
+        _check_forbidden_chars(行维度_str, "行维度", seq)
+        _check_forbidden_chars(列维度_str, "列维度", seq)
+
         if not 行维度_str and not 列维度_str:
             results.append({
                 "task_seq": seq,
@@ -787,6 +817,20 @@ def validate_pivot_config(tasks, config_dir):
         # 6. 值映射数量检查（对比实际输出列数，考虑单字段多聚合）
         val_map_str = task.get("值映射", "")
         val_maps = [m.strip() for m in val_map_str.split(",") if m.strip()]
+
+        # 6.1 值映射禁用字符检查（值映射文本合法含 {} 占位符和 , 分隔符，只禁 = @ \n）
+        _VALMAP_FORBIDDEN = ["=", "@", "\n", "\r"]
+        for vm in val_maps:
+            bad = [c for c in _VALMAP_FORBIDDEN if c in vm]
+            if bad:
+                display = [repr(c)[1:-1] if c in "\n\r" else c for c in bad]
+                results.append({
+                    "task_seq": seq,
+                    "level": "error",
+                    "message": f"值映射 '{vm}' 含禁用字符 {display}（花括号是占位符语法，= @ 会破坏表达式）",
+                    "column": "值映射"
+                })
+
         value_cols = [v.strip() for v in 值字段_str.split(",") if v.strip()]
         if val_maps:
             agg_funcs_val = _split_agg_funcs(聚合方式_str) if 聚合方式_str else []
@@ -801,7 +845,25 @@ def validate_pivot_config(tasks, config_dir):
                     "message": f"值映射数量({len(val_maps)})与输出列数({expected_cols}, 来自{len(value_cols)}个值字段+{len(agg_funcs_val) if agg_funcs_val else 'sum'}聚合)不一致",
                     "column": "值映射"
                 })
-    
+
+        # 7. 值计算结果列名校验（表达式本身合法含 =+-*/()，但 = 后的结果列名不能含禁用字符）
+        val_calc_str = task.get("值计算", "")
+        if val_calc_str:
+            # 值计算把换行转逗号再按逗号拆分，模拟解析
+            vc = val_calc_str.replace("\n", ",").replace("\r", ",")
+            for c_item in [c.strip() for c in vc.split(",") if c.strip()]:
+                if "=" in c_item:
+                    result_name = c_item.split("=", 1)[1].strip()
+                    bad = [ch for ch in [",", "@", "\n", "\r"] if ch in result_name]
+                    if bad:
+                        display = [repr(ch)[1:-1] if ch in "\n\r" else ch for ch in bad]
+                        results.append({
+                            "task_seq": seq,
+                            "level": "error",
+                            "message": f"值计算结果列名 '{result_name}' 含禁用字符 {display}（结果列名不能含 , @ 或换行）",
+                            "column": "值计算"
+                        })
+
     return results
 
 
@@ -1690,29 +1752,20 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                     result_col_name = result_col_name.strip()
                 
                 # 判断走多列分支还是单列分支：
-                # - 单列分支：表达式以运算符开头（如 *100, /@标量, +10），对当前列做单值运算
-                # - 多列分支：表达式是完整算式（如 销售额/销量, @总销售额/@总销量），用 eval 计算
+                # - 单列分支：表达式以运算符开头（如 *100, /标量, +10），对当前列做单值运算
+                # - 多列分支：表达式是完整算式（如 销售额/销量, 总销售额/总销量），用 eval 计算
+                #   （标量自动识别：表达式中的标识符若不在列名中但在 scalar_context 中，自动作为标量）
                 is_single_col_op = bool(re.match(r"^[+\-*/]", expr))
                 has_multi_col = not is_single_col_op
-                
+
                 try:
                     if has_multi_col:
                         calc_df = df.copy()
 
-                        # 显式标量引用：@标量名 强制使用 scalar_context 中的值（不查列）
-                        explicit_scalar_pattern = re.compile(r"@([\w\u4e00-\u9fa5]+)")
-                        for m in explicit_scalar_pattern.finditer(expr):
-                            scalar_key = m.group(1)
-                            if scalar_key in scalar_context:
-                                val = float(scalar_context[scalar_key])
-                                expr = expr.replace(m.group(0), f"({val})")
-                            else:
-                                print(f"    [警告] 值计算引用的标量不存在: @{scalar_key}（可用标量: {list(scalar_context.keys())}）")
-                                expr = expr.replace(m.group(0), "0")
-
                         # 构建列名映射：从已知列名/值字段/标量中查找表达式内出现的完整标识符
                         # 不使用正则token拆分，避免括号等特殊字符破坏列名完整性
                         # 使用渐进式占位替换防止子串误匹配（如 销售额 误匹配 总销售额 的子串）
+                        # 标量自动识别：candidates 包含 scalar_context.keys()，匹配后映射为 __SCALAR__
                         col_mapping = {}
                         unmatched_tokens = []
 
@@ -1802,26 +1855,14 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
                         if result_col_name:
                             new_col_name = result_col_name
                         else:
-                            # 自动生成列名（移除 @ 符号使列名更整洁）
-                            new_col_name = expr.replace("@", "")
-                            new_col_name = new_col_name.replace("/", "_除_").replace("*", "_乘_").replace("+", "_加_").replace("-", "_减_")
+                            # 自动生成列名（运算符替换为中文使列名更整洁）
+                            new_col_name = expr.replace("/", "_除_").replace("*", "_乘_").replace("+", "_加_").replace("-", "_减_")
                             new_col_name = new_col_name.replace("(", "").replace(")", "").replace("%", "")
 
                         new_cols[new_col_name] = calc_result
                     else:
-                        # 单列与常数运算（支持引用标量，支持 @标量名 显式语法）
-                        # 解析 @标量名 显式引用
+                        # 单列与常数运算（支持引用标量，标量名直接写在运算符后，如 *总销售额）
                         operand_expr = expr
-                        if "@" in operand_expr:
-                            explicit_scalar_pattern = re.compile(r"@([\w\u4e00-\u9fa5]+)")
-                            for m in explicit_scalar_pattern.finditer(operand_expr):
-                                scalar_key = m.group(1)
-                                if scalar_key in scalar_context:
-                                    operand_expr = operand_expr.replace(m.group(0), str(float(scalar_context[scalar_key])))
-                                else:
-                                    print(f"    [警告] 值计算引用的标量不存在: @{scalar_key}")
-                                    operand_expr = operand_expr.replace(m.group(0), "0")
-
                         if operand_expr.startswith("*"):
                             factor = _resolve_scalar_or_number(operand_expr[1:], scalar_context)
                             if factor is None:
