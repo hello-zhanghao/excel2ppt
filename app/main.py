@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.35.3"
+__VERSION__ = "2.36.0"
 __UPDATE_DATE__ = "2026-07-16"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -407,10 +407,11 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_
     print(f"   提示: 双击PPT中的图表可查看和编辑数据")
 
 
-def _run_html_from_pivot(pivot_path, output_path=None):
+def _run_html_from_pivot(pivot_path, output_path=None, tasks=None):
     """从透视结果 Excel 自动生成 HTML 报告（无需额外配置）。
 
     每个 sheet 自动生成一个图表 section，图表类型自动推断，支持柱状/折线/饼图/表格切换。
+    tasks: 透视配置任务列表（可选），用于提取行维度信息以精确识别分类列。
     """
     from src.html_builder import generate_html_report
 
@@ -423,6 +424,17 @@ def _run_html_from_pivot(pivot_path, output_path=None):
         out_dir = os.path.dirname(pivot_path) or "."
         output_path = os.path.join(out_dir, f"{base}_报告.html")
 
+    # 从 tasks 提取 {结果Sheet名: [行维度列名]}，用于精确识别分类列
+    dim_map = {}
+    if tasks:
+        for t in tasks:
+            sheet = t.get("结果Sheet", "")
+            dims_str = str(t.get("行维度", "") or "").strip()
+            if sheet and dims_str:
+                dims = [d.strip() for d in dims_str.replace("，", ",").split(",") if d.strip()]
+                if dims:
+                    dim_map[sheet] = dims
+
     print(f"[HTML] 从透视结果生成 HTML 报告: {os.path.basename(pivot_path)}")
     html_path = generate_html_report(
         excel_path=pivot_path,
@@ -430,6 +442,7 @@ def _run_html_from_pivot(pivot_path, output_path=None):
         output_dir=os.path.dirname(output_path) or ".",
         report_title="透视分析报告",
         report_subtitle="自动生成",
+        dim_map=dim_map or None,
     )
     if html_path:
         # generate_html_report 内部用自己的文件名，重命名为用户指定的
@@ -552,7 +565,7 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
     print(f"   共 {len(tasks)} 个任务: {len(valid_tasks)} 个成功" + (f", {skipped} 个跳过" if skipped else "") + (f", {len(errors)} 个失败" if errors else ""))
     if errors:
         print(f"   失败详情见「错误信息」Sheet")
-    return output_path
+    return output_path, valid_tasks
 
 
 class _GuiLogRedirector:
@@ -1066,11 +1079,12 @@ def _dispatch_from_gui(raw_args):
         ppt_out = os.path.join(out_dir, f"{base}_报告{ts_suffix}.pptx")
         pivot_out = os.path.join(out_dir, f"{base}_分析{ts_suffix}.xlsx")
         html_out = os.path.join(out_dir, f"{base}_报告{ts_suffix}.html")
-        _run_pivot_mode(config_path, pivot_out, data_dir=data_dir)
+        _pivot_ret = _run_pivot_mode(config_path, pivot_out, data_dir=data_dir)
+        _pivot_tasks = _pivot_ret[1] if isinstance(_pivot_ret, tuple) else None
         print()
         _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out, data_dir=data_dir)
         print()
-        _run_html_from_pivot(pivot_out, html_out)
+        _run_html_from_pivot(pivot_out, html_out, tasks=_pivot_tasks)
         return
     print(f"[信息] 自动检测配置类型: {detected}")
     if detected == "unknown":
@@ -1078,9 +1092,10 @@ def _dispatch_from_gui(raw_args):
         sys.exit(1)
     if detected == "pivot":
         pivot_out_path = _apply_timestamp(output_path, add_ts)
-        _run_pivot_mode(config_path, pivot_out_path, data_dir=data_dir)
+        _pivot_ret = _run_pivot_mode(config_path, pivot_out_path, data_dir=data_dir)
+        _pivot_tasks = _pivot_ret[1] if isinstance(_pivot_ret, tuple) else None
         print()
-        _run_html_from_pivot(pivot_out_path)
+        _run_html_from_pivot(pivot_out_path, tasks=_pivot_tasks)
     else:
         _run_ppt_mode(config_path, _apply_timestamp(output_path, add_ts), data_dir=data_dir)
 
@@ -1237,12 +1252,13 @@ def main():
             ppt_out = os.path.join(out_dir, f"{base}_报告{ts_suffix}.pptx")
             pivot_out = os.path.join(out_dir, f"{base}_分析{ts_suffix}.xlsx")
             html_out = os.path.join(out_dir, f"{base}_报告{ts_suffix}.html")
-            _run_pivot_mode(config_path, pivot_out, validate_only=validate_only, data_dir=data_dir)
+            _pivot_ret = _run_pivot_mode(config_path, pivot_out, validate_only=validate_only, data_dir=data_dir)
+            _pivot_tasks = _pivot_ret[1] if isinstance(_pivot_ret, tuple) else None
             if not validate_only:
                 print()
                 _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out, data_dir=data_dir)
                 print()
-                _run_html_from_pivot(pivot_out, html_out)
+                _run_html_from_pivot(pivot_out, html_out, tasks=_pivot_tasks)
             return
         print(f"[信息] 自动检测配置类型: {detected}")
         if detected == "unknown":
@@ -1252,11 +1268,12 @@ def main():
 
     if mode == "pivot":
         pivot_out_path = _apply_timestamp(output_path, add_ts)
-        _run_pivot_mode(config_path, pivot_out_path,
+        _pivot_ret = _run_pivot_mode(config_path, pivot_out_path,
                         validate_only=validate_only, data_dir=data_dir)
+        _pivot_tasks = _pivot_ret[1] if isinstance(_pivot_ret, tuple) else None
         if not validate_only:
             print()
-            _run_html_from_pivot(pivot_out_path)
+            _run_html_from_pivot(pivot_out_path, tasks=_pivot_tasks)
     else:
         _run_ppt_mode(config_path, _apply_timestamp(output_path, add_ts),
                       pivot_data_file=getattr(args, "pivot_file", None),

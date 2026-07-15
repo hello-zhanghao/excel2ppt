@@ -10,7 +10,7 @@ HUAWEI_PALETTE = [
     "#70AD47", "#A5A5A5", "#FFC000", "#4472C4"
 ]
 
-def read_excel_data(excel_path: str) -> List[Dict]:
+def read_excel_data(excel_path: str, dim_map: Optional[Dict[str, List[str]]] = None) -> List[Dict]:
     try:
         import openpyxl
     except ImportError:
@@ -28,7 +28,9 @@ def read_excel_data(excel_path: str) -> List[Dict]:
         if not rows:
             continue
 
-        _parse_blocks(sections, rows, sheet_name)
+        # 从 dim_map 获取该 sheet 的行维度列名（透视配置的"行维度"字段）
+        sheet_dims = (dim_map or {}).get(sheet_name, [])
+        _parse_blocks(sections, rows, sheet_name, dim_cols=sheet_dims)
     wb.close()
     return sections
 
@@ -63,8 +65,13 @@ def _extract_data(rows, header_idx, col_indices, headers):
     return data_rows
 
 
-def _parse_blocks(sections, rows, sheet_name):
-    """解析一个 sheet 内的所有区块，每个区块一个 section。"""
+def _parse_blocks(sections, rows, sheet_name, dim_cols=None):
+    """解析一个 sheet 内的所有区块，每个区块一个 section。
+
+    dim_cols: 该 sheet 的行维度列名列表（来自透视配置），用于精确识别分类列。
+    """
+    # 将行维度列名转为 headers 中的索引集合（在 section 解析后填充）
+    dim_name_set = set(dim_cols or [])
     n = len(rows)
     i = 0
 
@@ -90,11 +97,14 @@ def _parse_blocks(sections, rows, sheet_name):
 
                 data_rows = _extract_data(rows[data_start:data_end], i + 1, col_indices, headers)
 
+                # 计算 dim_cols 在 headers 中的索引（分类列）
+                section_dim_indices = [ci for ci, h in enumerate(headers) if h in dim_name_set]
                 sections.append({
                     "name": block_name,
                     "sheet": sheet_name,
                     "headers": headers,
                     "rows": data_rows,
+                    "dim_indices": section_dim_indices,
                 })
                 i = data_end
                 continue
@@ -113,11 +123,13 @@ def _parse_blocks(sections, rows, sheet_name):
 
                 data_rows = _extract_data(rows[data_start:data_end], i, col_indices, headers)
 
+                section_dim_indices = [ci for ci, h in enumerate(headers) if h in dim_name_set]
                 sections.append({
                     "name": sheet_name,
                     "sheet": sheet_name,
                     "headers": headers,
                     "rows": data_rows,
+                    "dim_indices": section_dim_indices,
                 })
                 i = data_end
                 continue
@@ -134,10 +146,12 @@ def _parse_blocks(sections, rows, sheet_name):
         col_indices = [ci for ci, h in enumerate(headers) if h.strip()]
         headers = [headers[ci] for ci in col_indices]
         data_rows = _extract_data(rows[header_idx + 1:], header_idx, col_indices, headers)
+        section_dim_indices = [ci for ci, h in enumerate(headers) if h in dim_name_set]
         sections.append({
             "name": sheet_name,
             "headers": headers,
             "rows": data_rows,
+            "dim_indices": section_dim_indices,
         })
 
 
@@ -367,20 +381,33 @@ def _build_x_axis_option(categories: List[str], category_groups: List[Dict], mul
     return {"type": "category", "data": categories, "axisLabel": {"rotate": 30}}
 
 
-def _detect_chart_columns(headers: List[str], rows: Optional[List[List[str]]] = None) -> Tuple[List[int], List[int]]:
-    """从表头自动检测分类列和数值列。返回 (category_cols: List[int], value_cols: List[int])。
-    支持多列分类（多维度透视），category_cols = 非数值列（排除经纬度列）。
-    当传入 rows 时，用数据采样辅助判断（某列大部分为数字则判为数值列），避免仅靠表头关键词误判。
+def _detect_chart_columns(
+    headers: List[str],
+    rows: Optional[List[List[str]]] = None,
+    dim_indices: Optional[List[int]] = None,
+) -> Tuple[List[int], List[int]]:
+    """检测分类列和数值列。返回 (category_cols: List[int], value_cols: List[int])。
+
+    优先级：
+    1. 传入 dim_indices（来自透视配置的行维度）→ 直接作为分类列，其余为数值列
+    2. 否则用表头关键词 + 数据采样判断
     """
     geo = _detect_geo_columns(headers)
     geo_set = set(geo) if geo else set()
 
+    # 优先级1：来自透视配置的行维度
+    if dim_indices is not None:
+        cat_set = set(dim_indices) - geo_set
+        category_cols = [i for i in dim_indices if i in cat_set]
+        value_cols = [i for i in range(len(headers)) if i not in cat_set and i not in geo_set]
+        return category_cols, value_cols
+
+    # 优先级2：表头关键词 + 数据采样
     value_keywords = ["金额", "数量", "销量", "销售额", "利润", "成本", "值", "占比", "百分比", "pct",
                       "计数", "总计", "合计", "用户数", "流量", "rsrp", "rsrq", "接通率", "掉线率",
                       "丢包率", "时延", "带宽", "利用率"]
 
     def _is_numeric_col(idx: int) -> bool:
-        """采样检测某列是否为数值列：前10个非空单元格中>=70%为数字则判为数值列"""
         if not rows:
             return False
         sample = []
@@ -405,16 +432,13 @@ def _detect_chart_columns(headers: List[str], rows: Optional[List[List[str]]] = 
         if i in geo_set:
             continue
         h_lower = h.lower()
-        # 表头关键词命中 → 数值列
         if any(key in h_lower for key in value_keywords):
             value_cols.append(i)
-        # 表头未命中时，用数据采样判断
         elif rows and _is_numeric_col(i):
             value_cols.append(i)
         else:
             category_cols.append(i)
 
-    # 没有数值列时，第一列作为分类，其余作为数值
     if not value_cols:
         if headers:
             category_cols = [0]
@@ -434,7 +458,7 @@ def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
     if not rows or not headers:
         return ""
 
-    category_cols, value_cols = _detect_chart_columns(headers, rows)
+    category_cols, value_cols = _detect_chart_columns(headers, rows, dim_indices=data.get("dim_indices"))
     if not value_cols:
         return ""
 
@@ -734,7 +758,7 @@ def _build_chart_data_js(sections: List[Dict]) -> str:
         geo = _detect_geo_columns(headers)
         if geo:
             continue
-        category_cols, value_cols = _detect_chart_columns(headers, rows)
+        category_cols, value_cols = _detect_chart_columns(headers, rows, dim_indices=sec.get("dim_indices"))
         if not value_cols:
             continue
 
@@ -839,7 +863,7 @@ def _build_col_selector_html(sec: Dict) -> str:
     geo = _detect_geo_columns(headers)
     if geo or not rows:
         return ""
-    _, value_cols = _detect_chart_columns(headers, rows)
+    _, value_cols = _detect_chart_columns(headers, rows, dim_indices=sec.get("dim_indices"))
     if len(value_cols) <= 1:
         return ""  # 只有1列时不显示选择器
     sid = sec["id"]
@@ -903,6 +927,7 @@ def generate_html_report(
     output_dir: Optional[str] = None,
     report_title: str = "数据分析报告",
     report_subtitle: str = "透视分析结果",
+    dim_map: Optional[Dict[str, List[str]]] = None,
 ) -> Optional[str]:
     if not output_dir:
         output_dir = os.path.dirname(excel_path) if excel_path else "."
@@ -911,7 +936,7 @@ def generate_html_report(
     excel_sections = []
     if excel_path and os.path.exists(excel_path):
         print("[HTML] 读取 Excel 数据...")
-        excel_sections = read_excel_data(excel_path)
+        excel_sections = read_excel_data(excel_path, dim_map=dim_map)
 
     sections = []
 
@@ -926,7 +951,7 @@ def generate_html_report(
 
             has_geo = _detect_geo_columns(sec["headers"]) is not None
             # 数值列数量决定可用的扩展图表类型（radar/scatter 需>=2列）
-            _, _vcols = _detect_chart_columns(sec["headers"], sec["rows"])
+            _, _vcols = _detect_chart_columns(sec["headers"], sec["rows"], dim_indices=sec.get("dim_indices"))
             n_vcols = len(_vcols)
             if has_geo:
                 available = ["map", "heatmap", "table"]
@@ -1140,7 +1165,7 @@ def generate_html_report(
 
         # 标量数据：用指标卡片网格展示，不画图
         if sec["chart_type"] == "scalar":
-            _, value_cols = _detect_chart_columns(sec["headers"], sec["rows"])
+            _, value_cols = _detect_chart_columns(sec["headers"], sec["rows"], dim_indices=sec.get("dim_indices"))
             row = sec["rows"][0] if sec["rows"] else []
             metric_cards = ""
             for vc in value_cols:

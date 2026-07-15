@@ -244,6 +244,17 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.36.0 (2026-07-16)
+
+**🔧 分类列识别改为基于透视配置的行维度**
+
+| 改动 | 说明 |
+|------|------|
+| **行维度传递** | `_run_pivot_mode` 返回 `(output_path, valid_tasks)`，`_run_html_from_pivot` 新增 `tasks` 参数，从中提取 `{结果Sheet: [行维度列名]}` 构造 dim_map 传入 HTML 生成器 |
+| **精确分类列** | `generate_html_report` / `read_excel_data` / `_parse_blocks` 新增 `dim_map`/`dim_cols` 参数，section 中注入 `dim_indices`（行维度在表头中的索引） |
+| **_detect_chart_columns 增强** | 新增 `dim_indices` 参数，优先级1：有 dim_indices 时直接作为分类列、其余为数值列；优先级2：无 dim_indices 时回退到表头关键词+数据采样 |
+| **全链路适配** | main.py（CLI）、server.py（Web）所有调用点已更新，GUI 模式通过 `_run_pivot_mode` 返回值自动适配 |
+
 ### v2.35.3 (2026-07-16)
 
 **🐛 修复数值列误判为分类列**

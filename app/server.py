@@ -201,10 +201,11 @@ def _run_analysis_web(sid, config_path):
             if detected in ("pivot", "all"):
                 try:
                     pivot_out = os.path.join(s["work_dir"], f"{base}_分析_{ts}.xlsx")
-                    _run_pivot_mode(config_path, pivot_out)
+                    _pivot_ret = _run_pivot_mode(config_path, pivot_out)
+                    _pivot_tasks = _pivot_ret[1] if isinstance(_pivot_ret, tuple) else None
                     s["output"]["pivot"] = pivot_out
                     html_out = os.path.join(s["work_dir"], f"{base}_报告_{ts}.html")
-                    _run_html_from_pivot(pivot_out, html_out)
+                    _run_html_from_pivot(pivot_out, html_out, tasks=_pivot_tasks)
                     s["output"]["html"] = html_out
                 except SystemExit:
                     pass
