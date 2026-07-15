@@ -498,35 +498,16 @@ def _build_geo_controls_html(sec: Dict) -> str:
         return ""
     lat_idx, lon_idx = geo
 
-    # 指标列选项
-    metric_indices = []
-    for i, h in enumerate(headers):
-        if i in (lat_idx, lon_idx):
-            continue
-        h_lower = h.lower()
-        if any(k in h_lower for k in ["金额", "数量", "销售额", "利润", "成本", "值", "占比", "百分比", "pct", "计数", "总计", "合计"]):
-            metric_indices.append(i)
-    if not metric_indices:
-        for i, h in enumerate(headers):
-            if i in (lat_idx, lon_idx):
-                continue
-            try:
-                if sec["rows"]:
-                    float(sec["rows"][0][i])
-                    metric_indices.append(i)
-            except (ValueError, IndexError):
-                continue
+    # 所有可用列（排除经纬度），指标列和筛选列共用同一套选项
+    all_col_indices = [i for i in range(len(headers)) if i not in (lat_idx, lon_idx)]
 
     metric_options = "".join(
-        f'<option value="{mi}">{_escape_html(headers[mi])}</option>' for mi in metric_indices
+        f'<option value="{mi}">{_escape_html(headers[mi])}</option>' for mi in all_col_indices
     )
 
-    # 筛选列选项（非数值列，排除经纬度）
+    # 筛选列选项（所有非经纬度列都可筛选，唯一值不超过50个）
     filter_indices = []
-    for i, h in enumerate(headers):
-        if i in (lat_idx, lon_idx) or i in metric_indices:
-            continue
-        # 唯一值不超过 50 个才作为筛选列
+    for i in all_col_indices:
         vals = set()
         for row in sec["rows"]:
             if i < len(row) and row[i] != "":
