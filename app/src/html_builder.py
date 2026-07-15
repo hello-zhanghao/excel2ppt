@@ -367,12 +367,36 @@ def _build_x_axis_option(categories: List[str], category_groups: List[Dict], mul
     return {"type": "category", "data": categories, "axisLabel": {"rotate": 30}}
 
 
-def _detect_chart_columns(headers: List[str]) -> Tuple[List[int], List[int]]:
+def _detect_chart_columns(headers: List[str], rows: Optional[List[List[str]]] = None) -> Tuple[List[int], List[int]]:
     """从表头自动检测分类列和数值列。返回 (category_cols: List[int], value_cols: List[int])。
     支持多列分类（多维度透视），category_cols = 非数值列（排除经纬度列）。
+    当传入 rows 时，用数据采样辅助判断（某列大部分为数字则判为数值列），避免仅靠表头关键词误判。
     """
     geo = _detect_geo_columns(headers)
     geo_set = set(geo) if geo else set()
+
+    value_keywords = ["金额", "数量", "销量", "销售额", "利润", "成本", "值", "占比", "百分比", "pct",
+                      "计数", "总计", "合计", "用户数", "流量", "rsrp", "rsrq", "接通率", "掉线率",
+                      "丢包率", "时延", "带宽", "利用率"]
+
+    def _is_numeric_col(idx: int) -> bool:
+        """采样检测某列是否为数值列：前10个非空单元格中>=70%为数字则判为数值列"""
+        if not rows:
+            return False
+        sample = []
+        for r in rows[:15]:
+            if idx < len(r) and r[idx] != "" and r[idx] is not None:
+                sample.append(r[idx])
+        if not sample:
+            return False
+        num_cnt = 0
+        for v in sample:
+            try:
+                float(v)
+                num_cnt += 1
+            except (ValueError, TypeError):
+                pass
+        return num_cnt / len(sample) >= 0.7
 
     category_cols = []
     value_cols = []
@@ -381,7 +405,11 @@ def _detect_chart_columns(headers: List[str]) -> Tuple[List[int], List[int]]:
         if i in geo_set:
             continue
         h_lower = h.lower()
-        if any(key in h_lower for key in ["金额", "数量", "销售额", "利润", "成本", "值", "占比", "百分比", "pct", "计数", "总计", "合计"]):
+        # 表头关键词命中 → 数值列
+        if any(key in h_lower for key in value_keywords):
+            value_cols.append(i)
+        # 表头未命中时，用数据采样判断
+        elif rows and _is_numeric_col(i):
             value_cols.append(i)
         else:
             category_cols.append(i)
@@ -406,7 +434,7 @@ def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
     if not rows or not headers:
         return ""
 
-    category_cols, value_cols = _detect_chart_columns(headers)
+    category_cols, value_cols = _detect_chart_columns(headers, rows)
     if not value_cols:
         return ""
 
@@ -706,7 +734,7 @@ def _build_chart_data_js(sections: List[Dict]) -> str:
         geo = _detect_geo_columns(headers)
         if geo:
             continue
-        category_cols, value_cols = _detect_chart_columns(headers)
+        category_cols, value_cols = _detect_chart_columns(headers, rows)
         if not value_cols:
             continue
 
@@ -811,7 +839,7 @@ def _build_col_selector_html(sec: Dict) -> str:
     geo = _detect_geo_columns(headers)
     if geo or not rows:
         return ""
-    _, value_cols = _detect_chart_columns(headers)
+    _, value_cols = _detect_chart_columns(headers, rows)
     if len(value_cols) <= 1:
         return ""  # 只有1列时不显示选择器
     sid = sec["id"]
@@ -898,7 +926,7 @@ def generate_html_report(
 
             has_geo = _detect_geo_columns(sec["headers"]) is not None
             # 数值列数量决定可用的扩展图表类型（radar/scatter 需>=2列）
-            _, _vcols = _detect_chart_columns(sec["headers"])
+            _, _vcols = _detect_chart_columns(sec["headers"], sec["rows"])
             n_vcols = len(_vcols)
             if has_geo:
                 available = ["map", "heatmap", "table"]
@@ -1071,7 +1099,7 @@ def generate_html_report(
         # 计算维度列集合（分类列），用于颜色区分
         _geo = _detect_geo_columns(sec["headers"])
         _geo_set = set(_geo) if _geo else set()
-        _cat_cols, _ = _detect_chart_columns(sec["headers"])
+        _cat_cols, _ = _detect_chart_columns(sec["headers"], sec["rows"])
         _dim_set = set(_cat_cols) - _geo_set
 
         _dim_class = ' class="dim-th"'
@@ -1112,7 +1140,7 @@ def generate_html_report(
 
         # 标量数据：用指标卡片网格展示，不画图
         if sec["chart_type"] == "scalar":
-            _, value_cols = _detect_chart_columns(sec["headers"])
+            _, value_cols = _detect_chart_columns(sec["headers"], sec["rows"])
             row = sec["rows"][0] if sec["rows"] else []
             metric_cards = ""
             for vc in value_cols:
