@@ -244,6 +244,25 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.31.0 (2026-07-15)
+
+**✨ HTML 报告支持地图展示（经纬度数据自动渲染散点地图）**
+
+透视结果 Excel 中含经纬度列（经度/纬度、lat/lon、longitude/latitude）的 sheet，HTML 报告自动识别并用 ECharts 地图组件渲染：
+
+| 能力 | 说明 |
+|------|------|
+| **自动识别** | sheet 表头含经纬度关键词时，自动切换为地图类型，图表按钮为「地图/热力图/表格」 |
+| **散点地图** | 经纬度定位数据点，散点大小按指标值归一化，鼠标悬停显示名称+经纬度+指标 |
+| **热力地图** | effectScatter 涟漪效果，橙色发光，突出热点区域 |
+| **交互** | 地图可拖拽缩放（roam），tooltip 显示完整信息 |
+| **地图数据** | 按需加载 china 地图（CDN：echarts 4.x china.js，回退：DataV GeoJSON） |
+
+**新增函数**：
+- `_detect_geo_columns()` — 检测表头中的经纬度列索引
+- `_generate_geo_chart_options()` — 生成 ECharts geo + scatter 选项（含 JS tooltip formatter）
+- `_loadChinaMap()` — JS 端按需加载 china 地图数据并注册
+
 ### v2.30.2 (2026-07-15)
 
 **🐛 修复 HTML 报告图表全部不显示**

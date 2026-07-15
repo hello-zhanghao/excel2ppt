@@ -62,7 +62,28 @@ def read_excel_data(excel_path: str) -> List[Dict]:
     return sections
 
 
+def _detect_geo_columns(headers: List[str]) -> Optional[Tuple[int, int]]:
+    """检测经纬度列。返回 (lat_col_idx, lon_col_idx) 或 None。"""
+    lat_keys = ["纬度", "lat", "latitude"]
+    lon_keys = ["经度", "lon", "lng", "longitude"]
+    lat_idx = None
+    lon_idx = None
+    for i, h in enumerate(headers):
+        h_lower = h.lower().strip()
+        if lat_idx is None and any(k in h_lower for k in lat_keys):
+            lat_idx = i
+        if lon_idx is None and any(k in h_lower for k in lon_keys):
+            lon_idx = i
+    if lat_idx is not None and lon_idx is not None:
+        return (lat_idx, lon_idx)
+    return None
+
+
 def _infer_chart_type(headers: List[str], rows: List[List[str]]) -> str:
+    # 优先：含经纬度列 → 地图
+    if _detect_geo_columns(headers) is not None:
+        return "map"
+
     numeric_cols = 0
     category_cols = 0
     for h in headers:
@@ -73,7 +94,7 @@ def _infer_chart_type(headers: List[str], rows: List[List[str]]) -> str:
             category_cols += 1
 
     total_rows = len(rows)
-    
+
     for h in headers:
         h_lower = h.lower()
         if any(key in h_lower for key in ["占比", "百分比", "pct"]):
@@ -83,16 +104,16 @@ def _infer_chart_type(headers: List[str], rows: List[List[str]]) -> str:
 
     if total_rows > 20:
         return "table"
-    
+
     if numeric_cols >= 2 and category_cols == 1:
         return "bar"
-    
+
     if numeric_cols == 1 and category_cols == 1:
         return "bar"
-    
+
     if numeric_cols == 1 and category_cols >= 2:
         return "bar"
-    
+
     return "table"
 
 
@@ -256,8 +277,148 @@ def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
             "yAxis": {"type": "value"},
             "series": series,
         })
-    
+
     return ""
+
+
+def _generate_geo_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
+    """生成地图类型 chartOptions（ECharts geo + scatter）。
+
+    chart_type: 'map'（散点地图）或 'heatmap'（热力地图）。
+    数据需含经纬度列（lat/纬度、lon/经度），其余数值列作为指标。
+    """
+    headers = data["headers"]
+    rows = data["rows"]
+    title = data.get("title", "")
+
+    if not rows or not headers:
+        return ""
+
+    geo = _detect_geo_columns(headers)
+    if not geo:
+        return ""
+
+    lat_idx, lon_idx = geo
+    # 指标列：除经纬度外的数值列
+    metric_indices = []
+    for i, h in enumerate(headers):
+        if i in (lat_idx, lon_idx):
+            continue
+        h_lower = h.lower()
+        if any(k in h_lower for k in ["金额", "数量", "销售额", "利润", "成本", "值", "占比", "百分比", "pct", "计数", "总计", "合计"]):
+            metric_indices.append(i)
+    # 没有识别到指标列时，取经纬度外的第一个数值列
+    if not metric_indices:
+        for i, h in enumerate(headers):
+            if i in (lat_idx, lon_idx):
+                continue
+            try:
+                if rows:
+                    float(rows[0][i])
+                    metric_indices.append(i)
+                    break
+            except (ValueError, IndexError):
+                continue
+
+    # 名称列（站点名等）：经纬度和指标外的第一列
+    name_idx = None
+    for i, h in enumerate(headers):
+        if i in (lat_idx, lon_idx) or i in metric_indices:
+            continue
+        name_idx = i
+        break
+
+    # 收集数据点
+    points = []
+    for row in rows:
+        try:
+            lat = float(row[lat_idx])
+            lon = float(row[lon_idx])
+        except (ValueError, IndexError):
+            continue
+        if lat == 0 and lon == 0:
+            continue
+        name = str(row[name_idx]) if name_idx is not None and name_idx < len(row) else ""
+        values = [lon, lat]
+        for mi in metric_indices:
+            try:
+                values.append(float(row[mi]))
+            except (ValueError, IndexError):
+                values.append(0)
+        points.append({"name": name, "value": values})
+
+    if not points:
+        return ""
+
+    # 计算经纬度范围用于 geo 中心点和缩放
+    lats = [p["value"][1] for p in points]
+    lons = [p["value"][0] for p in points]
+    center_lon = (min(lons) + max(lons)) / 2
+    center_lat = (min(lats) + max(lats)) / 2
+    span = max(max(lons) - min(lons), max(lats) - min(lats), 0.1)
+    import math
+    zoom = round(max(1, min(15, 8 - math.log10(span + 1))), 2)
+
+    metric_names = [headers[mi] for mi in metric_indices] or ["指标"]
+    metric_idx_in_value = 2  # value 数组中指标的起始位置
+
+    # 散点大小归一化（用第一个指标列）
+    if metric_indices:
+        m_vals = [p["value"][metric_idx_in_value] for p in points]
+        m_min, m_max = min(m_vals), max(m_vals)
+        if m_max == m_min:
+            sizes = [20] * len(points)
+        else:
+            sizes = [int(10 + (v - m_min) / (m_max - m_min) * 40) for v in m_vals]
+    else:
+        sizes = [20] * len(points)
+
+    # tooltip 的 formatter 是 JS 函数，不能放进 json，改用模板字符串拼装整个选项
+    tooltip_fn_parts = ['function(p){var s=p.name+"<br/>";var lon=p.value[0],lat=p.value[1];',
+                        's+="经度:"+lon.toFixed(4)+", 纬度:"+lat.toFixed(4)+"<br/>";']
+    for i, mn in enumerate(metric_names):
+        tooltip_fn_parts.append(f's+="{mn}:"+p.value[{i+2}]+"<br/>";')
+    tooltip_fn_parts.append('return s;}')
+    tooltip_fn = "".join(tooltip_fn_parts)
+
+    series_type = "scatter" if chart_type == "map" else "effectScatter"
+    item_style = {"color": HUAWEI_PALETTE[0], "opacity": 0.85,
+                  "borderColor": "#333", "borderWidth": 0.5} if chart_type == "map" else \
+                 {"color": HUAWEI_PALETTE[3], "shadowBlur": 10,
+                  "shadowColor": "rgba(237, 125, 49, 0.5)"}
+    extra_series = {}
+    if chart_type == "heatmap":
+        extra_series = {"showEffectOn": "render", "rippleEffect": {"brushType": "stroke"}}
+
+    # 拼装 option JSON，formatter 用 JS 函数字面量（不能 json.dumps）
+    opt = {
+        "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
+        "tooltip": {"trigger": "item"},  # formatter 稍后手动替换
+        "geo": {
+            "map": "china",
+            "roam": True,
+            "zoom": zoom,
+            "center": [center_lon, center_lat],
+            "itemStyle": {"areaColor": "#F2F0EB", "borderColor": "#999"},
+            "emphasis": {"itemStyle": {"areaColor": "#DCE6F0"}, "label": {"show": False}},
+        },
+        "series": [{
+            "name": metric_names[0],
+            "type": series_type,
+            "coordinateSystem": "geo",
+            "data": points,
+            "symbolSize": sizes,
+            "itemStyle": item_style,
+            "label": {"show": True, "formatter": "{b}", "position": "right",
+                      "fontSize": 10, "color": "#182B49"},
+            **extra_series,
+        }],
+    }
+    opt_json = json.dumps(opt, ensure_ascii=False)
+    # 在 tooltip 对象内插入 formatter 函数
+    opt_json = opt_json.replace('"tooltip": {"trigger": "item"}',
+                                f'"tooltip": {{"trigger": "item", "formatter": {tooltip_fn}}}')
+    return opt_json
 
 
 def _ppt_chart_type_to_html(ppt_type: str) -> str:
@@ -354,16 +515,23 @@ def generate_html_report(
         for sec in excel_sections:
             if sec["name"] == "错误信息":
                 continue
-            
+
             chart_type = _infer_chart_type(sec["headers"], sec["rows"])
             summary = _compute_summary(sec["headers"], sec["rows"])
-            
+
+            # 含经纬度列时追加地图类型
+            has_geo = _detect_geo_columns(sec["headers"]) is not None
+            if has_geo:
+                available = ["map", "heatmap", "table"]
+            else:
+                available = ["bar", "line", "pie", "table"]
+
             sections.append({
                 "id": f"section_{len(sections)}",
                 "title": sec["name"],
                 "subtitle": "",
                 "chart_type": chart_type,
-                "available_charts": ["bar", "line", "pie", "table"],
+                "available_charts": available,
                 "headers": sec["headers"],
                 "rows": sec["rows"],
                 "summary": summary,
@@ -446,15 +614,19 @@ def generate_html_report(
         
         chart_options_js = ""
         for ct in sec["available_charts"]:
-            opts = _generate_chart_options(sec["id"], sec, ct)
+            if ct in ("map", "heatmap"):
+                opts = _generate_geo_chart_options(sec["id"], sec, ct)
+            else:
+                opts = _generate_chart_options(sec["id"], sec, ct)
             if opts:
                 chart_options_js += f"  chartOptions['{sec['id']}_{ct}'] = {opts};\n"
         all_chart_options_js += chart_options_js
-        
+
         chart_buttons_html = ""
         for ct in sec["available_charts"]:
             active = "active" if ct == sec["chart_type"] else ""
-            labels = {"bar": "柱状图", "line": "折线图", "pie": "饼图", "table": "表格"}
+            labels = {"bar": "柱状图", "line": "折线图", "pie": "饼图", "table": "表格",
+                      "map": "地图", "heatmap": "热力图"}
             chart_buttons_html += f'<button class="chart-btn {active}" onclick="switchChart(\'{sec["id"]}\', \'{ct}\')">{labels.get(ct, ct)}</button>'
         
         header_cells = "".join(f"<th>{_escape_html(h)}</th>" for h in sec["headers"])
@@ -588,6 +760,38 @@ def generate_html_report(
 </div>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 <script>
+  // 地图数据加载状态：'pending' | 'ready' | 'failed'
+  var _chinaMapStatus = 'pending';
+  function _loadChinaMap(cb) {{
+    if (_chinaMapStatus === 'ready') {{ cb(); return; }}
+    if (_chinaMapStatus === 'pending') {{
+      _chinaMapStatus = 'loading';
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/echarts@4.9.0/map/js/china.js';
+      s.onload = function() {{
+        // echarts 4.x 的 china.js 会注册到 echarts.registerMap
+        _chinaMapStatus = 'ready';
+        cb();
+      }};
+      s.onerror = function() {{
+        // 回退：尝试用 fetch 加载 GeoJSON
+        fetch('https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json')
+          .then(function(r) {{ return r.json(); }})
+          .then(function(data) {{ echarts.registerMap('china', data); _chinaMapStatus='ready'; cb(); }})
+          .catch(function() {{ _chinaMapStatus='failed'; cb(); }});
+      }};
+      document.head.appendChild(s);
+    }} else {{
+      // loading 中：轮询
+      var t = setInterval(function() {{
+        if (_chinaMapStatus === 'ready' || _chinaMapStatus === 'failed') {{
+          clearInterval(t); cb();
+        }}
+      }}, 100);
+    }}
+  }}
+</script>
+<script>
   var chartInstances = {{}};
   var chartOptions = {{}};
   {all_chart_options_js}
@@ -618,23 +822,32 @@ def generate_html_report(
   function renderChart(sectionId, chartType) {{
     var container = document.getElementById('chart_' + sectionId);
     if (!container) return;
-    
+
     if (chartType === 'table') {{
       container.style.display = 'none';
       return;
     }}
-    
+
     container.style.display = 'block';
-    
+
     if (chartInstances[sectionId]) {{
       chartInstances[sectionId].dispose();
     }}
-    
-    var chart = echarts.init(container);
-    var options = chartOptions[sectionId + '_' + chartType];
-    if (options) {{
-      chart.setOption(options);
-      chartInstances[sectionId] = chart;
+
+    var doRender = function() {{
+      var chart = echarts.init(container);
+      var options = chartOptions[sectionId + '_' + chartType];
+      if (options) {{
+        chart.setOption(options);
+        chartInstances[sectionId] = chart;
+      }}
+    }};
+
+    // 地图类型需先加载 china 地图数据
+    if (chartType === 'map' || chartType === 'heatmap') {{
+      _loadChinaMap(doRender);
+    }} else {{
+      doRender();
     }}
   }}
   
