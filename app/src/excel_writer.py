@@ -191,7 +191,7 @@ def _merge_same_dim_results(items, row_dims):
 def _write_df_block(ws, df, start_row, pct_columns=None, row_dims=None, number_formats=None):
     pct_columns = set(pct_columns or [])
     row_dims = set(row_dims or [])
-    number_formats = number_formats or {}  # {列名: Excel数字格式}
+    number_formats = number_formats or {}  # {列名: PPT格式串}，需转换为 Excel number_format
     headers = list(df.columns)
     for ci, h in enumerate(headers, 1):
         c = ws.cell(row=start_row, column=ci, value=str(h))
@@ -204,9 +204,11 @@ def _write_df_block(ws, df, start_row, pct_columns=None, row_dims=None, number_f
             col_name_str = str(col_name) if col_name is not None else ""
             is_pct = _is_pct_col(col_name, pct_columns)
             cell = ws.cell(row=row_num, column=ci, value=_format_cell_value(val, col_name, is_pct))
-            # 优先级：自定义格式（聚合方式::格式）> pct 默认 > 0.00 默认
-            if col_name_str in number_formats:
-                cell.number_format = number_formats[col_name_str]
+            # 优先级：自定义格式（聚合方式|PPT格式）> pct 默认 > 0.00 默认
+            # number_formats 存的是 PPT 格式串（如 .2f），需转换为 Excel number_format
+            excel_fmt = _ppt_fmt_to_excel_fmt(number_formats.get(col_name_str, ""))
+            if excel_fmt:
+                cell.number_format = excel_fmt
             elif is_pct:
                 cell.number_format = PCT_NUMBER_FORMAT
             elif isinstance(val, (int, float)):
@@ -230,7 +232,7 @@ def _write_df_block(ws, df, start_row, pct_columns=None, row_dims=None, number_f
 
 def _write_scalar_block(ws, task, result, remark, start_row, pct_columns=None, number_formats=None):
     pct_columns = set(pct_columns or [])
-    number_formats = number_formats or {}  # {指标名: Excel数字格式}
+    number_formats = number_formats or {}  # {指标名: PPT格式串}，需转换为 Excel number_format
     ws.cell(row=start_row, column=1, value="指标")
     ws.cell(row=start_row, column=2, value="值")
     _style_header_row(ws, start_row, 2)
@@ -242,8 +244,9 @@ def _write_scalar_block(ws, task, result, remark, start_row, pct_columns=None, n
         is_pct = _is_pct_col(key, pct_columns)
         c2 = ws.cell(row=row, column=2, value=_format_cell_value(val, key, is_pct))
         # 优先级：自定义格式 > pct 默认 > 0.00 默认
-        if key_str in number_formats:
-            c2.number_format = number_formats[key_str]
+        excel_fmt = _ppt_fmt_to_excel_fmt(number_formats.get(key_str, ""))
+        if excel_fmt:
+            c2.number_format = excel_fmt
         elif is_pct:
             c2.number_format = PCT_NUMBER_FORMAT
         elif isinstance(val, (int, float)):
@@ -308,6 +311,74 @@ def _format_cell_value(val, col_name=None, is_pct=False):
 
 VALID_NUMBER_FORMAT = '0.00'
 PCT_NUMBER_FORMAT = '0.0%'
+
+
+def _ppt_fmt_to_excel_fmt(ppt_fmt):
+    """将 PPT 占位符的格式串（Python format spec 风格）转换为 Excel number_format。
+
+    与 template_filler.py 的 _KNOWN_FMTS 语法一致，聚合方式的 |格式 后缀复用同一套语法。
+
+    映射规则：
+        .Nf       → 0.00（N 位小数，如 .2f → 0.00，.0f → 0）
+        int / d   → 0（整数）
+        .N%       → 0.00%（N 位小数百分比，如 .2% → 0.00%）
+        ,.Nf      → #,##0.00（千分位 + N 位小数）
+        ,.N%      → #,##0.00%（千分位 + 百分比）
+        .Ne/.NE   → 0.00E+00（科学计数法）
+
+    :param ppt_fmt: PPT 格式串（如 ".2f"、".1%"、",.0f"）
+    :return: Excel number_format 字符串。无法识别时返回 None（用默认）。
+    """
+    if not ppt_fmt:
+        return None
+    fmt = ppt_fmt.strip()
+
+    # 整数格式
+    if fmt in ("int", "d"):
+        return "0"
+
+    # 千分位 + 百分比：,.N%
+    if fmt.startswith(",.") and fmt.endswith("%"):
+        try:
+            digits = int(fmt[2:-1])
+            return f"#,##0.{'0' * digits}%"
+        except ValueError:
+            return None
+
+    # 千分位 + 小数：,.Nf
+    if fmt.startswith(",.") and fmt.endswith("f"):
+        try:
+            digits = int(fmt[2:-1])
+            return f"#,##0.{'0' * digits}" if digits > 0 else "#,##0"
+        except ValueError:
+            return None
+
+    # 百分比：.N%
+    if fmt.startswith(".") and fmt.endswith("%"):
+        try:
+            digits = int(fmt[1:-1])
+            return f"0.{'0' * digits}%" if digits > 0 else "0%"
+        except ValueError:
+            return None
+
+    # 小数：.Nf
+    if fmt.startswith(".") and fmt.endswith("f"):
+        try:
+            digits = int(fmt[1:-1])
+            return f"0.{'0' * digits}" if digits > 0 else "0"
+        except ValueError:
+            return None
+
+    # 科学计数法：.Ne / .NE
+    if fmt.startswith(".") and (fmt.endswith("e") or fmt.endswith("E")):
+        try:
+            digits = int(fmt[1:-1])
+            zero_str = "0" * digits
+            return f"0.{zero_str}E+00" if digits > 0 else "0E+00"
+        except ValueError:
+            return None
+
+    return None
 
 
 def _auto_fit_columns(ws):

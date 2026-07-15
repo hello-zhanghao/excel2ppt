@@ -6,6 +6,22 @@ import numpy as np
 from src.safe_math import evaluate_numeric_expression
 
 
+# 已知的格式化字符串集合（与 template_filler.py 的 _KNOWN_FMTS 保持一致）
+# 聚合方式的 |数字格式 和 PPT 占位符的 |格式 共用同一套语法
+_KNOWN_FMTS = {
+    # 小数位格式
+    ".0f", ".1f", ".2f", ".3f", ".4f", ".5f", ".6f",
+    # 整数格式
+    "int", "d",
+    # 百分比格式（自动 ×100 加 %）
+    ".0%", ".1%", ".2%", ".3%", ".4%",
+    # 科学计数法
+    ".0e", ".1e", ".2e", ".3e", ".0E", ".1E", ".2E", ".3E",
+    # 千分位
+    ",.0f", ",.1f", ",.2f", ",.3f", ",.0%", ",.1%", ",.2%", ",.3%",
+}
+
+
 AGG_MAP = {
     "sum": "sum",
     "avg": "mean",
@@ -59,15 +75,14 @@ def _parse_join_sep(agg_str):
 def _parse_agg_format(agg_str):
     """解析聚合方式的数字格式后缀（用 ``|`` 分隔，与 join 的 ``|`` 正交）。
 
-    与 _parse_join_sep 配合：join 关键字后的 ``|`` 是分隔符，其他聚合后的 ``|`` 是数字格式。
-    两者不会同时出现于同一 ``|`` 段：join 是字符串聚合不需要数字格式。
-
-    支持写法：
-      "sum|0.00"         → ("sum", "0.00")
-      "avg|0.0%"         → ("avg", "0.0%")
-      "sum|#,##0"        → ("sum", "#,##0")
-      "去重拼接|、"       → ("去重拼接|、", None)  join 的 | 是分隔符，此处不剥离
+    与 PPT 模板占位符的格式语法完全一致（复用 _KNOWN_FMTS 白名单）：
+      "sum|.2f"          → ("sum", ".2f")
+      "avg|.1%"          → ("avg", ".1%")
+      "sum|,.0f"         → ("sum", ",.0f")  千分位整数
+      "去重拼接|、"       → ("去重拼接|、", None)  join 的 | 是分隔符，非已知格式
       "sum"              → ("sum", None)
+
+    仅当 | 后内容命中 _KNOWN_FMTS 时才视为格式串，否则 | 视为 join 分隔符或表达式一部分。
 
     :return: (聚合方式字符串（保留 join 的 | 分隔符）, 数字格式)。无格式返回 (agg_str, None)。
     """
@@ -76,12 +91,13 @@ def _parse_agg_format(agg_str):
     head, tail = agg_str.split("|", 1)
     head = head.strip()
     tail = tail.strip()
-    # join 聚合的 | 是分隔符，不是格式，原样返回
-    if head.lower() in _JOIN_KEYWORDS or head in _JOIN_KEYWORDS:
-        return agg_str, None
     if not tail:
         return head, None
-    return head, tail
+    # 仅当 | 后是已知格式才视为数字格式后缀
+    if tail in _KNOWN_FMTS:
+        return head, tail
+    # 否则 | 是 join 分隔符或其他用途，原样返回
+    return agg_str, None
 
 
 # 已知聚合关键字集合，用于 _split_agg_funcs 识别多聚合分隔符
@@ -101,14 +117,14 @@ def _match_agg_keyword(s):
 def _split_agg_funcs(agg_str):
     """按逗号拆分多聚合方式，保护 ``|`` 后参数内的逗号不被误判为分隔符。
 
-    Excel 数字格式常含逗号（如 ``#,##0`` 千分位），直接 split 会被切断。
+    PPT 格式串可能含逗号（如 ``,.2f`` 千分位），直接 split 会被切断。
     本函数遇到 ``|`` 后进入参数模式，参数内的逗号属于参数；只有当逗号后
     紧跟已知聚合关键字时，才认为是多聚合分隔符。
 
     例：
       'sum,avg'                → ['sum', 'avg']
-      'sum|#,##0,sum|0.00'    → ['sum|#,##0', 'sum|0.00']
-      '去重拼接|、,sum|0.00'   → ['去重拼接|、', 'sum|0.00']
+      'sum|,.0f,sum|.2f'       → ['sum|,.0f', 'sum|.2f']
+      '去重拼接|、,sum|.2f'     → ['去重拼接|、', 'sum|.2f']
     """
     parts = []
     current = ""
