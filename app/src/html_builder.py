@@ -28,38 +28,115 @@ def read_excel_data(excel_path: str) -> List[Dict]:
         if not rows:
             continue
 
+        _parse_blocks(sections, rows, sheet_name)
+    wb.close()
+    return sections
+
+
+def _is_block_title_row(row) -> bool:
+    """判断是否为区块标题行：只有第一个单元格有值，其余为空（合并单元格效果）"""
+    vals = [c for c in row if c is not None]
+    return len(vals) == 1 and row[0] is not None
+
+
+def _is_header_row(row) -> bool:
+    """判断是否为表头行：至少2个非None值（且不是区块标题行）"""
+    vals = [c for c in row if c is not None]
+    return len(vals) >= 2
+
+
+def _extract_data(rows, header_idx, col_indices, headers):
+    """从指定行提取数据行"""
+    data_rows = []
+    for row in rows:
+        vals = []
+        for i in col_indices:
+            v = row[i] if i < len(row) else None
+            if v is None:
+                vals.append("")
+            elif isinstance(v, float):
+                vals.append(f"{v:.4f}" if v != int(v) else str(int(v)))
+            else:
+                vals.append(str(v))
+        if any(v.strip() for v in vals):
+            data_rows.append(vals)
+    return data_rows
+
+
+def _parse_blocks(sections, rows, sheet_name):
+    """解析一个 sheet 内的所有区块，每个区块一个 section。"""
+    n = len(rows)
+    i = 0
+
+    while i < n:
+        # 跳过空行和非区块标题行/非表头行
+        if i < n - 1:
+            row = rows[i]
+            next_row = rows[i + 1]
+            if _is_block_title_row(row) and _is_header_row(next_row):
+                # 区块标题行 + 表头行 → 新区块
+                block_name = str(row[0]) if row[0] else sheet_name
+
+                headers = [str(c) if c is not None else "" for c in next_row]
+                col_indices = [ci for ci, h in enumerate(headers) if h.strip()]
+                headers = [headers[ci] for ci in col_indices]
+
+                data_start = i + 2
+                data_end = data_start
+                while data_end < n:
+                    if data_end < n - 1 and _is_block_title_row(rows[data_end]) and _is_header_row(rows[data_end + 1]):
+                        break
+                    data_end += 1
+
+                data_rows = _extract_data(rows[data_start:data_end], i + 1, col_indices, headers)
+
+                sections.append({
+                    "name": block_name,
+                    "headers": headers,
+                    "rows": data_rows,
+                })
+                i = data_end
+                continue
+            elif _is_header_row(row) and not _is_block_title_row(row):
+                # 无区块标题，直接是表头 → 一个区块，区块名用 sheet 名
+                headers = [str(c) if c is not None else "" for c in row]
+                col_indices = [ci for ci, h in enumerate(headers) if h.strip()]
+                headers = [headers[ci] for ci in col_indices]
+
+                data_start = i + 1
+                data_end = data_start
+                while data_end < n:
+                    if data_end < n - 1 and _is_block_title_row(rows[data_end]) and _is_header_row(rows[data_end + 1]):
+                        break
+                    data_end += 1
+
+                data_rows = _extract_data(rows[data_start:data_end], i, col_indices, headers)
+
+                sections.append({
+                    "name": sheet_name,
+                    "headers": headers,
+                    "rows": data_rows,
+                })
+                i = data_end
+                continue
+        i += 1
+
+    # 兜底：原逻辑，找第一个表头
+    if not sections:
         header_idx = 0
-        for i, row in enumerate(rows[:3]):
-            non_none = [c for c in row if c is not None]
-            if len(non_none) >= 2:
-                header_idx = i
+        for ri, row in enumerate(rows[:3]):
+            if _is_header_row(row):
+                header_idx = ri
                 break
-
         headers = [str(c) if c is not None else "" for c in rows[header_idx]]
-        col_indices = [i for i, h in enumerate(headers) if h.strip()]
-        headers = [headers[i] for i in col_indices]
-
-        data_rows = []
-        for row in rows[header_idx + 1:]:
-            vals = []
-            for i in col_indices:
-                v = row[i] if i < len(row) else None
-                if v is None:
-                    vals.append("")
-                elif isinstance(v, float):
-                    vals.append(f"{v:.4f}" if v != int(v) else str(int(v)))
-                else:
-                    vals.append(str(v))
-            if any(v.strip() for v in vals):
-                data_rows.append(vals)
-
+        col_indices = [ci for ci, h in enumerate(headers) if h.strip()]
+        headers = [headers[ci] for ci in col_indices]
+        data_rows = _extract_data(rows[header_idx + 1:], header_idx, col_indices, headers)
         sections.append({
             "name": sheet_name,
             "headers": headers,
             "rows": data_rows,
         })
-    wb.close()
-    return sections
 
 
 def _detect_geo_columns(headers: List[str]) -> Optional[Tuple[int, int]]:
