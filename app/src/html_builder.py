@@ -163,6 +163,10 @@ def _infer_chart_type(headers: List[str], rows: List[List[str]]) -> str:
     if _detect_geo_columns(headers) is not None:
         return "map"
 
+    # 标量数据：只有1行数据（无行维度，横向一行）→ 不画图，用指标卡片展示
+    if len(rows) == 1:
+        return "scalar"
+
     numeric_cols = 0
     category_cols = 0
     for h in headers:
@@ -244,24 +248,95 @@ def _escape_html(text: str) -> str:
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
-def _detect_chart_columns(headers: List[str]) -> Tuple[int, List[int]]:
-    """从表头自动检测分类列和数值列。返回 (category_col, value_cols)。"""
-    category_col = None
+def _format_num(val, key: str = "") -> str:
+    """格式化数值用于 summary 显示。
+    - 列名/key 含 占比/百分比/pct 且值在 0-1 之间 → 百分比 8.00%
+    - 绝对值 >= 100000000 → 亿（如 1.50亿）
+    - 绝对值 >= 10000 → 万（如 1.28万）
+    - 否则千分位分隔，保留2位小数（.00 时显示整数）
+    """
+    if val is None or val == "":
+        return str(val) if val == "" else ""
+    try:
+        num = float(val)
+    except (ValueError, TypeError):
+        return str(val)
+
+    key_lower = str(key).lower()
+    is_pct = any(k in key_lower for k in ["占比", "百分比", "pct"])
+    if is_pct and 0 <= num <= 1:
+        return f"{num*100:.2f}%"
+
+    abs_num = abs(num)
+    if abs_num >= 100000000:
+        return f"{num/100000000:.2f}亿"
+    if abs_num >= 10000:
+        return f"{num/10000:.2f}万"
+
+    s = f"{num:,.2f}"
+    if s.endswith(".00"):
+        s = s[:-3]
+    return s
+
+
+def _is_numeric_cell(v) -> bool:
+    """判断单元格内容是否为数字（用于表格数字列右对齐）。"""
+    if v is None or v == "":
+        return False
+    try:
+        float(str(v).replace(",", "").replace("%", "").replace("亿", "").replace("万", ""))
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _summary_icon(col_name: str) -> str:
+    """根据列名智能匹配 emoji 图标。"""
+    n = str(col_name).lower()
+    if "金额" in n:
+        return "💰"
+    if "数量" in n:
+        return "📦"
+    if "销售额" in n:
+        return "📈"
+    if "利润" in n:
+        return "💹"
+    if "占比" in n or "百分比" in n or "pct" in n:
+        return "📊"
+    if "计数" in n:
+        return "#"
+    return "📌"
+
+
+def _detect_chart_columns(headers: List[str]) -> Tuple[List[int], List[int]]:
+    """从表头自动检测分类列和数值列。返回 (category_cols: List[int], value_cols: List[int])。
+    支持多列分类（多维度透视），category_cols = 非数值列（排除经纬度列）。
+    """
+    geo = _detect_geo_columns(headers)
+    geo_set = set(geo) if geo else set()
+
+    category_cols = []
     value_cols = []
 
     for i, h in enumerate(headers):
+        if i in geo_set:
+            continue
         h_lower = h.lower()
-        if any(key in h_lower for key in ["日期", "月份", "时间", "区域", "产品", "类别", "类型", "名称", "城市", "年份", "季度"]):
-            if category_col is None:
-                category_col = i
-        elif any(key in h_lower for key in ["金额", "数量", "销售额", "利润", "成本", "值", "占比", "百分比", "pct", "计数"]):
+        if any(key in h_lower for key in ["金额", "数量", "销售额", "利润", "成本", "值", "占比", "百分比", "pct", "计数", "总计", "合计"]):
             value_cols.append(i)
+        else:
+            category_cols.append(i)
 
-    if category_col is None:
-        category_col = 0
-        value_cols = [i for i in range(1, len(headers))]
+    # 没有数值列时，第一列作为分类，其余作为数值
+    if not value_cols:
+        if headers:
+            category_cols = [0]
+            value_cols = [i for i in range(1, len(headers)) if i not in geo_set]
+        else:
+            category_cols = []
+            value_cols = []
 
-    return category_col, value_cols
+    return category_cols, value_cols
 
 
 def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
@@ -272,15 +347,21 @@ def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
     if not rows or not headers:
         return ""
 
-    category_col, value_cols = _detect_chart_columns(headers)
-    
+    category_cols, value_cols = _detect_chart_columns(headers)
+    if not value_cols:
+        return ""
+
     categories = []
     series_data = []
-    
+
     for row in rows:
-        if category_col < len(row):
-            categories.append(str(row[category_col]))
-    
+        # 多列分类拼接：["华东", "产品A"] → "华东-产品A"
+        if category_cols:
+            parts = [str(row[cc]) for cc in category_cols if cc < len(row) and row[cc] != ""]
+            categories.append("-".join(parts) if parts else "")
+        else:
+            categories.append("")
+
     for vc in value_cols:
         values = []
         for row in rows:
@@ -296,6 +377,35 @@ def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
             "data": values,
         })
     
+    # 通用 tooltip 样式（适配主题由 JS 端覆盖，此处为静态回退）
+    tooltip_style = {
+        "backgroundColor": "#ffffff",
+        "borderColor": "#e9ecef",
+        "borderWidth": 1,
+        "textStyle": {"color": "#1a1a2e"},
+        "extraCssText": "box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 8px;"
+    }
+    base_grid = {"left": "3%", "right": "4%", "bottom": "15%", "top": "15%", "containLabel": True}
+    anim = {"animationDuration": 1000, "animationEasing": "cubicOut"}
+
+    def _bar_gradient(color):
+        return {
+            "type": "linear", "x": 0, "y": 0, "x2": 0, "y2": 1,
+            "colorStops": [
+                {"offset": 0, "color": color},
+                {"offset": 1, "color": color + "55"}
+            ]
+        }
+
+    def _area_gradient(color):
+        return {
+            "type": "linear", "x": 0, "y": 0, "x2": 0, "y2": 1,
+            "colorStops": [
+                {"offset": 0, "color": color + "99"},
+                {"offset": 1, "color": color + "0D"}
+            ]
+        }
+
     if chart_type == "pie":
         if series_data:
             pie_data = []
@@ -304,26 +414,41 @@ def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
                     "name": cat,
                     "value": series_data[0]["data"][i] if i < len(series_data[0]["data"]) else 0,
                 })
+            total = sum(d["value"] for d in pie_data)
             return json.dumps({
                 "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
-                "tooltip": {"trigger": "item", "formatter": "{b}: {c} ({d}%)"},
+                "tooltip": {"trigger": "item", "formatter": "{b}: {c} ({d}%)", **tooltip_style},
                 "legend": {"orient": "vertical", "left": "left"},
+                "graphic": {
+                    "type": "text",
+                    "left": "center",
+                    "top": "center",
+                    "style": {
+                        "text": "总计\n" + _format_num(total, title),
+                        "textAlign": "center",
+                        "textVerticalAlign": "middle",
+                        "fontSize": 13,
+                        "fill": "#6c757d",
+                    }
+                },
                 "series": [{
                     "name": title,
                     "type": "pie",
-                    "radius": ["40%", "70%"],
-                    "center": ["50%", "55%"],
+                    "radius": ["45%", "72%"],
+                    "center": ["50%", "50%"],
                     "avoidLabelOverlap": True,
-                    "itemStyle": {"borderRadius": 4, "borderColor": "#fff", "borderWidth": 2},
+                    "itemStyle": {"borderRadius": 6, "borderColor": "#fff", "borderWidth": 2},
                     "label": {"show": True},
                     "data": pie_data,
                     "color": HUAWEI_PALETTE,
                 }],
+                **anim,
             })
-    
+
     if chart_type == "line":
         series = []
         for i, sd in enumerate(series_data):
+            c = HUAWEI_PALETTE[i % len(HUAWEI_PALETTE)]
             series.append({
                 "name": sd["name"],
                 "type": "line",
@@ -331,37 +456,41 @@ def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
                 "smooth": True,
                 "symbol": "circle",
                 "symbolSize": 8,
-                "lineStyle": {"width": 3},
-                "itemStyle": {"color": HUAWEI_PALETTE[i % len(HUAWEI_PALETTE)]},
+                "lineStyle": {"width": 3, "color": c},
+                "itemStyle": {"color": c, "borderColor": "#fff", "borderWidth": 2},
+                "areaStyle": {"color": _area_gradient(c)},
             })
         return json.dumps({
             "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
-            "tooltip": {"trigger": "axis"},
+            "tooltip": {"trigger": "axis", **tooltip_style},
             "legend": {"data": [sd["name"] for sd in series_data], "bottom": 0},
-            "grid": {"left": "3%", "right": "4%", "bottom": "15%", "top": "15%", "containLabel": True},
+            "grid": base_grid,
             "xAxis": {"type": "category", "data": categories, "axisLabel": {"rotate": 30}},
             "yAxis": {"type": "value"},
             "series": series,
+            **anim,
         })
-    
+
     if chart_type == "bar":
         series = []
         for i, sd in enumerate(series_data):
+            c = HUAWEI_PALETTE[i % len(HUAWEI_PALETTE)]
             series.append({
                 "name": sd["name"],
                 "type": "bar",
                 "data": sd["data"],
                 "barWidth": "50%",
-                "itemStyle": {"color": HUAWEI_PALETTE[i % len(HUAWEI_PALETTE)], "borderRadius": [4, 4, 0, 0]},
+                "itemStyle": {"color": _bar_gradient(c), "borderRadius": [6, 6, 0, 0]},
             })
         return json.dumps({
             "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
-            "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
+            "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}, **tooltip_style},
             "legend": {"data": [sd["name"] for sd in series_data], "bottom": 0},
-            "grid": {"left": "3%", "right": "4%", "bottom": "15%", "top": "15%", "containLabel": True},
+            "grid": base_grid,
             "xAxis": {"type": "category", "data": categories, "axisLabel": {"rotate": 30}},
             "yAxis": {"type": "value"},
             "series": series,
+            **anim,
         })
 
     return ""
@@ -522,14 +651,18 @@ def _build_chart_data_js(sections: List[Dict]) -> str:
         geo = _detect_geo_columns(headers)
         if geo:
             continue
-        category_col, value_cols = _detect_chart_columns(headers)
+        category_cols, value_cols = _detect_chart_columns(headers)
         if not value_cols:
             continue
 
         categories = []
         for row in rows:
-            if category_col < len(row):
-                categories.append(str(row[category_col]))
+            # 多列分类拼接
+            if category_cols:
+                cat_parts = [str(row[cc]) for cc in category_cols if cc < len(row) and row[cc] != ""]
+                categories.append("-".join(cat_parts) if cat_parts else "")
+            else:
+                categories.append("")
 
         series_list = []
         for vc in value_cols:
@@ -631,11 +764,16 @@ def _build_col_selector_html(sec: Dict) -> str:
     _, value_cols = _detect_chart_columns(headers)
     if len(value_cols) <= 1:
         return ""  # 只有1列时不显示选择器
+    sid = sec["id"]
     checkboxes = ""
     for vi, vc in enumerate(value_cols):
         col_name = headers[vc]
-        checkboxes += f'<label class="col-cb-item"><input type="checkbox" checked onchange="onColChange(\'{sec["id"]}\')" data-series="{vi}">{_escape_html(col_name)}</label>'
-    return f'<div class="col-selector" id="col_sel_{sec["id"]}"><span class="col-sel-label">列选择:</span>{checkboxes}</div>'
+        checkboxes += f'<label class="col-cb-item"><input type="checkbox" checked onchange="onColChange(\'{sid}\')" data-series="{vi}">{_escape_html(col_name)}</label>'
+    select_all_btn = (f'<button class="col-sel-toggle" type="button" '
+                      f'onclick="onColSelectAll(\'{sid}\', true)">全选</button>'
+                      f'<button class="col-sel-toggle" type="button" '
+                      f'onclick="onColSelectAll(\'{sid}\', false)">全不选</button>')
+    return f'<div class="col-selector" id="col_sel_{sid}"><span class="col-sel-label">列选择:</span>{select_all_btn}{checkboxes}</div>'
 
 
 def _build_geo_controls_html(sec: Dict) -> str:
@@ -680,27 +818,6 @@ def _build_geo_controls_html(sec: Dict) -> str:
 </div>'''
 
 
-def _ppt_chart_type_to_html(ppt_type: str) -> str:
-    type_map = {
-        "column": "bar",
-        "bar": "bar",
-        "line": "line",
-        "pie": "pie",
-        "doughnut": "pie",
-        "area": "line",
-        "scatter": "bar",
-        "table": "table",
-    }
-    return type_map.get(ppt_type.lower(), "bar")
-
-
-def _find_data_in_excel(excel_sections: List[Dict], sheet_name: str, block_name: str = None) -> Optional[Dict]:
-    for sec in excel_sections:
-        if sec["name"] == sheet_name:
-            return sec
-    return None
-
-
 def generate_html_report(
     excel_path: Optional[str] = None,
     ppt_path: Optional[str] = None,
@@ -730,10 +847,17 @@ def generate_html_report(
             summary = _compute_summary(sec["headers"], sec["rows"])
 
             has_geo = _detect_geo_columns(sec["headers"]) is not None
+            # 数值列数量决定可用的扩展图表类型（radar/scatter 需>=2列）
+            _, _vcols = _detect_chart_columns(sec["headers"])
+            n_vcols = len(_vcols)
             if has_geo:
                 available = ["map", "heatmap", "table"]
+            elif chart_type == "scalar":
+                available = ["table"]
             else:
-                available = ["bar", "line", "pie", "table"]
+                available = ["bar", "line", "area", "pie", "table"]
+                if n_vcols >= 2:
+                    available = ["bar", "line", "area", "pie", "radar", "scatter", "table"]
 
             sections.append({
                 "id": f"section_{len(sections)}",
@@ -821,7 +945,7 @@ def generate_html_report(
 
     # PPT 幻灯片作为第一个一级目录
     if ppt_sections:
-        toc_html_parts.append(f'<li class="toc-group open"><div class="toc-group-hd" onclick="this.parentElement.classList.toggle(\'open\')"><span class="toc-num">0</span>PPT 幻灯片<span class="toc-arrow">▸</span></div><ul class="toc-sub">')
+        toc_html_parts.append(f'<li class="toc-group open"><div class="toc-group-hd" onclick="toggleTocGroup(this)"><span class="toc-num">0</span>PPT 幻灯片<span class="toc-arrow">▸</span></div><ul class="toc-sub">')
         for psec in ppt_sections:
             toc_html_parts.append(f'<li><a href="#{psec["id"]}">{_escape_html(psec.get("title", "幻灯片"))}</a></li>')
         toc_html_parts.append('</ul></li>')
@@ -830,15 +954,17 @@ def generate_html_report(
     for sh in sheet_order:
         items = sheet_groups[sh]
         # 所有 sheet 都作为一级目录，区块作为二级
-        toc_html_parts.append(f'<li class="toc-group"><div class="toc-group-hd" onclick="this.parentElement.classList.toggle(\'open\')"><span class="toc-num">{block_idx}</span>{_escape_html(sh)}<span class="toc-arrow">▸</span></div><ul class="toc-sub">')
+        toc_html_parts.append(f'<li class="toc-group"><div class="toc-group-hd" onclick="toggleTocGroup(this)"><span class="toc-num">{block_idx}</span>{_escape_html(sh)}<span class="toc-arrow">▸</span></div><ul class="toc-sub">')
         block_idx += 1
         for sub in items:
             toc_html_parts.append(f'<li><a href="#{sub["id"]}">{_escape_html(sub.get("title", ""))}</a></li>')
         toc_html_parts.append('</ul></li>')
 
     # section HTML 循环
+    sec_idx = 0
     for sec in sections:
-        
+        accent = HUAWEI_PALETTE[sec_idx % len(HUAWEI_PALETTE)]
+
         if sec.get("ppt_images"):
             slide_html = ""
             for idx, img_b64 in enumerate(sec["ppt_images"], 1):
@@ -848,11 +974,12 @@ def generate_html_report(
       <img src="data:image/png;base64,{img_b64}" alt="Slide {idx}" onclick="toggleZoom(this)">
     </div>'''
             section_html_parts.append(f'''
-<div id="{sec["id"]}" class="section">
+<div id="{sec["id"]}" class="section" style="--accent: {accent}">
   <h2>{_escape_html(sec["title"])}</h2>
   <p class="subtitle">{_escape_html(sec["subtitle"])}</p>
   {slide_html}
 </div>''')
+            sec_idx += 1
             continue
 
         chart_options_js = ""
@@ -860,6 +987,9 @@ def generate_html_report(
         for ct in sec["available_charts"]:
             if ct in ("map", "heatmap"):
                 opts = _generate_geo_chart_options(sec["id"], sec, ct)
+            elif ct in ("area", "radar", "scatter"):
+                # 这三种类型由 JS 端 buildChartOption 动态构建，无需 Python 预生成 option
+                continue
             else:
                 opts = _generate_chart_options(sec["id"], sec, ct)
             if opts:
@@ -873,26 +1003,7 @@ def generate_html_report(
                 all_geo_data_js += geo_js
                 geo_controls_html = _build_geo_controls_html(sec)
 
-        chart_buttons_html = ""
-        for ct in sec["available_charts"]:
-            active = "active" if ct == sec["chart_type"] else ""
-            labels = {"bar": "柱状图", "line": "折线图", "pie": "饼图", "table": "表格",
-                      "map": "地图", "heatmap": "热力图"}
-            chart_buttons_html += f'<button class="chart-btn {active}" onclick="switchChart(\'{sec["id"]}\', \'{ct}\')">{labels.get(ct, ct)}</button>'
-
-        col_selector_html = _build_col_selector_html(sec)
-
-        header_cells = "".join(f"<th>{_escape_html(h)}</th>" for h in sec["headers"])
-        body_rows = ""
-        for row in sec["rows"]:
-            is_total = any("合计" in str(v) or "总计" in str(v) for v in row)
-            row_class = "total-row" if is_total else ""
-            cells = "".join(f"<td>{_escape_html(v)}</td>" for v in row)
-            body_rows += f"<tr class=\"{row_class}\">{cells}</tr>"
-
-        row_count = len(sec["rows"])
-        row_count_html = f'<span class="table-row-count">共 {row_count} 行</span>'
-
+        # 数据摘要（用 _format_num 格式化）
         summary_html = ""
         if sec.get("summary"):
             summary_items = []
@@ -900,42 +1011,127 @@ def generate_html_report(
                 if isinstance(val, dict):
                     for stat, num in val.items():
                         stat_labels = {"sum": "合计", "avg": "平均", "max": "最大", "min": "最小", "count": "数量"}
-                        summary_items.append(f"{stat_labels.get(stat, stat)}: {num}")
+                        summary_items.append(f"{stat_labels.get(stat, stat)}: {_format_num(num, key)}")
                 else:
-                    summary_items.append(f"{key}: {val}")
+                    summary_items.append(f"{key}: {_format_num(val, key)}")
             if summary_items:
                 summary_html = f'<div class="summary-bar"><span>数据摘要:</span> {" | ".join(summary_items)}</div>'
 
-        section_html_parts.append(f'''
-<div id="{sec["id"]}" class="section">
+        # 表格构建（含排序表头 + 工具栏）
+        header_cells = "".join(
+            f'<th onclick="sortTable(\'{sec["id"]}\', {i})" data-sort="" data-col="{i}">{_escape_html(h)}<span class="sort-arrow"></span></th>'
+            for i, h in enumerate(sec["headers"])
+        )
+        body_rows = ""
+        for row in sec["rows"]:
+            is_total = any("合计" in str(v) or "总计" in str(v) for v in row)
+            row_class = "total-row" if is_total else ""
+            cells = "".join(
+                f'<td class="num-cell">{_escape_html(v)}</td>' if _is_numeric_cell(v) else f"<td>{_escape_html(v)}</td>"
+                for v in row
+            )
+            body_rows += f'<tr class="{row_class}">{cells}</tr>'
+
+        row_count = len(sec["rows"])
+        row_count_html = f'<span class="table-row-count">共 {row_count} 行</span>'
+        table_toolbar_html = (
+            f'<div class="table-toolbar">'
+            f'<input type="text" class="table-search" placeholder="搜索表格内容..." oninput="filterTable(\'{sec["id"]}\', this.value)">'
+            f'<button class="table-tool-btn" onclick="exportTableCSV(\'{sec["id"]}\')">导出CSV</button>'
+            f'</div>'
+        )
+        table_block_html = (
+            f'<div class="table-container">'
+            f'<div class="table-header"><span>数据详情</span>{row_count_html}</div>'
+            f'{table_toolbar_html}'
+            f'<div class="table-wrap">'
+            f'<table id="table_{sec["id"]}"><thead><tr>{header_cells}</tr></thead><tbody>{body_rows}</tbody></table>'
+            f'</div></div>'
+        )
+
+        # 标量数据：用指标卡片网格展示，不画图
+        if sec["chart_type"] == "scalar":
+            _, value_cols = _detect_chart_columns(sec["headers"])
+            row = sec["rows"][0] if sec["rows"] else []
+            metric_cards = ""
+            for vc in value_cols:
+                col_name = sec["headers"][vc] if vc < len(sec["headers"]) else ""
+                val = row[vc] if vc < len(row) else ""
+                formatted = _format_num(val, col_name)
+                metric_cards += f'<div class="metric-card"><div class="metric-label">{_escape_html(col_name)}</div><div class="metric-value">{_escape_html(formatted)}</div></div>'
+            section_html_parts.append(f'''
+<div id="{sec["id"]}" class="section" style="--accent: {accent}">
   <h2>{_escape_html(sec["title"])}</h2>
   <p class="subtitle">{_escape_html(sec["subtitle"])}</p>
   {summary_html}
-  <div class="chart-container">
+  <div class="metric-grid">{metric_cards}</div>
+  {table_block_html}
+</div>''')
+            sec_idx += 1
+            continue
+
+        # 普通图表 section
+        chart_buttons_html = ""
+        labels = {"bar": "柱状图", "line": "折线图", "area": "面积图", "pie": "饼图",
+                  "radar": "雷达图", "scatter": "散点图", "table": "表格",
+                  "map": "地图", "heatmap": "热力图"}
+        for ct in sec["available_charts"]:
+            active = "active" if ct == sec["chart_type"] else ""
+            chart_buttons_html += f'<button class="chart-btn {active}" onclick="switchChart(\'{sec["id"]}\', \'{ct}\')">{labels.get(ct, ct)}</button>'
+
+        col_selector_html = _build_col_selector_html(sec)
+
+        # 图表工具栏：全屏 / 导出PNG / 堆叠切换（仅含柱状图时显示堆叠按钮）
+        stack_btn = f'<button class="chart-tool-btn" onclick="toggleStack(\'{sec["id"]}\')">堆叠/并排</button>' if "bar" in sec["available_charts"] else ""
+        chart_toolbar_html = (
+            f'<div class="chart-toolbar">'
+            f'<button class="chart-tool-btn" onclick="toggleChartFullscreen(\'{sec["id"]}\')">全屏</button>'
+            f'<button class="chart-tool-btn" onclick="exportChartPNG(\'{sec["id"]}\')">导出PNG</button>'
+            f'{stack_btn}'
+            f'</div>'
+        )
+
+        section_html_parts.append(f'''
+<div id="{sec["id"]}" class="section" style="--accent: {accent}">
+  <h2>{_escape_html(sec["title"])}</h2>
+  <p class="subtitle">{_escape_html(sec["subtitle"])}</p>
+  {summary_html}
+  <div class="chart-container" id="chart_ctr_{sec["id"]}">
     <div class="chart-buttons">{chart_buttons_html}</div>
     {col_selector_html}
     {geo_controls_html}
+    {chart_toolbar_html}
     <div id="chart_{sec["id"]}" class="chart-canvas"></div>
   </div>
-  <div class="table-container">
-    <div class="table-header"><span>数据详情</span>{row_count_html}</div>
-    <div class="table-wrap">
-      <table><thead><tr>{header_cells}</tr></thead><tbody>{body_rows}</tbody></table>
-    </div>
-  </div>
+  {table_block_html}
 </div>''')
+        sec_idx += 1
 
     all_chart_data_js = _build_chart_data_js(sections)
 
     summary_cards_html = ""
     top_summary = list(all_summary.items())[:6]
     if top_summary:
-        for key, val in top_summary:
+        for i, (key, val) in enumerate(top_summary):
+            accent = HUAWEI_PALETTE[i % len(HUAWEI_PALETTE)]
+            icon = _summary_icon(key)
+            display_key = key.replace("合计_", "") if key.startswith("合计_") else key
             if isinstance(val, dict):
-                val_str = str(val.get("sum", ""))
+                val_str = _format_num(val.get("sum", ""), key)
+                stat_label = "合计"
             else:
-                val_str = str(val)
-            summary_cards_html += f'<div class="summary-card"><div class="card-label">{_escape_html(key)}</div><div class="card-value">{_escape_html(val_str)}</div></div>'
+                val_str = _format_num(val, key)
+                stat_label = ""
+            trend_html = f'<div class="card-trend">{stat_label}</div>' if stat_label else ""
+            summary_cards_html += (
+                f'<div class="summary-card" style="--accent: {accent}">'
+                f'<span class="card-icon">{icon}</span>'
+                f'<div class="card-body">'
+                f'<div class="card-label">{_escape_html(display_key)}</div>'
+                f'<div class="card-value">{_escape_html(val_str)}</div>'
+                f'{trend_html}'
+                f'</div></div>'
+            )
 
     html_content = f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -944,80 +1140,173 @@ def generate_html_report(
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
 <title>{_escape_html(report_title)}</title>
 <style>
+  :root {{
+    --bg: #f0f2f5;
+    --surface: #ffffff;
+    --surface-2: #f8f9fa;
+    --surface-3: #f5f7fa;
+    --text: #1a1a2e;
+    --text-secondary: #6c757d;
+    --primary: #2E75B6;
+    --primary-dark: #1a4a7a;
+    --primary-light: #e8f0fe;
+    --border: #e9ecef;
+    --shadow: 0 4px 20px rgba(0,0,0,0.06);
+    --shadow-hover: 0 8px 30px rgba(0,0,0,0.1);
+    --radius: 12px;
+    --radius-sm: 8px;
+    --header-grad: linear-gradient(135deg, #2E75B6, #1a4a7a);
+    --accent: #2E75B6;
+    --zebra: #fafbfc;
+    --hover-bg: #e9f5ff;
+    --th-bg: #f8f9fa;
+    --th-color: #495057;
+    --total-bg: #D9E2F3;
+    --tooltip-bg: #ffffff;
+    --tooltip-border: #e9ecef;
+    --tooltip-text: #1a1a2e;
+    --backdrop: rgba(255,255,255,0.85);
+  }}
+  [data-theme="dark"] {{
+    --bg: #1a1a2e;
+    --surface: #16213e;
+    --surface-2: #1f2a4a;
+    --surface-3: #1a2440;
+    --text: #e0e0e0;
+    --text-secondary: #a0a0a0;
+    --primary: #5B9BD5;
+    --primary-dark: #4A8BC2;
+    --primary-light: #1a2a4a;
+    --border: #2a3a5a;
+    --shadow: 0 4px 20px rgba(0,0,0,0.3);
+    --shadow-hover: 0 8px 30px rgba(0,0,0,0.4);
+    --header-grad: linear-gradient(135deg, #16213e, #0f1626);
+    --zebra: #1f2a4a;
+    --hover-bg: #1a2a4a;
+    --th-bg: #1f2a4a;
+    --th-color: #c0c8d8;
+    --total-bg: #243456;
+    --tooltip-bg: #16213e;
+    --tooltip-border: #2a3a5a;
+    --tooltip-text: #e0e0e0;
+    --backdrop: rgba(22,33,62,0.85);
+  }}
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif; background: #f0f2f5; color: #333; line-height: 1.6; overflow-x: hidden; }}
-  .header {{ background: linear-gradient(135deg, #2E75B6, #1a4a7a); color: #fff; padding: 20px 16px; text-align: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-  .header h1 {{ font-size: 18px; margin-bottom: 4px; font-weight: 600; }}
-  .header p {{ font-size: 12px; opacity: 0.85; }}
-  .nav-bar {{ display: flex; justify-content: center; gap: 12px; padding: 10px 0; background: #fff; border-bottom: 1px solid #eee; }}
-  .nav-btn {{ padding: 6px 14px; background: #f5f7fa; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; color: #555; cursor: pointer; transition: all 0.2s; }}
-  .nav-btn:hover {{ background: #2E75B6; color: #fff; border-color: #2E75B6; }}
+  body {{ font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.7; overflow-x: hidden; transition: background 0.3s, color 0.3s; }}
+  .header {{ background: var(--header-grad); color: #fff; padding: 22px 16px; text-align: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.15); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }}
+  .header h1 {{ font-size: 22px; margin-bottom: 4px; font-weight: 700; letter-spacing: 0.5px; }}
+  .header p {{ font-size: 13px; opacity: 0.85; font-weight: 400; }}
+  .nav-bar {{ display: flex; justify-content: center; align-items: center; gap: 12px; padding: 12px 16px; background: var(--backdrop); border-bottom: 1px solid var(--border); flex-wrap: wrap; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); position: sticky; top: 0; z-index: 99; }}
+  .nav-btn {{ padding: 7px 18px; background: var(--surface-3); border: 1px solid var(--border); border-radius: 999px; font-size: 13px; color: var(--text-secondary); cursor: pointer; transition: all 0.25s; font-weight: 500; }}
+  .nav-btn:hover {{ background: var(--primary); color: #fff; border-color: var(--primary); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }}
+  .nav-btn.theme-toggle {{ background: var(--primary-light); color: var(--primary); border-color: var(--primary); }}
+  .nav-search {{ padding: 7px 14px; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; color: var(--text); background: var(--surface); min-width: 240px; outline: none; transition: all 0.2s; }}
+  .nav-search:focus {{ border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }}
   .main-layout {{ display: flex; width: 100%; }}
-  .sidebar {{ width: 240px; min-width: 240px; padding: 16px; background: #fff; position: fixed; left: 0; top: 84px; bottom: 0; overflow-y: auto; z-index: 10; box-shadow: 2px 0 8px rgba(0,0,0,0.05); }}
-  .sidebar h3 {{ font-size: 14px; color: #2E75B6; margin-bottom: 12px; padding-left: 8px; border-left: 3px solid #2E75B6; }}
+  .sidebar {{ width: 250px; min-width: 250px; padding: 20px 16px; background: var(--surface); position: fixed; left: 0; top: 110px; bottom: 0; overflow-y: auto; z-index: 10; box-shadow: 2px 0 12px rgba(0,0,0,0.06); border-right: 1px solid var(--border); }}
+  .sidebar h3 {{ font-size: 14px; color: var(--primary); margin-bottom: 14px; padding-left: 10px; border-left: 3px solid var(--primary); font-weight: 600; }}
   .sidebar ul {{ list-style: none; padding-left: 0; }}
   .sidebar li {{ margin-bottom: 4px; }}
-  .sidebar a {{ text-decoration: none; color: #555; font-size: 13px; transition: color 0.2s; display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 4px; line-height: 1.4; }}
-  .sidebar a:hover {{ color: #2E75B6; background: #f0f5ff; }}
-  .toc-num {{ display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 4px; background: #e8f0fe; color: #2E75B6; border-radius: 4px; font-size: 11px; font-weight: 600; flex-shrink: 0; }}
+  .sidebar a {{ text-decoration: none; color: var(--text-secondary); font-size: 13px; transition: all 0.2s; display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: var(--radius-sm); line-height: 1.4; border-left: 3px solid transparent; }}
+  .sidebar a:hover {{ color: var(--primary); background: var(--primary-light); padding-left: 13px; }}
+  .toc-num {{ display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 4px; background: var(--primary-light); color: var(--primary); border-radius: 4px; font-size: 11px; font-weight: 600; flex-shrink: 0; }}
   .toc-group {{ margin-bottom: 2px; }}
-  .toc-group-hd {{ display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 4px; cursor: pointer; font-size: 13px; color: #555; user-select: none; }}
-  .toc-group-hd:hover {{ color: #2E75B6; background: #f0f5ff; }}
-  .toc-arrow {{ font-size: 10px; color: #999; transition: transform 0.2s; margin-left: auto; }}
+  .toc-group-hd {{ display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; color: var(--text); user-select: none; transition: all 0.2s; }}
+  .toc-group-hd:hover {{ color: var(--primary); background: var(--primary-light); }}
+  .toc-arrow {{ font-size: 10px; color: var(--text-secondary); transition: transform 0.2s; margin-left: auto; }}
   .toc-group.open .toc-arrow {{ transform: rotate(90deg); }}
   .toc-sub {{ display: none; list-style: none; padding-left: 18px; }}
   .toc-group.open .toc-sub {{ display: block; }}
-  .summary-cards {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 16px; }}
-  .summary-card {{ background: linear-gradient(135deg, #5B9BD5, #2E75B6); color: #fff; padding: 12px; border-radius: 8px; text-align: center; }}
-  .summary-card .card-label {{ font-size: 11px; opacity: 0.8; margin-bottom: 4px; }}
-  .summary-card .card-value {{ font-size: 16px; font-weight: bold; }}
-  .content-area {{ max-width: 960px; width: 100%; padding: 20px; }}
-  .content-wrapper {{ margin-left: 240px; flex: 1; display: flex; justify-content: center; min-width: 0; }}
-  .section {{ background: #fff; border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); padding: 20px; margin-bottom: 20px; }}
-  .section h2 {{ font-size: 18px; color: #182B49; margin-bottom: 4px; font-weight: 600; }}
-  .section .subtitle {{ font-size: 13px; color: #999; margin-bottom: 12px; }}
-  .summary-bar {{ background: #f5f7fa; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; color: #555; }}
-  .summary-bar span {{ font-weight: 600; color: #2E75B6; }}
-  .chart-container {{ margin-bottom: 20px; }}
-  .chart-buttons {{ display: flex; gap: 8px; margin-bottom: 12px; }}
-  .chart-btn {{ padding: 6px 14px; background: #f5f7fa; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; color: #555; cursor: pointer; transition: all 0.2s; }}
-  .chart-btn:hover {{ background: #e8f0fe; border-color: #2E75B6; color: #2E75B6; }}
-  .chart-btn.active {{ background: #2E75B6; color: #fff; border-color: #2E75B6; }}
-  .col-selector {{ display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 6px 10px; margin-bottom: 8px; background: #fafbfc; border: 1px solid #eee; border-radius: 6px; font-size: 12px; }}
-  .col-sel-label {{ font-weight: 600; color: #555; margin-right: 2px; }}
-  .col-cb-item {{ display: inline-flex; align-items: center; gap: 3px; cursor: pointer; color: #444; user-select: none; }}
-  .col-cb-item input {{ margin: 0; accent-color: #2E75B6; }}
-  .col-cb-item:hover {{ color: #2E75B6; }}
-  .geo-controls {{ display: none; flex-wrap: wrap; gap: 12px; align-items: flex-start; padding: 10px 12px; margin-bottom: 10px; background: #f5f7fa; border: 1px solid #e0e6ed; border-radius: 6px; font-size: 12px; }}
+  .toc-hd {{ display: flex; align-items: center; gap: 6px; margin-bottom: 14px; }}
+  .toc-hd h3 {{ margin-bottom: 0; flex: 1; }}
+  .toc-toggle-btn {{ padding: 4px 10px; background: var(--surface-3); border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; }}
+  .toc-toggle-btn:hover {{ background: var(--primary); color: #fff; border-color: var(--primary); }}
+  .sidebar a.active {{ color: var(--primary); background: var(--primary-light); font-weight: 600; border-left-color: var(--primary); }}
+  .sidebar a.search-hit {{ color: #C8102E; font-weight: 600; }}
+  .summary-cards {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 16px; }}
+  .summary-card {{ background: var(--accent); color: #fff; padding: 14px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 10px; position: relative; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.12); transition: transform 0.2s; }}
+  .summary-card:hover {{ transform: translateY(-2px); }}
+  .summary-card::after {{ content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 50%; background: linear-gradient(180deg, rgba(255,255,255,0.18), transparent); pointer-events: none; }}
+  [data-theme="dark"] .summary-card {{ background: color-mix(in srgb, var(--accent) 38%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); }}
+  .summary-card .card-icon {{ font-size: 24px; z-index: 1; }}
+  .summary-card .card-body {{ flex: 1; min-width: 0; z-index: 1; }}
+  .summary-card .card-label {{ font-size: 11px; opacity: 0.85; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+  .summary-card .card-value {{ font-size: 18px; font-weight: bold; }}
+  .summary-card .card-trend {{ font-size: 10px; opacity: 0.75; margin-top: 2px; }}
+  .metric-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; margin-bottom: 24px; }}
+  .metric-card {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; text-align: center; box-shadow: var(--shadow); transition: all 0.25s; }}
+  .metric-card:hover {{ transform: translateY(-3px); box-shadow: var(--shadow-hover); border-color: var(--primary); }}
+  .metric-card .metric-label {{ font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }}
+  .metric-card .metric-value {{ font-size: 24px; font-weight: bold; color: var(--primary); }}
+  .content-area {{ max-width: 1280px; width: 100%; padding: 24px; }}
+  .content-wrapper {{ margin-left: 250px; flex: 1; display: flex; justify-content: center; min-width: 0; }}
+  .section {{ background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 28px; margin-bottom: 24px; border-left: 4px solid var(--accent); transition: box-shadow 0.3s, transform 0.3s; }}
+  .section:hover {{ box-shadow: var(--shadow-hover); }}
+  .section h2 {{ font-size: 20px; color: var(--text); margin-bottom: 4px; font-weight: 600; }}
+  .section .subtitle {{ font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; font-weight: 400; }}
+  .summary-bar {{ background: var(--surface-3); padding: 12px 16px; border-radius: var(--radius-sm); margin-bottom: 18px; font-size: 13px; color: var(--text-secondary); }}
+  .summary-bar span {{ font-weight: 600; color: var(--primary); }}
+  .chart-container {{ margin-bottom: 24px; }}
+  .chart-buttons {{ display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }}
+  .chart-btn {{ padding: 7px 16px; background: var(--surface-3); border: 1px solid var(--border); border-radius: 999px; font-size: 12px; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; font-weight: 500; }}
+  .chart-btn:hover {{ background: var(--primary-light); border-color: var(--primary); color: var(--primary); }}
+  .chart-btn.active {{ background: var(--primary); color: #fff; border-color: var(--primary); box-shadow: 0 2px 8px rgba(0,0,0,0.15); }}
+  .chart-toolbar {{ display: flex; gap: 8px; margin-bottom: 10px; }}
+  .chart-tool-btn {{ padding: 5px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11px; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; }}
+  .chart-tool-btn:hover {{ background: var(--primary); color: #fff; border-color: var(--primary); }}
+  .chart-container.fullscreen {{ position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: var(--surface); z-index: 9999; padding: 24px; overflow: auto; }}
+  .chart-container.fullscreen .chart-canvas {{ height: calc(100vh - 140px) !important; }}
+  .col-selector {{ display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 8px 12px; margin-bottom: 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; }}
+  .col-sel-label {{ font-weight: 600; color: var(--text-secondary); margin-right: 2px; }}
+  .col-cb-item {{ display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--text); user-select: none; }}
+  .col-cb-item input {{ margin: 0; accent-color: var(--primary); }}
+  .col-cb-item:hover {{ color: var(--primary); }}
+  .col-sel-toggle {{ padding: 4px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11px; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; }}
+  .col-sel-toggle:hover {{ background: var(--primary); color: #fff; border-color: var(--primary); }}
+  .geo-controls {{ display: none; flex-wrap: wrap; gap: 12px; align-items: flex-start; padding: 12px 14px; margin-bottom: 12px; background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; }}
   .geo-ctrl-item {{ display: flex; align-items: center; gap: 6px; }}
-  .geo-ctrl-item label {{ color: #555; font-weight: 600; white-space: nowrap; }}
-  .geo-ctrl-item select {{ padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; max-width: 160px; }}
+  .geo-ctrl-item label {{ color: var(--text-secondary); font-weight: 600; white-space: nowrap; }}
+  .geo-ctrl-item select {{ padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; max-width: 160px; background: var(--surface); color: var(--text); }}
   .geo-filter-vals {{ display: flex; flex-wrap: wrap; gap: 6px 12px; max-width: 520px; }}
-  .geo-fv-item {{ display: inline-flex; align-items: center; gap: 3px; cursor: pointer; color: #444; }}
-  .geo-fv-item input {{ margin: 0; }}
-  .chart-canvas {{ height: 350px; }}
-  .table-container {{ border-top: 1px solid #eee; padding-top: 16px; }}
-  .table-header {{ font-size: 14px; font-weight: 600; color: #2E75B6; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }}
-  .table-row-count {{ font-size: 12px; font-weight: normal; color: #999; }}
-  .table-wrap {{ overflow: auto; max-height: 360px; -webkit-overflow-scrolling: touch; border: 1px solid #eee; border-radius: 6px; }}
+  .geo-fv-item {{ display: inline-flex; align-items: center; gap: 3px; cursor: pointer; color: var(--text); }}
+  .geo-fv-item input {{ margin: 0; accent-color: var(--primary); }}
+  .chart-canvas {{ height: 400px; }}
+  .table-container {{ border-top: 1px solid var(--border); padding-top: 18px; }}
+  .table-header {{ font-size: 15px; font-weight: 600; color: var(--primary); margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }}
+  .table-row-count {{ font-size: 12px; font-weight: normal; color: var(--text-secondary); }}
+  .table-toolbar {{ display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }}
+  .table-search {{ padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; min-width: 220px; outline: none; background: var(--surface); color: var(--text); transition: all 0.2s; }}
+  .table-search:focus {{ border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }}
+  .table-tool-btn {{ padding: 6px 14px; background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; }}
+  .table-tool-btn:hover {{ background: var(--primary); color: #fff; border-color: var(--primary); }}
+  .table-wrap {{ overflow: auto; max-height: 380px; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: var(--radius-sm); }}
   table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-  th {{ background: #f8f9fa; color: #495057; font-weight: 600; padding: 10px 12px; text-align: left; border-bottom: 2px solid #dee2e6; position: sticky; top: 0; z-index: 2; }}
-  td {{ padding: 8px 12px; border-bottom: 1px solid #f0f0f0; }}
-  tbody tr:nth-child(even) {{ background: #fafbfc; }}
-  tbody tr:hover {{ background: #e9f5ff; }}
-  tbody tr.total-row {{ background: #D9E2F3; font-weight: bold; }}
-  .slide-card {{ background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 12px; overflow: hidden; }}
-  .slide-num {{ background: #2E75B6; color: #fff; font-size: 12px; padding: 6px 12px; }}
+  th {{ background: var(--th-bg); color: var(--th-color); font-weight: 700; padding: 11px 14px; text-align: left; border-bottom: 2px solid var(--border); position: sticky; top: 0; z-index: 2; cursor: pointer; user-select: none; white-space: nowrap; }}
+  th:hover {{ background: var(--primary-light); color: var(--primary); }}
+  .sort-arrow {{ font-size: 10px; color: var(--primary); margin-left: 4px; }}
+  tbody tr.hidden {{ display: none; }}
+  td {{ padding: 9px 14px; border-bottom: 1px solid var(--border); color: var(--text); }}
+  td.num-cell {{ text-align: right; font-variant-numeric: tabular-nums; }}
+  tbody tr:nth-child(even) {{ background: var(--zebra); }}
+  tbody tr:hover {{ background: var(--hover-bg); }}
+  tbody tr.total-row {{ background: var(--total-bg); font-weight: bold; }}
+  .slide-card {{ background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 14px; overflow: hidden; }}
+  .slide-num {{ background: var(--primary); color: #fff; font-size: 12px; padding: 7px 14px; font-weight: 600; }}
   .slide-card img {{ width: 100%; display: block; cursor: pointer; }}
-  .slide-card img.zoomed {{ position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: contain; background: rgba(0,0,0,0.9); z-index: 1000; }}
-  .footer {{ text-align: center; padding: 24px; color: #999; font-size: 12px; }}
+  .slide-card img.zoomed {{ position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: contain; background: rgba(0,0,0,0.92); z-index: 1000; }}
+  .footer {{ text-align: center; padding: 28px; color: var(--text-secondary); font-size: 12px; }}
+  .back-to-top {{ position: fixed; right: 24px; bottom: 24px; width: 46px; height: 46px; border-radius: 50%; background: var(--primary); color: #fff; border: none; font-size: 22px; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.25); opacity: 0; visibility: hidden; transition: all 0.3s; z-index: 90; }}
+  .back-to-top.show {{ opacity: 1; visibility: visible; }}
+  .back-to-top:hover {{ background: var(--primary-dark); transform: translateY(-2px); }}
+  .section.search-hit {{ outline: 2px solid #C8102E; outline-offset: 2px; }}
   @media (max-width: 768px) {{
     .main-layout {{ flex-direction: column; }}
-    .sidebar {{ position: static; width: 100%; min-width: 100%; height: auto; box-shadow: none; border-bottom: 1px solid #eee; }}
+    .sidebar {{ position: static; width: 100%; min-width: 100%; height: auto; box-shadow: none; border-bottom: 1px solid var(--border); top: auto; }}
     .content-wrapper {{ margin-left: 0; }}
-    .content-area {{ max-width: 100%; }}
-    .summary-cards {{ grid-template-columns: repeat(3, 1fr); }}
-    .chart-canvas {{ height: 280px; }}
+    .content-area {{ max-width: 100%; padding: 16px; }}
+    .summary-cards {{ grid-template-columns: repeat(2, 1fr); }}
+    .chart-canvas {{ height: 300px; }}
+    .section {{ padding: 20px; }}
   }}
 </style>
 </head>
@@ -1027,12 +1316,18 @@ def generate_html_report(
   <p>{_escape_html(report_subtitle)}</p>
 </div>
 <div class="nav-bar">
-  <button class="nav-btn" onclick="scrollToTop()">回到顶部</button>
-  <button class="nav-btn" onclick="window.print()">打印报告</button>
+  <button class="nav-btn" onclick="scrollToTop()">🏠 回到顶部</button>
+  <button class="nav-btn" onclick="window.print()">🖨 打印报告</button>
+  <button class="nav-btn theme-toggle" id="themeToggleBtn" onclick="toggleTheme()">🌙 暗色模式</button>
+  <input type="text" id="globalSearchInput" class="nav-search" placeholder="🔍 全局搜索区块标题..." oninput="globalSearch(this.value)">
 </div>
 <div class="main-layout">
   <div class="sidebar">
-    <h3>报告目录</h3>
+    <div class="toc-hd">
+      <h3>报告目录</h3>
+      <button class="toc-toggle-btn" onclick="expandAllToc()">展开全部</button>
+      <button class="toc-toggle-btn" onclick="collapseAllToc()">收起全部</button>
+    </div>
     <ul>{''.join(toc_html_parts)}</ul>
     <h3>数据摘要</h3>
     <div class="summary-cards">{summary_cards_html}</div>
@@ -1044,6 +1339,7 @@ def generate_html_report(
     </div>
   </div>
 </div>
+<button id="backToTopBtn" class="back-to-top" onclick="scrollToTop()" title="返回顶部">↑</button>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 <script>
   // 地图数据加载状态：'pending' | 'ready' | 'failed'
@@ -1236,45 +1532,49 @@ def generate_html_report(
       else sizes.push(Math.round(10 + (metricVals[i] - mMin) / (mMax - mMin) * 40));
     }}
 
-    // tooltip formatter
-    var tipParts = ['function(p){{var s=p.name+"<br/>";var lon=p.value[0],lat=p.value[1];'];
-    tipParts.push('s+="经度:"+lon.toFixed(4)+", 纬度:"+lat.toFixed(4)+"<br/>";');
-    for (var mi = 0; mi < d.metricIndices.length; mi++) {{
-      tipParts.push('s+="' + d.headers[d.metricIndices[mi]] + ':"+p.value[' + (mi+2) + ']+"<br/>";');
-    }}
-    tipParts.push('return s;}}');
-    var tipFn = tipParts.join('');
+    // tooltip formatter 稍后以真实函数注入（避免 eval）
+    var metricHeaders = d.metricIndices.map(function(mi) {{ return d.headers[mi]; }});
 
     var seriesType = chartType === 'map' ? 'scatter' : 'effectScatter';
+    var _labelColor = isDarkTheme() ? '#e0e0e0' : '#182B49';
+    var _areaColor = isDarkTheme() ? '#1f2a4a' : '#F2F0EB';
+    var _areaBorder = isDarkTheme() ? '#3a4a6a' : '#999';
+    var _emphArea = isDarkTheme() ? '#2a3a5a' : '#DCE6F0';
     var itemStyle = chartType === 'map' ?
-      {{color: '#C8102E', opacity: 0.85, borderColor: '#333', borderWidth: 0.5}} :
+      {{color: '#C8102E', opacity: 0.85, borderColor: _labelColor, borderWidth: 0.5}} :
       {{color: '#ED7D31', shadowBlur: 10, shadowColor: 'rgba(237,125,49,0.5)'}};
     var extra = chartType === 'heatmap' ?
       {{showEffectOn: 'render', rippleEffect: {{brushType: 'stroke'}}}} : {{}};
 
     var opt = {{
-      title: {{text: metricName + ' 分布', left: 'center', textStyle: {{fontSize: 14}}}},
+      title: {{text: metricName + ' 分布', left: 'center', textStyle: {{fontSize: 14, color: getChartTextColor()}}}},
       tooltip: {{trigger: 'item'}},
       geo: {{
         map: 'china', roam: true, zoom: zoom,
         center: [centerLon, centerLat],
-        itemStyle: {{areaColor: '#F2F0EB', borderColor: '#999'}},
-        emphasis: {{itemStyle: {{areaColor: '#DCE6F0'}}, label: {{show: false}}}}
+        itemStyle: {{areaColor: _areaColor, borderColor: _areaBorder}},
+        emphasis: {{itemStyle: {{areaColor: _emphArea}}, label: {{show: false}}}}
       }},
       series: [{{
         name: metricName, type: seriesType, coordinateSystem: 'geo',
         data: points, symbolSize: sizes, itemStyle: itemStyle,
-        label: {{show: true, formatter: '{{b}}', position: 'right', fontSize: 10, color: '#182B49'}},
+        label: {{show: true, formatter: '{{b}}', position: 'right', fontSize: 10, color: _labelColor}},
       }}].concat([extra])
     }};
     // 合并 extra 到 series[0]
     for (var k in extra) {{ opt.series[0][k] = extra[k]; }}
     // 移除多余的空对象
     opt.series = [opt.series[0]];
-    // 注入 tooltip formatter（不能 JSON 序列化函数，直接赋值）
-    opt.tooltip.formatter = tipFn;
-    // eval tipFn 为真实函数
-    try {{ opt.tooltip.formatter = eval('(' + tipFn + ')'); }} catch(e) {{}}
+    // 直接注入 tooltip formatter 为真实函数（不使用 eval）
+    opt.tooltip.formatter = function(p) {{
+      var s = p.name + '<br/>';
+      var lon = p.value[0], lat = p.value[1];
+      s += '经度:' + lon.toFixed(4) + ', 纬度:' + lat.toFixed(4) + '<br/>';
+      for (var i = 0; i < metricHeaders.length; i++) {{
+        s += metricHeaders[i] + ':' + p.value[i + 2] + '<br/>';
+      }}
+      return s;
+    }};
     return opt;
   }}
 
@@ -1314,6 +1614,52 @@ def generate_html_report(
     onGeoMetricChange(sectionId);
   }}
 
+  // 数值格式化（JS 端，与 Python _format_num 对应）：千分位/万/亿/百分比
+  function formatNumber(val, isPct) {{
+    if (val === null || val === undefined || val === '') return '';
+    var num = Number(val);
+    if (isNaN(num)) return String(val);
+    if (isPct && num >= 0 && num <= 1) return (num * 100).toFixed(2) + '%';
+    var abs = Math.abs(num);
+    if (abs >= 100000000) return (num / 100000000).toFixed(2) + '亿';
+    if (abs >= 10000) return (num / 10000).toFixed(2) + '万';
+    var s = num.toFixed(2).replace(/\B(?=(\d{{3}})+(?!\d))/g, ',');
+    if (s.indexOf('.00') === s.length - 3) s = s.slice(0, -3);
+    return s;
+  }}
+  function isPctName(name) {{ return /占比|百分比|pct/i.test(name || ''); }}
+
+  // 轴 tooltip formatter（统一格式化数值，百分比系列显示百分比）
+  function axisTipFormatter(params) {{
+    var s = (params[0].axisValueLabel || params[0].name) + '<br/>';
+    for (var i = 0; i < params.length; i++) {{
+      var p = params[i];
+      s += p.marker + p.seriesName + ': ' + formatNumber(p.value, isPctName(p.seriesName)) + '<br/>';
+    }}
+    return s;
+  }}
+  var yAxisLabelFormatter = function(v) {{ return formatNumber(v, false); }};
+
+  // 主题辅助：根据当前主题返回图表配色
+  function isDarkTheme() {{ return document.documentElement.getAttribute('data-theme') === 'dark'; }}
+  function getChartTextColor() {{ return isDarkTheme() ? '#e0e0e0' : '#1a1a2e'; }}
+  function getChartAxisColor() {{ return isDarkTheme() ? '#a0a0a0' : '#6c757d'; }}
+  function getChartSplitColor() {{ return isDarkTheme() ? '#2a3a5a' : '#e9ecef'; }}
+  // ECharts 线性渐变（柱状图填充：顶部不透明→底部半透明）
+  function barGradient(color) {{
+    return {{type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [
+      {{offset: 0, color: color}},
+      {{offset: 1, color: color + '55'}}
+    ]}};
+  }}
+  // ECharts 面积渐变（折线/面积图填充）
+  function areaGradient(color) {{
+    return {{type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [
+      {{offset: 0, color: color + '99'}},
+      {{offset: 1, color: color + '0D'}}
+    ]}};
+  }}
+
   // 根据当前列选择状态动态构建普通图表 ECharts option
   function buildChartOption(sectionId, chartType) {{
     var d = chartData[sectionId];
@@ -1338,6 +1684,21 @@ def generate_html_report(
     }}
 
     var palette = ['#C8102E', '#182B49', '#5B9BD5', '#ED7D31', '#70AD47', '#A5A5A5', '#FFC000', '#4472C4'];
+    var legendData = activeSeries.map(function(s){{return s.name;}});
+
+    // 主题相关公共配置
+    var tipBg = isDarkTheme() ? '#16213e' : '#ffffff';
+    var tipBorder = isDarkTheme() ? '#2a3a5a' : '#e9ecef';
+    var tipText = isDarkTheme() ? '#e0e0e0' : '#1a1a2e';
+    var tipCss = 'box-shadow: 0 2px 10px rgba(0,0,0,0.15); border-radius: 8px;';
+    var axisColor = getChartAxisColor();
+    var splitColor = getChartSplitColor();
+    var titleColor = getChartTextColor();
+    var symbolBorder = isDarkTheme() ? '#16213e' : '#ffffff';
+    var pieBorder = isDarkTheme() ? '#16213e' : '#ffffff';
+    var baseGrid = {{left: '3%', right: '4%', bottom: '15%', top: '15%', containLabel: true}};
+    function catAxis() {{ return {{type: 'category', data: d.categories, axisLabel: {{rotate: 30, color: axisColor}}, axisLine: {{lineStyle: {{color: axisColor}}}}, splitLine: {{lineStyle: {{color: splitColor}}}}}}; }}
+    function valAxis() {{ return {{type: 'value', axisLabel: {{formatter: yAxisLabelFormatter, color: axisColor}}, axisLine: {{lineStyle: {{color: axisColor}}}}, splitLine: {{lineStyle: {{color: splitColor}}}}}}; }}
 
     if (chartType === 'pie') {{
       var s = activeSeries[0];
@@ -1345,55 +1706,137 @@ def generate_html_report(
       for (var i = 0; i < d.categories.length; i++) {{
         pieData.push({{name: d.categories[i], value: (s.data[i] || 0)}});
       }}
+      var total = 0;
+      for (var i = 0; i < pieData.length; i++) total += pieData[i].value;
       return {{
-        title: {{text: d.title, left: 'center', textStyle: {{fontSize: 14}}}},
-        tooltip: {{trigger: 'item', formatter: '{{b}}: {{c}} ({{d}}%)'}},
-        legend: {{orient: 'vertical', left: 'left'}},
+        title: {{text: d.title, left: 'center', textStyle: {{fontSize: 14, color: titleColor}}}},
+        tooltip: {{trigger: 'item', formatter: function(p){{ return p.name + ': ' + formatNumber(p.value, isPctName(p.seriesName)) + ' (' + p.percent.toFixed(1) + '%)'; }}, backgroundColor: tipBg, borderColor: tipBorder, borderWidth: 1, textStyle: {{color: tipText}}, extraCssText: tipCss}},
+        legend: {{orient: 'vertical', left: 'left', textStyle: {{color: axisColor}}}},
+        graphic: {{type: 'text', left: 'center', top: 'center', style: {{text: '总计\\n' + formatNumber(total, isPctName(d.title)), textAlign: 'center', textVerticalAlign: 'middle', fontSize: 13, fill: titleColor}}}},
         series: [{{
-          type: 'pie', radius: ['40%', '70%'], center: ['50%', '55%'],
-          avoidLabelOverlap: true, label: {{show: true}},
-          itemStyle: {{borderRadius: 4, borderColor: '#fff', borderWidth: 2}},
+          type: 'pie', radius: ['45%', '72%'], center: ['50%', '50%'],
+          avoidLabelOverlap: true, label: {{show: true, color: axisColor}},
+          itemStyle: {{borderRadius: 6, borderColor: pieBorder, borderWidth: 2}},
           data: pieData,
         }}],
+        animationDuration: 1000, animationEasing: 'cubicOut',
       }};
     }}
 
     if (chartType === 'line') {{
       var series = [];
       for (var i = 0; i < activeSeries.length; i++) {{
+        var c = palette[i % palette.length];
         series.push({{
           name: activeSeries[i].name, type: 'line', data: activeSeries[i].data,
           smooth: true, symbol: 'circle', symbolSize: 8,
-          lineStyle: {{width: 3}}, itemStyle: {{color: palette[i % palette.length]}},
+          lineStyle: {{width: 3, color: c}}, itemStyle: {{color: c, borderColor: symbolBorder, borderWidth: 2}},
+          areaStyle: {{color: areaGradient(c)}},
         }});
       }}
       return {{
-        title: {{text: d.title, left: 'center', textStyle: {{fontSize: 14}}}},
-        tooltip: {{trigger: 'axis'}},
-        legend: {{data: activeSeries.map(function(s){{return s.name;}}), bottom: 0}},
-        grid: {{left: '3%', right: '4%', bottom: '15%', top: '15%', containLabel: true}},
-        xAxis: {{type: 'category', data: d.categories, axisLabel: {{rotate: 30}}}},
-        yAxis: {{type: 'value'}},
+        title: {{text: d.title, left: 'center', textStyle: {{fontSize: 14, color: titleColor}}}},
+        tooltip: {{trigger: 'axis', formatter: axisTipFormatter, backgroundColor: tipBg, borderColor: tipBorder, borderWidth: 1, textStyle: {{color: tipText}}, extraCssText: tipCss}},
+        legend: {{data: legendData, bottom: 0, textStyle: {{color: axisColor}}}},
+        grid: baseGrid,
+        xAxis: catAxis(),
+        yAxis: valAxis(),
         series: series,
+        animationDuration: 1000, animationEasing: 'cubicOut',
       }};
     }}
 
-    // bar (default)
+    // 面积图：折线 + 大面积渐变填充
+    if (chartType === 'area') {{
+      var series = [];
+      for (var i = 0; i < activeSeries.length; i++) {{
+        var c = palette[i % palette.length];
+        series.push({{
+          name: activeSeries[i].name, type: 'line', data: activeSeries[i].data,
+          smooth: true, symbol: 'circle', symbolSize: 8,
+          lineStyle: {{width: 3, color: c}}, itemStyle: {{color: c, borderColor: symbolBorder, borderWidth: 2}},
+          areaStyle: {{color: areaGradient(c), opacity: 0.6}},
+        }});
+      }}
+      return {{
+        title: {{text: d.title, left: 'center', textStyle: {{fontSize: 14, color: titleColor}}}},
+        tooltip: {{trigger: 'axis', formatter: axisTipFormatter, backgroundColor: tipBg, borderColor: tipBorder, borderWidth: 1, textStyle: {{color: tipText}}, extraCssText: tipCss}},
+        legend: {{data: legendData, bottom: 0, textStyle: {{color: axisColor}}}},
+        grid: baseGrid,
+        xAxis: catAxis(),
+        yAxis: valAxis(),
+        series: series,
+        animationDuration: 1000, animationEasing: 'cubicOut',
+      }};
+    }}
+
+    // 雷达图：每个分类作为一个维度
+    if (chartType === 'radar') {{
+      var indicators = [];
+      for (var c = 0; c < d.categories.length; c++) {{
+        var mx = 0;
+        for (var i = 0; i < activeSeries.length; i++) {{
+          var v = activeSeries[i].data[c] || 0;
+          if (v > mx) mx = v;
+        }}
+        indicators.push({{name: d.categories[c], max: Math.ceil(mx * 1.1) || 1}});
+      }}
+      var radarData = [];
+      for (var i = 0; i < activeSeries.length; i++) {{
+        radarData.push({{name: activeSeries[i].name, value: activeSeries[i].data, itemStyle: {{color: palette[i % palette.length]}}, areaStyle: {{opacity: 0.2}}}});
+      }}
+      return {{
+        title: {{text: d.title, left: 'center', textStyle: {{fontSize: 14, color: titleColor}}}},
+        tooltip: {{trigger: 'item', backgroundColor: tipBg, borderColor: tipBorder, borderWidth: 1, textStyle: {{color: tipText}}, extraCssText: tipCss}},
+        legend: {{data: legendData, bottom: 0, textStyle: {{color: axisColor}}}},
+        radar: {{indicator: indicators, radius: '65%', axisName: {{color: axisColor}}, splitLine: {{lineStyle: {{color: splitColor}}}}, splitArea: {{areaStyle: {{color: [tipBg, 'transparent']}}}}}},
+        series: [{{type: 'radar', data: radarData}}],
+        animationDuration: 1000, animationEasing: 'cubicOut',
+      }};
+    }}
+
+    // 散点图：前两个数值列作为 x/y
+    if (chartType === 'scatter') {{
+      var xS = activeSeries[0];
+      var yS = activeSeries[1] || activeSeries[0];
+      var scatterData = [];
+      for (var i = 0; i < xS.data.length; i++) {{
+        scatterData.push([xS.data[i] || 0, yS.data[i] || 0, d.categories[i] || ('项' + (i+1))]);
+      }}
+      var xName = xS.name, yName = yS.name;
+      return {{
+        title: {{text: d.title, left: 'center', textStyle: {{fontSize: 14, color: titleColor}}}},
+        tooltip: {{trigger: 'item', formatter: function(p){{ return p.value[2] + '<br/>' + xName + ': ' + formatNumber(p.value[0], isPctName(xName)) + '<br/>' + yName + ': ' + formatNumber(p.value[1], isPctName(yName)); }}, backgroundColor: tipBg, borderColor: tipBorder, borderWidth: 1, textStyle: {{color: tipText}}, extraCssText: tipCss}},
+        legend: {{data: [xName + ' vs ' + yName], bottom: 0, textStyle: {{color: axisColor}}}},
+        grid: baseGrid,
+        xAxis: {{type: 'value', name: xName, nameLocation: 'middle', nameGap: 30, nameTextStyle: {{color: axisColor}}, axisLabel: {{color: axisColor}}, axisLine: {{lineStyle: {{color: axisColor}}}}, splitLine: {{lineStyle: {{color: splitColor}}}}}},
+        yAxis: {{type: 'value', name: yName, nameLocation: 'middle', nameGap: 40, nameTextStyle: {{color: axisColor}}, axisLabel: {{formatter: yAxisLabelFormatter, color: axisColor}}, axisLine: {{lineStyle: {{color: axisColor}}}}, splitLine: {{lineStyle: {{color: splitColor}}}}}},
+        series: [{{type: 'scatter', data: scatterData, symbolSize: 10, itemStyle: {{color: palette[0]}}}}],
+        animationDuration: 1000, animationEasing: 'cubicOut',
+      }};
+    }}
+
+    // bar (default) —— 支持 stack 切换，柱状图用线性渐变填充
+    var stackKey = (window._stackState && window._stackState[sectionId]) ? 'stack_' + sectionId : null;
     var series = [];
     for (var i = 0; i < activeSeries.length; i++) {{
-      series.push({{
+      var c = palette[i % palette.length];
+      var item = {{
         name: activeSeries[i].name, type: 'bar', data: activeSeries[i].data,
-        barWidth: '50%', itemStyle: {{color: palette[i % palette.length], borderRadius: [4,4,0,0]}},
-      }});
+        barWidth: '50%', itemStyle: {{color: barGradient(c), borderRadius: [6, 6, 0, 0]}},
+      }};
+      if (stackKey) item.stack = stackKey;
+      series.push(item);
     }}
     return {{
-      title: {{text: d.title, left: 'center', textStyle: {{fontSize: 14}}}},
-      tooltip: {{trigger: 'axis', axisPointer: {{type: 'shadow'}}}},
-      legend: {{data: activeSeries.map(function(s){{return s.name;}}), bottom: 0}},
-      grid: {{left: '3%', right: '4%', bottom: '15%', top: '15%', containLabel: true}},
-      xAxis: {{type: 'category', data: d.categories, axisLabel: {{rotate: 30}}}},
-      yAxis: {{type: 'value'}},
+      title: {{text: d.title, left: 'center', textStyle: {{fontSize: 14, color: titleColor}}}},
+      tooltip: {{trigger: 'axis', axisPointer: {{type: 'shadow'}}, formatter: axisTipFormatter, backgroundColor: tipBg, borderColor: tipBorder, borderWidth: 1, textStyle: {{color: tipText}}, extraCssText: tipCss}},
+      legend: {{data: legendData, bottom: 0, textStyle: {{color: axisColor}}}},
+      grid: baseGrid,
+      xAxis: catAxis(),
+      yAxis: valAxis(),
       series: series,
+      animationDuration: 1000, animationEasing: 'cubicOut',
     }};
   }}
 
@@ -1440,13 +1883,269 @@ def generate_html_report(
     window.scrollTo({{ top: 0, behavior: 'smooth' }});
   }}
   
+  // 列选择全选/全不选（任务6）
+  function onColSelectAll(sectionId, checked) {{
+    var checkboxes = document.querySelectorAll('#col_sel_' + sectionId + ' input[type="checkbox"][data-series]');
+    for (var i = 0; i < checkboxes.length; i++) {{
+      checkboxes[i].checked = checked;
+    }}
+    onColChange(sectionId);
+  }}
+
+  // 表格排序：点击表头切换升/降/原序（任务7）
+  var _tableOrigOrder = {{}};
+  function sortTable(sectionId, colIdx) {{
+    var table = document.getElementById('table_' + sectionId);
+    if (!table) return;
+    var tbody = table.tBodies[0];
+    if (!tbody) return;
+    var th = table.querySelector('th[data-col="' + colIdx + '"]');
+    if (!th) return;
+    if (!_tableOrigOrder[sectionId]) {{
+      _tableOrigOrder[sectionId] = Array.prototype.slice.call(tbody.rows);
+    }}
+    var order = th.getAttribute('data-sort') || '';
+    var newOrder = order === 'asc' ? 'desc' : (order === 'desc' ? '' : 'asc');
+    var allTh = table.querySelectorAll('th');
+    for (var i = 0; i < allTh.length; i++) {{
+      allTh[i].setAttribute('data-sort', '');
+      var ar = allTh[i].querySelector('.sort-arrow');
+      if (ar) ar.textContent = '';
+    }}
+    th.setAttribute('data-sort', newOrder);
+    var arrowEl = th.querySelector('.sort-arrow');
+    if (arrowEl) arrowEl.textContent = newOrder === 'asc' ? '▲' : (newOrder === 'desc' ? '▼' : '');
+    if (newOrder === '') {{
+      var orig = _tableOrigOrder[sectionId];
+      for (var i = 0; i < orig.length; i++) tbody.appendChild(orig[i]);
+      return;
+    }}
+    var rows = Array.prototype.slice.call(tbody.rows);
+    rows.sort(function(a, b) {{
+      var av = a.cells[colIdx] ? a.cells[colIdx].textContent.trim() : '';
+      var bv = b.cells[colIdx] ? b.cells[colIdx].textContent.trim() : '';
+      var an = parseFloat(av.replace(/,/g, '')), bn = parseFloat(bv.replace(/,/g, ''));
+      if (!isNaN(an) && !isNaN(bn)) return newOrder === 'asc' ? an - bn : bn - an;
+      return newOrder === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+    }});
+    for (var i = 0; i < rows.length; i++) tbody.appendChild(rows[i]);
+  }}
+
+  // 表格搜索：实时过滤行（任务7）
+  function filterTable(sectionId, keyword) {{
+    var table = document.getElementById('table_' + sectionId);
+    if (!table || !table.tBodies[0]) return;
+    var kw = (keyword || '').toLowerCase().trim();
+    var rows = table.tBodies[0].rows;
+    for (var i = 0; i < rows.length; i++) {{
+      if (!kw) {{ rows[i].classList.remove('hidden'); }}
+      else {{ rows[i].classList.toggle('hidden', rows[i].textContent.toLowerCase().indexOf(kw) === -1); }}
+    }}
+  }}
+
+  // 导出表格为 CSV（任务7）
+  function exportTableCSV(sectionId) {{
+    var table = document.getElementById('table_' + sectionId);
+    if (!table) return;
+    function csvCell(v) {{
+      v = (v === null || v === undefined) ? '' : String(v);
+      if (v.indexOf(',') >= 0 || v.indexOf('"') >= 0 || v.indexOf('\\n') >= 0) v = '"' + v.replace(/"/g, '""') + '"';
+      return v;
+    }}
+    var rows = [];
+    var headCells = table.querySelectorAll('thead th');
+    var headRow = [];
+    for (var i = 0; i < headCells.length; i++) headRow.push(csvCell(headCells[i].textContent.replace(/[▲▼]/g, '').trim()));
+    rows.push(headRow.join(','));
+    var bodyRows = table.querySelectorAll('tbody tr');
+    for (var i = 0; i < bodyRows.length; i++) {{
+      if (bodyRows[i].classList.contains('hidden')) continue;
+      var cells = bodyRows[i].cells;
+      var rowData = [];
+      for (var j = 0; j < cells.length; j++) rowData.push(csvCell(cells[j].textContent));
+      rows.push(rowData.join(','));
+    }}
+    var csv = '\\ufeff' + rows.join('\\n');
+    var blob = new Blob([csv], {{type: 'text/csv;charset=utf-8;'}});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = sectionId + '.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }}
+
+  // 图表全屏切换（任务8）
+  function toggleChartFullscreen(sectionId) {{
+    var ctr = document.getElementById('chart_ctr_' + sectionId);
+    if (!ctr) return;
+    ctr.classList.toggle('fullscreen');
+    if (chartInstances[sectionId]) setTimeout(function(){{ chartInstances[sectionId].resize(); }}, 100);
+  }}
+
+  // 导出图表为 PNG（任务8）：背景色随主题
+  function exportChartPNG(sectionId) {{
+    if (!chartInstances[sectionId]) return;
+    var bg = isDarkTheme() ? '#16213e' : '#ffffff';
+    var url = chartInstances[sectionId].getDataURL({{type: 'png', pixelRatio: 2, backgroundColor: bg}});
+    var a = document.createElement('a');
+    a.href = url; a.download = sectionId + '.png';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }}
+
+  // 堆叠/并排切换（仅柱状图，任务8）
+  function toggleStack(sectionId) {{
+    if (!window._stackState) window._stackState = {{}};
+    window._stackState[sectionId] = !window._stackState[sectionId];
+    onColChange(sectionId);
+  }}
+
+  // 目录展开/收起全部（任务4）
+  function expandAllToc() {{
+    var groups = document.querySelectorAll('.toc-group');
+    for (var i = 0; i < groups.length; i++) groups[i].classList.add('open');
+    saveTocState();
+  }}
+  function collapseAllToc() {{
+    var groups = document.querySelectorAll('.toc-group');
+    for (var i = 0; i < groups.length; i++) groups[i].classList.remove('open');
+    saveTocState();
+  }}
+
+  // 单个目录组切换 + 持久化（任务9）
+  function toggleTocGroup(el) {{
+    el.parentElement.classList.toggle('open');
+    saveTocState();
+  }}
+  function saveTocState() {{
+    try {{
+      var groups = document.querySelectorAll('.toc-group');
+      var state = [];
+      for (var i = 0; i < groups.length; i++) state.push(groups[i].classList.contains('open'));
+      localStorage.setItem('toc_open_state', JSON.stringify(state));
+    }} catch(e) {{}}
+  }}
+  function restoreTocState() {{
+    try {{
+      var saved = localStorage.getItem('toc_open_state');
+      if (!saved) return;
+      var state = JSON.parse(saved);
+      var groups = document.querySelectorAll('.toc-group');
+      for (var i = 0; i < groups.length && i < state.length; i++) {{
+        if (state[i]) groups[i].classList.add('open');
+        else groups[i].classList.remove('open');
+      }}
+    }} catch(e) {{}}
+  }}
+
+  // 全局搜索：高亮匹配的 section 标题并展开对应目录（任务9）
+  function globalSearch(keyword) {{
+    var kw = (keyword || '').toLowerCase().trim();
+    var sections = document.querySelectorAll('.section');
+    var links = document.querySelectorAll('.sidebar a');
+    for (var i = 0; i < sections.length; i++) sections[i].classList.remove('search-hit');
+    for (var i = 0; i < links.length; i++) links[i].classList.remove('search-hit');
+    if (!kw) return;
+    for (var i = 0; i < sections.length; i++) {{
+      var titleEl = sections[i].querySelector('h2');
+      if (titleEl && titleEl.textContent.toLowerCase().indexOf(kw) >= 0) {{
+        sections[i].classList.add('search-hit');
+        var sid = sections[i].id;
+        for (var j = 0; j < links.length; j++) {{
+          if ((links[j].getAttribute('href') || '') === '#' + sid) {{
+            links[j].classList.add('search-hit');
+            var grp = links[j].closest('.toc-group');
+            if (grp) grp.classList.add('open');
+          }}
+        }}
+      }}
+    }}
+  }}
+
   window.addEventListener('resize', function() {{
     Object.keys(chartInstances).forEach(function(key) {{
       chartInstances[key].resize();
     }});
   }});
-  
-  document.addEventListener('DOMContentLoaded', initCharts);
+
+  // ESC 退出全屏图表
+  document.addEventListener('keydown', function(e) {{
+    if (e.key === 'Escape' || e.keyCode === 27) {{
+      var fs = document.querySelector('.chart-container.fullscreen');
+      if (fs) fs.classList.remove('fullscreen');
+    }}
+  }});
+
+  // 滚动监听：返回顶部按钮显示 + 目录高亮（任务9）
+  var _backToTopBtn = document.getElementById('backToTopBtn');
+  window.addEventListener('scroll', function() {{
+    if (_backToTopBtn) _backToTopBtn.classList.toggle('show', window.pageYOffset > 300);
+  }});
+
+  function initScrollSpy() {{
+    var sections = document.querySelectorAll('.section[id]');
+    if (!('IntersectionObserver' in window)) return;
+    var io = new IntersectionObserver(function(entries) {{
+      entries.forEach(function(entry) {{
+        if (entry.isIntersecting) {{
+          var sid = entry.target.id;
+          var links = document.querySelectorAll('.sidebar a');
+          for (var i = 0; i < links.length; i++) {{
+            links[i].classList.toggle('active', (links[i].getAttribute('href') || '') === '#' + sid);
+          }}
+        }}
+      }});
+    }}, {{rootMargin: '-80px 0px -70% 0px'}});
+    for (var i = 0; i < sections.length; i++) io.observe(sections[i]);
+  }}
+
+  // 暗色模式：获取当前激活的图表类型
+  function getCurrentChartType(sectionId) {{
+    var btns = document.querySelectorAll('#' + sectionId + ' .chart-btn');
+    for (var i = 0; i < btns.length; i++) {{
+      if (btns[i].classList.contains('active')) {{
+        var m = btns[i].getAttribute('onclick').match(/'([^']+)'$/);
+        if (m) return m[1];
+      }}
+    }}
+    return 'bar';
+  }}
+
+  // 暗色模式：切换主题 + 持久化 + 重新渲染所有图表
+  function toggleTheme() {{
+    var cur = document.documentElement.getAttribute('data-theme') || 'light';
+    var next = cur === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try {{ localStorage.setItem('report_theme', next); }} catch(e) {{}}
+    var btn = document.getElementById('themeToggleBtn');
+    if (btn) btn.textContent = next === 'dark' ? '☀️ 亮色模式' : '🌙 暗色模式';
+    // 重新渲染所有已存在的图表以适配主题配色
+    Object.keys(chartInstances).forEach(function(sid) {{
+      renderChart(sid, getCurrentChartType(sid));
+    }});
+  }}
+
+  // 暗色模式：初始化主题（localStorage 优先，否则检测系统偏好）
+  function initTheme() {{
+    var theme = 'light';
+    try {{ theme = localStorage.getItem('report_theme') || ''; }} catch(e) {{}}
+    if (!theme) {{
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {{
+        theme = 'dark';
+      }} else {{
+        theme = 'light';
+      }}
+    }}
+    document.documentElement.setAttribute('data-theme', theme);
+    var btn = document.getElementById('themeToggleBtn');
+    if (btn) btn.textContent = theme === 'dark' ? '☀️ 亮色模式' : '🌙 暗色模式';
+  }}
+
+  document.addEventListener('DOMContentLoaded', function() {{
+    initTheme();
+    restoreTocState();
+    initCharts();
+    initScrollSpy();
+  }});
 </script>
 </body>
 </html>"""
