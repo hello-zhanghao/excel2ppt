@@ -829,17 +829,12 @@ def generate_html_report(
     block_idx = 1
     for sh in sheet_order:
         items = sheet_groups[sh]
-        if len(items) == 1:
-            # 只有1个区块 → 扁平目录，用区块名
-            toc_html_parts.append(f'<li><a href="#{items[0]["id"]}"><span class="toc-num">{block_idx}</span>{_escape_html(items[0].get("title", sh))}</a></li>')
-            block_idx += 1
-        else:
-            # 同一 sheet 下有多个区块 → 折叠二级目录，一级用 sheet 名
-            toc_html_parts.append(f'<li class="toc-group"><div class="toc-group-hd" onclick="this.parentElement.classList.toggle(\'open\')"><span class="toc-num">{block_idx}</span>{_escape_html(sh)}<span class="toc-arrow">▸</span></div><ul class="toc-sub">')
-            block_idx += 1
-            for sub in items:
-                toc_html_parts.append(f'<li><a href="#{sub["id"]}">{_escape_html(sub.get("title", ""))}</a></li>')
-            toc_html_parts.append('</ul></li>')
+        # 所有 sheet 都作为一级目录，区块作为二级
+        toc_html_parts.append(f'<li class="toc-group"><div class="toc-group-hd" onclick="this.parentElement.classList.toggle(\'open\')"><span class="toc-num">{block_idx}</span>{_escape_html(sh)}<span class="toc-arrow">▸</span></div><ul class="toc-sub">')
+        block_idx += 1
+        for sub in items:
+            toc_html_parts.append(f'<li><a href="#{sub["id"]}">{_escape_html(sub.get("title", ""))}</a></li>')
+        toc_html_parts.append('</ul></li>')
 
     # section HTML 循环
     for sec in sections:
