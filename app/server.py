@@ -15,7 +15,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify, send_file, render_template_string, Response
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from main import _run_pivot_mode, _run_ppt_mode, __VERSION__
+from main import _run_pivot_mode, _run_ppt_mode, _run_html_from_pivot, __VERSION__
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
@@ -203,6 +203,9 @@ def _run_analysis_web(sid, config_path):
                     pivot_out = os.path.join(s["work_dir"], f"{base}_分析_{ts}.xlsx")
                     _run_pivot_mode(config_path, pivot_out)
                     s["output"]["pivot"] = pivot_out
+                    html_out = os.path.join(s["work_dir"], f"{base}_报告_{ts}.html")
+                    _run_html_from_pivot(pivot_out, html_out)
+                    s["output"]["html"] = html_out
                 except SystemExit:
                     pass
                 except Exception as e:

@@ -246,19 +246,17 @@ excel2ppt/
 
 ### v2.30.0 (2026-07-15)
 
-**✨ auto 模式自动生成 HTML 报告**
+**✨ 透视分析自动附带 HTML 交互报告**
 
-auto 模式（不指定子命令）跑完透视分析后，自动基于透视结果生成 HTML 报告，无需新增命令或额外配置。
+凡是生成透视 Excel 的场景，均自动同步生成 HTML 报告，无需新增命令或额外配置。
 
-| 配置类型 | auto 模式输出 |
-|---------|--------------|
-| 综合（PPT + 透视） | PPT + 透视 Excel + HTML 报告 |
-| 仅透视 | 透视 Excel + HTML 报告 |
-| 仅 PPT | PPT（不涉及 HTML） |
+| 入口 | 配置类型 | 输出 |
+|------|---------|------|
+| CLI/GUI/Web | 综合（PPT + 透视） | PPT + 透视 Excel + HTML |
+| CLI/GUI/Web | 仅透视 | 透视 Excel + HTML |
+| CLI/GUI/Web | 仅 PPT | PPT（不涉及透视） |
 
-HTML 报告复用 `generate_html_report` 的纯 Excel 自动生成模式：每个 sheet 自动生成一个图表 section，图表类型（柱状/折线/饼图/表格）按列名关键字自动推断。输出文件命名为 `{配置名}_报告.html`，与 PPT 同目录。
-
-仅 `pivot` 子命令仍只生成透视 Excel（保持原行为）；auto 模式才会附带 HTML。
+覆盖全部入口：`python main.py pivot`、`python main.py 配置.xlsx`（auto）、Web 上传分析，均一视同仁。HTML 报告复用 `generate_html_report` 的纯 Excel 自动生成模式：每个 sheet 自动生成一个图表 section，图表类型（柱状/折线/饼图/表格）按列名关键字自动推断，输出文件命名为 `{配置名}_报告.html`。
 
 ### v2.29.0 (2026-07-15)
 
