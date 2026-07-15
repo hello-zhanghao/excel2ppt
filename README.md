@@ -244,6 +244,19 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.30.2 (2026-07-15)
+
+**🐛 修复 HTML 报告图表全部不显示**
+
+HTML 报告中所有 ECharts 图表均无法渲染，根因是两个独立 bug 叠加：
+
+| Bug | 位置 | 原因 | 修复 |
+|-----|------|------|------|
+| chartOptions 累积丢失 | `html_builder.py` L446 | `chart_options_js` 在 for 循环内每次重置为空，只有最后一个 section 的配置被写入 HTML | 新增 `all_chart_options_js` 累积变量，循环内追加 |
+| sectionId 解析错误 | HTML 模板 JS | `key.split('_')` 把 `section_0_bar` 拆成 `["section","0","bar"]`，sectionId 误取为 `section`，找不到容器 | 改用 `lastIndexOf('_')` 从末尾分割，正确提取 `section_0` |
+
+修复后 18 个 section 共注册 52 条 chartOptions（柱/折/饼），图表正常渲染。
+
 ### v2.30.0 (2026-07-15)
 
 **✨ 透视分析自动附带 HTML 交互报告**

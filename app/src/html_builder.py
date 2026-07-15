@@ -423,7 +423,8 @@ def generate_html_report(
 
     section_html_parts = []
     toc_html_parts = []
-    
+    all_chart_options_js = ""  # 累积所有 section 的 chartOptions，避免循环内重置
+
     for sec in sections:
         toc_html_parts.append(f'<li><a href="#{sec["id"]}">{_escape_html(sec["title"])}</a></li>')
         
@@ -448,6 +449,7 @@ def generate_html_report(
             opts = _generate_chart_options(sec["id"], sec, ct)
             if opts:
                 chart_options_js += f"  chartOptions['{sec['id']}_{ct}'] = {opts};\n"
+        all_chart_options_js += chart_options_js
         
         chart_buttons_html = ""
         for ct in sec["available_charts"]:
@@ -588,13 +590,14 @@ def generate_html_report(
 <script>
   var chartInstances = {{}};
   var chartOptions = {{}};
-  {chart_options_js}
+  {all_chart_options_js}
   
   function initCharts() {{
     Object.keys(chartOptions).forEach(function(key) {{
-      var parts = key.split('_');
-      var sectionId = parts[0];
-      var chartType = parts[1];
+      // key 格式: section_0_bar / section_1_pie，sectionId 含下划线，从末尾分割
+      var lastUnderscore = key.lastIndexOf('_');
+      var sectionId = key.substring(0, lastUnderscore);
+      var chartType = key.substring(lastUnderscore + 1);
       var container = document.getElementById('chart_' + sectionId);
       if (container && chartType === getDefaultChart(sectionId)) {{
         renderChart(sectionId, chartType);
