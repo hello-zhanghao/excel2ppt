@@ -92,6 +92,7 @@ def _parse_blocks(sections, rows, sheet_name):
 
                 sections.append({
                     "name": block_name,
+                    "sheet": sheet_name,
                     "headers": headers,
                     "rows": data_rows,
                 })
@@ -114,6 +115,7 @@ def _parse_blocks(sections, rows, sheet_name):
 
                 sections.append({
                     "name": sheet_name,
+                    "sheet": sheet_name,
                     "headers": headers,
                     "rows": data_rows,
                 })
@@ -737,6 +739,7 @@ def generate_html_report(
                 "id": f"section_{len(sections)}",
                 "title": sec["name"],
                 "subtitle": "",
+                "sheet": sec.get("sheet", sec["name"]),
                 "chart_type": chart_type,
                 "available_charts": available,
                 "headers": sec["headers"],
@@ -802,8 +805,44 @@ def generate_html_report(
     all_geo_data_js = ""
     all_chart_data_js = ""
 
-    for sec_idx, sec in enumerate(sections, 1):
-        toc_html_parts.append(f'<li><a href="#{sec["id"]}"><span class="toc-num">{sec_idx}</span>{_escape_html(sec.get("title", ""))}</a></li>')
+    # 按 Sheet 分组生成二级目录
+    sheet_groups = {}
+    sheet_order = []
+    ppt_sections = []
+    for sec in sections:
+        if sec.get("ppt_images"):
+            ppt_sections.append(sec)
+            continue
+        sh = sec.get("sheet", sec.get("title", ""))
+        if sh not in sheet_groups:
+            sheet_groups[sh] = []
+            sheet_order.append(sh)
+        sheet_groups[sh].append(sec)
+
+    # PPT 幻灯片作为第一个一级目录
+    if ppt_sections:
+        toc_html_parts.append(f'<li class="toc-group open"><div class="toc-group-hd" onclick="this.parentElement.classList.toggle(\'open\')"><span class="toc-num">0</span>PPT 幻灯片<span class="toc-arrow">▸</span></div><ul class="toc-sub">')
+        for psec in ppt_sections:
+            toc_html_parts.append(f'<li><a href="#{psec["id"]}">{_escape_html(psec.get("title", "幻灯片"))}</a></li>')
+        toc_html_parts.append('</ul></li>')
+
+    block_idx = 1
+    for sh in sheet_order:
+        items = sheet_groups[sh]
+        if len(items) == 1:
+            # 只有1个区块 → 扁平目录，用区块名
+            toc_html_parts.append(f'<li><a href="#{items[0]["id"]}"><span class="toc-num">{block_idx}</span>{_escape_html(items[0].get("title", sh))}</a></li>')
+            block_idx += 1
+        else:
+            # 同一 sheet 下有多个区块 → 折叠二级目录，一级用 sheet 名
+            toc_html_parts.append(f'<li class="toc-group"><div class="toc-group-hd" onclick="this.parentElement.classList.toggle(\'open\')"><span class="toc-num">{block_idx}</span>{_escape_html(sh)}<span class="toc-arrow">▸</span></div><ul class="toc-sub">')
+            block_idx += 1
+            for sub in items:
+                toc_html_parts.append(f'<li><a href="#{sub["id"]}">{_escape_html(sub.get("title", ""))}</a></li>')
+            toc_html_parts.append('</ul></li>')
+
+    # section HTML 循环
+    for sec in sections:
         
         if sec.get("ppt_images"):
             slide_html = ""
@@ -926,6 +965,13 @@ def generate_html_report(
   .sidebar a {{ text-decoration: none; color: #555; font-size: 13px; transition: color 0.2s; display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 4px; line-height: 1.4; }}
   .sidebar a:hover {{ color: #2E75B6; background: #f0f5ff; }}
   .toc-num {{ display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 4px; background: #e8f0fe; color: #2E75B6; border-radius: 4px; font-size: 11px; font-weight: 600; flex-shrink: 0; }}
+  .toc-group {{ margin-bottom: 2px; }}
+  .toc-group-hd {{ display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 4px; cursor: pointer; font-size: 13px; color: #555; user-select: none; }}
+  .toc-group-hd:hover {{ color: #2E75B6; background: #f0f5ff; }}
+  .toc-arrow {{ font-size: 10px; color: #999; transition: transform 0.2s; margin-left: auto; }}
+  .toc-group.open .toc-arrow {{ transform: rotate(90deg); }}
+  .toc-sub {{ display: none; list-style: none; padding-left: 18px; }}
+  .toc-group.open .toc-sub {{ display: block; }}
   .summary-cards {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 16px; }}
   .summary-card {{ background: linear-gradient(135deg, #5B9BD5, #2E75B6); color: #fff; padding: 12px; border-radius: 8px; text-align: center; }}
   .summary-card .card-label {{ font-size: 11px; opacity: 0.8; margin-bottom: 4px; }}
