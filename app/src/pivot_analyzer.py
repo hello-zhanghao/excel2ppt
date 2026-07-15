@@ -21,7 +21,54 @@ AGG_MAP = {
     "percentage": "pct",
     "count_pct": "count_pct",
     "计数占比": "count_pct",
+    "join": "join",
+    "拼接": "join",
+    "去重拼接": "join",
+    "group_concat": "join",
 }
+
+
+# join 聚合的默认分隔符
+_JOIN_DEFAULT_SEP = "+"
+
+# join 聚合的关键字集合（用于识别含分隔符参数的写法，如 "去重拼接|、"）
+_JOIN_KEYWORDS = {"join", "拼接", "去重拼接", "group_concat"}
+
+
+def _parse_join_sep(agg_str):
+    """解析 join 聚合的分隔符参数。
+
+    支持写法：
+      "去重拼接"          → ("去重拼接", "+")  默认加号
+      "去重拼接|、"        → ("去重拼接", "、") 指定分隔符
+      "join|, "           → ("join", ", ")
+
+    返回 (原始agg关键字, 分隔符)。非 join 聚合原样返回 (agg_str, None)。
+    """
+    if "|" not in agg_str:
+        return agg_str, None
+    head, tail = agg_str.split("|", 1)
+    head = head.strip()
+    tail = tail.strip()
+    if head.lower() in _JOIN_KEYWORDS or head in _JOIN_KEYWORDS:
+        sep = tail if tail else _JOIN_DEFAULT_SEP
+        return head, sep
+    return agg_str, None
+
+
+def _join_unique(series, sep: str = _JOIN_DEFAULT_SEP) -> str:
+    """对 series 做去重拼接，保持首次出现顺序，跳过 NaN/空值。"""
+    seen = []
+    seen_set = set()
+    for v in series:
+        if pd.isna(v):
+            continue
+        s = str(v).strip()
+        if not s or s in seen_set:
+            continue
+        seen_set.add(s)
+        seen.append(s)
+    return sep.join(seen)
 
 
 def read_pivot_config(config_path, sheet_name=None):
@@ -527,8 +574,9 @@ def validate_pivot_config(tasks, config_dir):
         agg_funcs = [a.strip() for a in 聚合方式_str.split(",") if a.strip()]
         invalid_aggs = []
         for a in agg_funcs:
-            mapped = AGG_MAP.get(a, a)
-            valid_aggs = {"sum", "mean", "count", "max", "min", "nunique", "pct", "count_pct"}
+            a_key, _ = _parse_join_sep(a)
+            mapped = AGG_MAP.get(a_key, a_key)
+            valid_aggs = {"sum", "mean", "count", "max", "min", "nunique", "pct", "count_pct", "join"}
             if mapped not in valid_aggs:
                 invalid_aggs.append(a)
         if invalid_aggs:
@@ -661,7 +709,8 @@ def _check_agg_dtype_compat(results, task_seq, df, value_cols, agg_funcs):
         if vcol not in df.columns:
             continue
         af = _get_agg_for_col(vcol, agg_funcs, value_cols)
-        af_mapped = AGG_MAP.get(af, af)
+        af_key, _ = _parse_join_sep(af)
+        af_mapped = AGG_MAP.get(af_key, af_key)
         if af_mapped in NUMERIC_AGGS and not pd.api.types.is_numeric_dtype(df[vcol]):
             results.append({
                 "task_seq": task_seq,
@@ -845,17 +894,27 @@ def _cross_pivot(df, row_dims, col_dims, value_cols, agg_funcs, task):
     results = {}
     for vcol in value_cols:
         for af in agg_funcs:
-            a_mapped = AGG_MAP.get(af, af)
+            af_key, join_sep = _parse_join_sep(af)
+            a_mapped = AGG_MAP.get(af_key, af_key)
             is_sum_pct = a_mapped == "pct"
             is_count_pct = a_mapped == "count_pct"
-            actual_af = "sum" if is_sum_pct else ("count" if is_count_pct else af)
+            is_join = a_mapped == "join"
+
+            if is_join:
+                # join 聚合：自定义 aggfunc，空值填充空字符串
+                actual_af = lambda s, _sep=join_sep or _JOIN_DEFAULT_SEP: _join_unique(s, _sep)
+                fill_val = ""
+            else:
+                actual_af = "sum" if is_sum_pct else ("count" if is_count_pct else af_key)
+                fill_val = 0
+
             pivot = pd.pivot_table(
                 df,
                 values=vcol,
                 index=row_dims,
                 columns=col_dims,
                 aggfunc=actual_af,
-                fill_value=0,
+                fill_value=fill_val,
             )
 
             if is_sum_pct or is_count_pct:
@@ -872,6 +931,18 @@ def _cross_pivot(df, row_dims, col_dims, value_cols, agg_funcs, task):
             if not dim_cols:
                 dim_cols = [pivot.columns[0]]
             numeric_cols = [c for c in pivot.columns if c in pivot.select_dtypes(include=np.number).columns]
+
+            if is_join:
+                # join 结果是字符串，不计算合计行/列，不做数值转换
+                agg_label = "拼接"
+                if _is_display_name(vcol):
+                    key = vcol
+                elif len(value_cols) * len(agg_funcs) > 1:
+                    key = f"{vcol}_{agg_label}"
+                else:
+                    key = vcol
+                results[key] = pivot
+                continue
 
             col_sums = {}
             for nc in numeric_cols:
@@ -901,7 +972,7 @@ def _cross_pivot(df, row_dims, col_dims, value_cols, agg_funcs, task):
                 row_sums = row_sums + pd.to_numeric(pivot["合计"], errors="coerce").fillna(0)
             pivot["合计"] = row_sums
 
-            agg_label = {"sum": "求和", "mean": "均值", "avg": "均值", "count": "计数", "max": "最大值", "min": "最小值", "nunique": "去重计数", "pct": "占比"}.get(af, af)
+            agg_label = {"sum": "求和", "mean": "均值", "avg": "均值", "count": "计数", "max": "最大值", "min": "最小值", "nunique": "去重计数", "pct": "占比", "join": "拼接"}.get(af_key, af_key)
             if _is_display_name(vcol):
                 key = vcol
             elif len(value_cols) * len(agg_funcs) > 1:
@@ -920,8 +991,11 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
         if len(value_cols) == 1 and len(agg_funcs) > 1:
             vcol = value_cols[0]
             for af in agg_funcs:
-                a_mapped = AGG_MAP.get(af, af)
-                if a_mapped in ("pct", "count_pct"):
+                af_key, join_sep = _parse_join_sep(af)
+                a_mapped = AGG_MAP.get(af_key, af_key)
+                if a_mapped == "join":
+                    val = _join_unique(df[vcol], join_sep or _JOIN_DEFAULT_SEP)
+                elif a_mapped in ("pct", "count_pct"):
                     val = df[vcol].agg("sum" if a_mapped == "pct" else "count")
                     total = float(df[vcol].agg("sum" if a_mapped == "pct" else "count"))
                     val = round(float(val) / total, 4) if total != 0 else 0.0
@@ -929,7 +1003,7 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
                     val = df[vcol].nunique()
                 else:
                     val = df[vcol].agg(a_mapped)
-                agg_label = _get_agg_label(af)
+                agg_label = _get_agg_label(af_key)
                 key = f"{vcol}_{agg_label}"
                 row_data[key] = round(float(val), 4) if isinstance(val, (int, float)) else val
         else:
@@ -938,8 +1012,11 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
                     af = agg_funcs[idx]
                 else:
                     af = "sum"
-                a_mapped = AGG_MAP.get(af, af)
-                if a_mapped in ("pct", "count_pct"):
+                af_key, join_sep = _parse_join_sep(af)
+                a_mapped = AGG_MAP.get(af_key, af_key)
+                if a_mapped == "join":
+                    val = _join_unique(df[vcol], join_sep or _JOIN_DEFAULT_SEP)
+                elif a_mapped in ("pct", "count_pct"):
                     val = df[vcol].agg("sum" if a_mapped == "pct" else "count")
                     total = float(df[vcol].agg("sum" if a_mapped == "pct" else "count"))
                     val = round(float(val) / total, 4) if total != 0 else 0.0
@@ -947,7 +1024,7 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
                     val = df[vcol].nunique()
                 else:
                     val = df[vcol].agg(a_mapped)
-                agg_label = _get_agg_label(af)
+                agg_label = _get_agg_label(af_key)
                 key = f"{vcol}_{agg_label}"
                 row_data[key] = round(float(val), 4) if isinstance(val, (int, float)) else val
         result_df = pd.DataFrame([row_data])
@@ -962,7 +1039,8 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
     pct_tmp_cols = {}
     count_pct_tmp_cols = {}
     tmp_col_counter = 0
-    
+    join_specs = []  # [(vcol, sep, agg_label), ...] join 聚合单独处理
+
     for idx, vcol in enumerate(value_cols):
         if len(value_cols) == 1 and len(agg_funcs) > 1:
             funcs_for_vcol = agg_funcs
@@ -970,10 +1048,14 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
             funcs_for_vcol = [agg_funcs[idx]]
         else:
             funcs_for_vcol = ["sum"]
-        
+
         for a in funcs_for_vcol:
-            a_mapped = AGG_MAP.get(a, a)
-            if a_mapped == "pct":
+            a_key, join_sep = _parse_join_sep(a)
+            a_mapped = AGG_MAP.get(a_key, a_key)
+            if a_mapped == "join":
+                # join 聚合单独记录，不走标准 agg_dict（需要分隔符且结果为字符串）
+                join_specs.append((vcol, join_sep or _JOIN_DEFAULT_SEP, _get_agg_label(a_key)))
+            elif a_mapped == "pct":
                 tmp_col = f"__pct_{tmp_col_counter}__"
                 tmp_col_counter += 1
                 pct_tmp_cols[tmp_col] = vcol
@@ -1001,7 +1083,11 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
     for vcol, funcs in field_funcs.items():
         agg_dict[vcol] = funcs
 
-    grouped = df.groupby(group_cols, as_index=False, observed=True).agg(agg_dict)
+    if agg_dict:
+        grouped = df.groupby(group_cols, as_index=False, observed=True).agg(agg_dict)
+    else:
+        # 所有聚合都是 join，无标准 agg；只获取分组键
+        grouped = df[group_cols].drop_duplicates().reset_index(drop=True)
 
     if has_sum_pct or has_count_pct:
         orig_tuples = [col for col in grouped.columns.values]
@@ -1104,6 +1190,29 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
         else:
             seen[name] = i
 
+    # join 聚合单独计算（在列名展平后添加，保持首次出现顺序去重拼接）
+    if join_specs:
+        for vcol, sep, agg_label in join_specs:
+            # 确定 join 列名
+            if has_val_map and val_map_idx < len(raw_val_maps):
+                col_name = raw_val_maps[val_map_idx]
+                val_map_idx += 1
+            else:
+                col_name = f"{vcol}_{agg_label}"
+
+            # 用 groupby + apply 计算，转成 dict 按分组键映射，确保与 grouped 行对齐
+            join_series = df.groupby(group_cols, observed=True)[vcol].apply(
+                lambda s, _sep=sep: _join_unique(s, _sep)
+            )
+            join_map = {k: v for k, v in join_series.items()}
+
+            if len(group_cols) == 1:
+                grouped[col_name] = grouped[group_cols[0]].map(join_map)
+            else:
+                grouped[col_name] = grouped.apply(
+                    lambda row: join_map.get(tuple(row[c] for c in group_cols), ""), axis=1
+                )
+
     grouped = grouped.sort_values(group_cols)
 
     return {"结果": grouped}
@@ -1165,6 +1274,7 @@ def _get_agg_label(af):
         "sum": "求和", "mean": "均值", "avg": "均值", "count": "计数",
         "max": "最大值", "min": "最小值", "nunique": "去重计数",
         "pct": "占比", "count_pct": "计数占比",
+        "join": "拼接", "拼接": "拼接", "去重拼接": "拼接", "group_concat": "拼接",
     }.get(af, af)
 
 
