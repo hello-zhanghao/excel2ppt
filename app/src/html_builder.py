@@ -625,16 +625,23 @@ def generate_html_report(
                     continue
 
                 chart_type = _ppt_chart_type_to_html(chart.get("图表类型", "column"))
-                
+
                 title = chart.get("图表标题", "") or page_title
                 summary = _compute_summary(data_sec["headers"], data_sec["rows"])
-                
+
+                # 检测经纬度列，含经纬度的 section 追加地图类型
+                has_geo = _detect_geo_columns(data_sec["headers"]) is not None
+                if has_geo:
+                    available = ["map", "heatmap", "table"]
+                else:
+                    available = ["bar", "line", "pie", "table"]
+
                 sections.append({
                     "id": f"section_{page_idx}_{chart_idx}",
                     "title": title,
                     "subtitle": page_subtitle if chart_idx == 0 else "",
                     "chart_type": chart_type,
-                    "available_charts": ["bar", "line", "pie", "table"],
+                    "available_charts": available,
                     "headers": data_sec["headers"],
                     "rows": data_sec["rows"],
                     "summary": summary,
