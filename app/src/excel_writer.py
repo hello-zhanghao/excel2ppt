@@ -86,7 +86,8 @@ def _write_multi_result_sheet(wb, sheet_name, group_items):
                     current_row += 1
                 _write_block_title(ws, block_name, current_row, 2)
                 current_row += 1
-                _write_scalar_block(ws, task, result, block_name, current_row, task.get("_pct_columns", []))
+                _write_scalar_block(ws, task, result, block_name, current_row,
+                                    task.get("_pct_columns", []), task.get("_number_formats", {}))
                 current_row = ws.max_row + 1
             continue
 
@@ -94,22 +95,23 @@ def _write_multi_result_sheet(wb, sheet_name, group_items):
             current_row += 1
 
         if len(items) > 1:
-            merged_df, merged_pct_cols = _merge_same_dim_results(items, row_dims)
+            merged_df, merged_pct_cols, merged_number_formats = _merge_same_dim_results(items, row_dims)
             if merged_df is None:
                 continue
             _write_block_title(ws, block_name, current_row, len(merged_df.columns))
             current_row += 1
-            _write_df_block(ws, merged_df, current_row, merged_pct_cols, row_dims)
+            _write_df_block(ws, merged_df, current_row, merged_pct_cols, row_dims, merged_number_formats)
             current_row = ws.max_row + 1
         else:
             task, result = items[0]
             pct_cols = task.get("_pct_columns", [])
+            num_fmts = task.get("_number_formats", {})
             for key, df in result.items():
                 if current_row > 1:
                     current_row += 1
                 _write_block_title(ws, block_name, current_row, len(df.columns))
                 current_row += 1
-                _write_df_block(ws, df, current_row, pct_cols, row_dims)
+                _write_df_block(ws, df, current_row, pct_cols, row_dims, num_fmts)
                 current_row = ws.max_row + 1
 
     if ws.max_column and ws.max_row:
@@ -151,11 +153,13 @@ def _get_row_dims(task):
 def _merge_same_dim_results(items, row_dims):
     merged = None
     merged_pct_cols = set()
+    merged_number_formats = {}  # {列名: Excel数字格式}
 
     for task, result in items:
         if not isinstance(result, dict):
             continue
         task_pct_cols = set(task.get("_pct_columns", []))
+        task_number_formats = task.get("_number_formats", {}) or {}
         for key, df in result.items():
             if df is None:
                 continue
@@ -165,22 +169,29 @@ def _merge_same_dim_results(items, row_dims):
                 merged = df
                 # 记录本 df 中属于 pct 的列
                 for c in df.columns:
-                    if str(c) in task_pct_cols:
-                        merged_pct_cols.add(str(c))
+                    col_str = str(c)
+                    if col_str in task_pct_cols:
+                        merged_pct_cols.add(col_str)
+                    if col_str in task_number_formats:
+                        merged_number_formats[col_str] = task_number_formats[col_str]
             else:
                 dup = [c for c in df.columns if c in merged.columns]
                 df_rest = df.drop(columns=dup, errors="ignore")
                 for c in df_rest.columns:
-                    if str(c) in task_pct_cols:
-                        merged_pct_cols.add(str(c))
+                    col_str = str(c)
+                    if col_str in task_pct_cols:
+                        merged_pct_cols.add(col_str)
+                    if col_str in task_number_formats:
+                        merged_number_formats[col_str] = task_number_formats[col_str]
                 merged = pd.concat([merged.reset_index(drop=True), df_rest.reset_index(drop=True)], axis=1)
 
-    return merged, list(merged_pct_cols)
+    return merged, list(merged_pct_cols), merged_number_formats
 
 
-def _write_df_block(ws, df, start_row, pct_columns=None, row_dims=None):
+def _write_df_block(ws, df, start_row, pct_columns=None, row_dims=None, number_formats=None):
     pct_columns = set(pct_columns or [])
     row_dims = set(row_dims or [])
+    number_formats = number_formats or {}  # {列名: Excel数字格式}
     headers = list(df.columns)
     for ci, h in enumerate(headers, 1):
         c = ws.cell(row=start_row, column=ci, value=str(h))
@@ -190,9 +201,13 @@ def _write_df_block(ws, df, start_row, pct_columns=None, row_dims=None):
         row_num = start_row + 1 + ri
         for ci, val in enumerate(row_data, 1):
             col_name = headers[ci - 1] if ci <= len(headers) else None
+            col_name_str = str(col_name) if col_name is not None else ""
             is_pct = _is_pct_col(col_name, pct_columns)
             cell = ws.cell(row=row_num, column=ci, value=_format_cell_value(val, col_name, is_pct))
-            if is_pct:
+            # 优先级：自定义格式（聚合方式::格式）> pct 默认 > 0.00 默认
+            if col_name_str in number_formats:
+                cell.number_format = number_formats[col_name_str]
+            elif is_pct:
                 cell.number_format = PCT_NUMBER_FORMAT
             elif isinstance(val, (int, float)):
                 cell.number_format = VALID_NUMBER_FORMAT
@@ -213,18 +228,23 @@ def _write_df_block(ws, df, start_row, pct_columns=None, row_dims=None):
             cell.border = THIN_BORDER
 
 
-def _write_scalar_block(ws, task, result, remark, start_row, pct_columns=None):
+def _write_scalar_block(ws, task, result, remark, start_row, pct_columns=None, number_formats=None):
     pct_columns = set(pct_columns or [])
+    number_formats = number_formats or {}  # {指标名: Excel数字格式}
     ws.cell(row=start_row, column=1, value="指标")
     ws.cell(row=start_row, column=2, value="值")
     _style_header_row(ws, start_row, 2)
 
     row = start_row + 1
     for key, val in result.items():
+        key_str = str(key)
         c1 = ws.cell(row=row, column=1, value=key)
         is_pct = _is_pct_col(key, pct_columns)
         c2 = ws.cell(row=row, column=2, value=_format_cell_value(val, key, is_pct))
-        if is_pct:
+        # 优先级：自定义格式 > pct 默认 > 0.00 默认
+        if key_str in number_formats:
+            c2.number_format = number_formats[key_str]
+        elif is_pct:
             c2.number_format = PCT_NUMBER_FORMAT
         elif isinstance(val, (int, float)):
             c2.number_format = VALID_NUMBER_FORMAT

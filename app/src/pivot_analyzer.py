@@ -56,6 +56,97 @@ def _parse_join_sep(agg_str):
     return agg_str, None
 
 
+def _parse_agg_format(agg_str):
+    """解析聚合方式的数字格式后缀（用 ``|`` 分隔，与 join 的 ``|`` 正交）。
+
+    与 _parse_join_sep 配合：join 关键字后的 ``|`` 是分隔符，其他聚合后的 ``|`` 是数字格式。
+    两者不会同时出现于同一 ``|`` 段：join 是字符串聚合不需要数字格式。
+
+    支持写法：
+      "sum|0.00"         → ("sum", "0.00")
+      "avg|0.0%"         → ("avg", "0.0%")
+      "sum|#,##0"        → ("sum", "#,##0")
+      "去重拼接|、"       → ("去重拼接|、", None)  join 的 | 是分隔符，此处不剥离
+      "sum"              → ("sum", None)
+
+    :return: (聚合方式字符串（保留 join 的 | 分隔符）, 数字格式)。无格式返回 (agg_str, None)。
+    """
+    if "|" not in agg_str:
+        return agg_str, None
+    head, tail = agg_str.split("|", 1)
+    head = head.strip()
+    tail = tail.strip()
+    # join 聚合的 | 是分隔符，不是格式，原样返回
+    if head.lower() in _JOIN_KEYWORDS or head in _JOIN_KEYWORDS:
+        return agg_str, None
+    if not tail:
+        return head, None
+    return head, tail
+
+
+# 已知聚合关键字集合，用于 _split_agg_funcs 识别多聚合分隔符
+_AGG_KEYWORDS_SET = set(AGG_MAP.keys())
+
+
+def _match_agg_keyword(s):
+    """检查 s 是否以已知聚合关键字开头（后跟 , | 或结尾）。返回关键字或 None。"""
+    for kw in _AGG_KEYWORDS_SET:
+        if s.lower().startswith(kw.lower()):
+            after = s[len(kw):]
+            if not after or after[0] in (",", "|"):
+                return kw
+    return None
+
+
+def _split_agg_funcs(agg_str):
+    """按逗号拆分多聚合方式，保护 ``|`` 后参数内的逗号不被误判为分隔符。
+
+    Excel 数字格式常含逗号（如 ``#,##0`` 千分位），直接 split 会被切断。
+    本函数遇到 ``|`` 后进入参数模式，参数内的逗号属于参数；只有当逗号后
+    紧跟已知聚合关键字时，才认为是多聚合分隔符。
+
+    例：
+      'sum,avg'                → ['sum', 'avg']
+      'sum|#,##0,sum|0.00'    → ['sum|#,##0', 'sum|0.00']
+      '去重拼接|、,sum|0.00'   → ['去重拼接|、', 'sum|0.00']
+    """
+    parts = []
+    current = ""
+    i = 0
+    n = len(agg_str)
+    while i < n:
+        ch = agg_str[i]
+        if ch == "|":
+            # 进入参数模式，收集直到"逗号+聚合关键字"或结尾
+            current += ch
+            i += 1
+            while i < n:
+                ch2 = agg_str[i]
+                if ch2 == ",":
+                    rest = agg_str[i + 1:].lstrip()
+                    if _match_agg_keyword(rest):
+                        break  # 逗号后是聚合关键字，这是多聚合分隔符
+                    current += ch2
+                    i += 1
+                else:
+                    current += ch2
+                    i += 1
+            if current.strip():
+                parts.append(current.strip())
+            current = ""
+        elif ch == ",":
+            if current.strip():
+                parts.append(current.strip())
+            current = ""
+            i += 1
+        else:
+            current += ch
+            i += 1
+    if current.strip():
+        parts.append(current.strip())
+    return parts
+
+
 def _join_unique(series, sep: str = _JOIN_DEFAULT_SEP) -> str:
     """对 series 做去重拼接，排序后输出，跳过 NaN/空值。
 
@@ -570,11 +661,12 @@ def validate_pivot_config(tasks, config_dir):
                 "column": "行维度/列维度"
             })
         
-        # 2. 检查聚合方式
-        agg_funcs = [a.strip() for a in 聚合方式_str.split(",") if a.strip()]
+        # 2. 检查聚合方式（用 _split_agg_funcs 拆分，保护 | 后参数内的逗号）
+        agg_funcs = _split_agg_funcs(聚合方式_str)
         invalid_aggs = []
         for a in agg_funcs:
-            a_key, _ = _parse_join_sep(a)
+            a_no_fmt, _ = _parse_agg_format(a)  # 先剥离 |数字格式
+            a_key, _ = _parse_join_sep(a_no_fmt)
             mapped = AGG_MAP.get(a_key, a_key)
             valid_aggs = {"sum", "mean", "count", "max", "min", "nunique", "pct", "count_pct", "join"}
             if mapped not in valid_aggs:
@@ -666,7 +758,7 @@ def validate_pivot_config(tasks, config_dir):
                                     # 检查聚合方式与列数据类型是否兼容
                                     _check_agg_dtype_compat(
                                         results, seq, df, value_cols,
-                                        [a.strip() for a in 聚合方式_str.split(",") if a.strip()]
+                                        _split_agg_funcs(聚合方式_str)
                                     )
                         except Exception as e:
                             results.append({
@@ -681,7 +773,7 @@ def validate_pivot_config(tasks, config_dir):
         val_maps = [m.strip() for m in val_map_str.split(",") if m.strip()]
         value_cols = [v.strip() for v in 值字段_str.split(",") if v.strip()]
         if val_maps:
-            agg_funcs_val = [a.strip() for a in 聚合方式_str.split(",") if a.strip()] if 聚合方式_str else []
+            agg_funcs_val = _split_agg_funcs(聚合方式_str) if 聚合方式_str else []
             if len(value_cols) == 1 and len(agg_funcs_val) > 1:
                 expected_cols = len(agg_funcs_val)
             else:
@@ -709,7 +801,8 @@ def _check_agg_dtype_compat(results, task_seq, df, value_cols, agg_funcs):
         if vcol not in df.columns:
             continue
         af = _get_agg_for_col(vcol, agg_funcs, value_cols)
-        af_key, _ = _parse_join_sep(af)
+        af_no_fmt, _ = _parse_agg_format(af)  # 先剥离 |数字格式
+        af_key, _ = _parse_join_sep(af_no_fmt)
         af_mapped = AGG_MAP.get(af_key, af_key)
         if af_mapped in NUMERIC_AGGS and not pd.api.types.is_numeric_dtype(df[vcol]):
             results.append({
@@ -777,8 +870,15 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
     行维度 = [d.strip() for d in 行维度_str.split(",") if d.strip()]
     列维度 = [d.strip() for d in 列维度_str.split(",") if d.strip()]
     值字段 = [v.strip() for v in 值字段_str.split(",") if v.strip()]
-    聚合函数 = [a.strip() for a in 聚合方式_str.split(",") if a.strip()]
-    聚合函数 = [AGG_MAP.get(a, a) for a in 聚合函数]
+    # 解析每个聚合方式的 |数字格式 后缀，剥离格式后保留 join 的 |分隔符
+    # number_formats 按值字段位置对应，供 excel_writer 应用自定义显示格式
+    # 用 _split_agg_funcs 拆分多聚合，保护格式内的逗号（如 #,##0）不被切断
+    number_formats = []
+    聚合函数 = []
+    for a in _split_agg_funcs(聚合方式_str):
+        a_no_fmt, fmt = _parse_agg_format(a)
+        聚合函数.append(a_no_fmt)
+        number_formats.append(fmt)
 
     df = _load_joined_dataframe(config_dir, data_source, sheet_name)
     if df is None or df.empty:
@@ -878,6 +978,13 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         if pct_cols:
             task["_pct_columns"] = pct_cols
 
+    # 记录自定义数字格式（聚合方式 ::格式 语法），供 excel_writer 应用
+    # 优先级：自定义格式 > pct 默认 > 0.00 默认
+    if any(number_formats):
+        col_fmts = _collect_number_formats(result, 行维度, number_formats)
+        if col_fmts:
+            task["_number_formats"] = col_fmts
+
     return result, None
 
 
@@ -898,6 +1005,43 @@ def _collect_pct_columns(result, row_dims):
             # 交叉表的列可能是数值型列名（如产品A的销量），需排除分组维度
             pct_cols.add(str(col))
     return list(pct_cols)
+
+
+def _collect_number_formats(result, row_dims, number_formats):
+    """收集每个数值列对应的自定义数字格式，按值映射后的列名索引。
+
+    number_formats 按值字段位置对应；若结果列数多于值字段数（如交叉表展开），
+    超出部分用最后一个有效格式，保证交叉表所有数值列格式一致。
+
+    :param result: run_analysis 的结果
+    :param row_dims: 行维度列表
+    :param number_formats: 每个值字段对应的数字格式列表（None 表示用默认）
+    :return: {列名: 数字格式}
+    """
+    fmt_map = {}
+    if not number_formats or not isinstance(result, dict):
+        return fmt_map
+    for key, df in result.items():
+        if not isinstance(df, pd.DataFrame):
+            continue
+        skip = set(row_dims) | {"合计", "总计", "指标", "值"}
+        map_idx = 0
+        for col in df.columns:
+            if col in skip:
+                continue
+            # 按值字段位置对应；交叉表展开时超出位置用最后一个有效格式
+            if map_idx < len(number_formats):
+                fmt = number_formats[map_idx]
+            else:
+                fmt = None
+                for f in reversed(number_formats):
+                    if f:
+                        fmt = f
+                        break
+            if fmt:
+                fmt_map[str(col)] = fmt
+            map_idx += 1
+    return fmt_map
 
 
 def _cross_pivot(df, row_dims, col_dims, value_cols, agg_funcs, task):
