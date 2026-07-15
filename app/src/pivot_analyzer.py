@@ -752,7 +752,12 @@ def print_validation_results(results):
     return error_count == 0
 
 
-def run_analysis(task, config_dir, scalar_context=None):
+def run_analysis(task, config_dir, scalar_context=None, block_results=None):
+    """执行单个透视任务。
+
+    :param scalar_context: 无行维度任务产生的标量 {列名: 值}，供值计算引用
+    :param block_results: 前面任务的结果 {区块名: DataFrame}，供值映射的 {区块.列.行值} 占位符引用
+    """
     序号 = task.get("序号", "?")
     data_source = task.get("数据源", "")
     行维度_str = task.get("行维度", "")
@@ -847,11 +852,13 @@ def run_analysis(task, config_dir, scalar_context=None):
                     if c in 行维度:
                         continue
                     if map_idx < len(raw_val_maps):
-                        rename[c] = raw_val_maps[map_idx]
+                        # 值映射支持 {区块.列.行值|格式} 占位符，用前面任务结果替换
+                        new_name = _resolve_value_map_placeholder(raw_val_maps[map_idx], block_results)
+                        rename[c] = new_name
                         map_idx += 1
                     else:
                         break
-                
+
                 if rename:
                     df.rename(columns=rename, inplace=True)
 
@@ -1712,6 +1719,139 @@ def _find_matching_calc(col, calc_map, value_cols, raw_val_maps=None):
         if not re.match(r"^[+\-*/]", expr.split("=")[0].strip()):
             return expr
     return None
+
+
+def _format_numeric_value(val, fmt: str) -> str:
+    """按格式后缀格式化数值，与模板填充的文本占位符格式语法一致。
+
+    支持的格式：
+        .Nf     → 保留 N 位小数（如 .2f → 4800.00）
+        .N%     → 百分比，保留 N 位小数（如 .2% → 37.65%，输入值应为 0~1 的小数）
+        int     → 整数
+        无格式  → 原始值
+    """
+    if val is None:
+        return ""
+    try:
+        num = float(val)
+    except (ValueError, TypeError):
+        return str(val)
+
+    fmt = (fmt or "").strip()
+    if not fmt:
+        # 整数则去尾零，否则保持原样
+        if num == int(num):
+            return str(int(num))
+        return str(num)
+
+    if fmt == "int":
+        return str(int(num))
+
+    if fmt.startswith(".") and fmt.endswith("f"):
+        try:
+            digits = int(fmt[1:-1])
+            return f"{num:.{digits}f}"
+        except ValueError:
+            return str(num)
+
+    if fmt.startswith(".") and fmt.endswith("%"):
+        try:
+            digits = int(fmt[1:-1])
+            return f"{num * 100:.{digits}f}%"
+        except ValueError:
+            return str(num)
+
+    return str(num)
+
+
+def _resolve_value_map_placeholder(text: str, block_results: dict) -> str:
+    """解析值映射文本中的 {区块.列.行值|格式} 占位符，替换为前面任务的计算数值。
+
+    语法与模板填充的文本占位符一致：
+        {区块.列名}             → 该列所有行的合计值
+        {区块.列名.行值}        → 精确取某行某列
+        {区块.列名|格式}        → 合计值 + 格式化（如 |.2f）
+        {区块.列名.行值|格式}   → 精确取值 + 格式化
+        {标量名}               → 从 scalar_context 取（block_results 里标量区块首行）
+        {标量名|格式}           → 标量 + 格式化
+
+    :param text: 值映射原始文本（如 "华东占{按地区汇总.总销售额.华东|.0f}元"）
+    :param block_results: {区块名: DataFrame} 字典
+    :return: 替换后的文本，未找到的占位符保留原样
+    """
+    if not text or not block_results:
+        return text
+
+    # 匹配 {...} 占位符，不支持嵌套
+    pattern = re.compile(r"\{([^{}]+)\}")
+
+    def _replace(m):
+        expr = m.group(1).strip()
+        if not expr:
+            return m.group(0)
+
+        # 分离格式后缀
+        fmt = ""
+        if "|" in expr:
+            parts = expr.split("|", 1)
+            expr = parts[0].strip()
+            fmt = parts[1].strip()
+
+        # 拆分 区块.列.行值
+        segments = [s.strip() for s in expr.split(".") if s.strip()]
+        if not segments:
+            return m.group(0)
+
+        # 尝试匹配：1段=标量名/区块名，2段=区块.列，3段=区块.列.行值
+        val = None
+        resolved = False
+
+        if len(segments) == 1:
+            # 标量名：在 block_results 找单行 DataFrame 的第一个数值列
+            name = segments[0]
+            df = block_results.get(name)
+            if df is not None and hasattr(df, "shape") and len(df) == 1:
+                for col in df.columns:
+                    try:
+                        val = float(df[col].iloc[0])
+                        resolved = True
+                        break
+                    except (ValueError, TypeError):
+                        continue
+
+        elif len(segments) == 2:
+            block_name, col_name = segments
+            df = block_results.get(block_name)
+            if df is not None and col_name in df.columns:
+                try:
+                    s = pd.to_numeric(df[col_name], errors="coerce").dropna()
+                    if len(s) > 0:
+                        val = float(s.sum())
+                        resolved = True
+                except Exception:
+                    pass
+
+        elif len(segments) >= 3:
+            block_name, col_name = segments[0], segments[1]
+            row_value = ".".join(segments[2:])  # 行值本身可能含点
+            df = block_results.get(block_name)
+            if df is not None and len(df) > 0:
+                row_dim_col = df.columns[0]
+                mask = df[row_dim_col].astype(str).str.strip() == row_value
+                matched = df[mask]
+                if len(matched) > 0 and col_name in matched.columns:
+                    try:
+                        val = float(pd.to_numeric(matched[col_name].iloc[0], errors="coerce"))
+                        resolved = True
+                    except (ValueError, TypeError):
+                        pass
+
+        if not resolved:
+            return m.group(0)  # 未找到，保留原样
+
+        return _format_numeric_value(val, fmt)
+
+    return pattern.sub(_replace, text)
 
 
 def collect_task_scalars(result):

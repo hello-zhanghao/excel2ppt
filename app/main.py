@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.26.0"
+__VERSION__ = "2.27.0"
 __UPDATE_DATE__ = "2026-07-15"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -449,20 +449,21 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
     errors = []
     skipped = 0
     scalar_context: dict = {}
+    block_results: dict = {}  # {区块名: DataFrame}，供后续任务的值映射占位符引用
 
     for task in tasks:
         seq = task.get("序号", "?")
         sheet_name = task.get("结果Sheet", f"结果{seq}")
-        
+
         should_calc = str(task.get("是否计算", "是")).strip()
         if should_calc.lower() in ("否", "no", "false", "0", "不计算", "跳过", "skip"):
             print(f"    [SKIP] [任务{seq}] 已设置为不计算，跳过")
             results.append(None)
             skipped += 1
             continue
-        
+
         try:
-            result, error = run_analysis(task, eff_data_dir, scalar_context)
+            result, error = run_analysis(task, eff_data_dir, scalar_context, block_results)
             if error:
                 print(f"    [FAIL] [任务{seq}] {error}")
                 errors.append({"序号": seq, "错误": error})
@@ -481,6 +482,15 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
                 task_scalars = collect_task_scalars(result)
                 if task_scalars:
                     scalar_context.update(task_scalars)
+                # 收集本任务结果到 block_results，供后续任务的值映射占位符引用
+                # 区块名优先用 task 的"区块名"，否则用"结果Sheet"
+                block_name = task.get("区块名", "") or sheet_name
+                if isinstance(result, dict):
+                    for key, df in result.items():
+                        if hasattr(df, "shape"):
+                            # 同名区块后出现覆盖先出现（与模板填充的 load_pivot_results 一致）
+                            block_results[block_name] = df
+                            break  # 一个任务只取第一个 DataFrame 作为区块
         except Exception as e:
             print(f"    [FAIL] [任务{seq}] 异常: {e}")
             errors.append({"序号": seq, "错误": str(e)})
