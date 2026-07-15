@@ -165,17 +165,11 @@ def _escape_html(text: str) -> str:
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
-def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
-    headers = data["headers"]
-    rows = data["rows"]
-    title = data.get("title", "")
-    
-    if not rows or not headers:
-        return ""
-    
+def _detect_chart_columns(headers: List[str]) -> Tuple[int, List[int]]:
+    """从表头自动检测分类列和数值列。返回 (category_col, value_cols)。"""
     category_col = None
     value_cols = []
-    
+
     for i, h in enumerate(headers):
         h_lower = h.lower()
         if any(key in h_lower for key in ["日期", "月份", "时间", "区域", "产品", "类别", "类型", "名称", "城市", "年份", "季度"]):
@@ -183,10 +177,23 @@ def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
                 category_col = i
         elif any(key in h_lower for key in ["金额", "数量", "销售额", "利润", "成本", "值", "占比", "百分比", "pct", "计数"]):
             value_cols.append(i)
-    
+
     if category_col is None:
         category_col = 0
         value_cols = [i for i in range(1, len(headers))]
+
+    return category_col, value_cols
+
+
+def _generate_chart_options(chart_id: str, data: Dict, chart_type: str) -> str:
+    headers = data["headers"]
+    rows = data["rows"]
+    title = data.get("title", "")
+
+    if not rows or not headers:
+        return ""
+
+    category_col, value_cols = _detect_chart_columns(headers)
     
     categories = []
     series_data = []
@@ -421,6 +428,51 @@ def _generate_geo_chart_options(chart_id: str, data: Dict, chart_type: str) -> s
     return opt_json
 
 
+def _build_chart_data_js(sections: List[Dict]) -> str:
+    """序列化所有非地图 section 的完整数据到 JS chartData 对象，供 JS 端动态构建图表（支持列选择开关）。"""
+    parts = []
+    for sec in sections:
+        sid = sec["id"]
+        headers = sec["headers"]
+        rows = sec["rows"]
+        if not rows or not headers:
+            continue
+        # 跳过 PPT 幻灯片 section 和地图 section
+        if sec.get("ppt_images"):
+            continue
+        geo = _detect_geo_columns(headers)
+        if geo:
+            continue
+        category_col, value_cols = _detect_chart_columns(headers)
+        if not value_cols:
+            continue
+
+        categories = []
+        for row in rows:
+            if category_col < len(row):
+                categories.append(str(row[category_col]))
+
+        series_list = []
+        for vc in value_cols:
+            values = []
+            for row in rows:
+                if vc < len(row) and row[vc] != "":
+                    try:
+                        values.append(float(row[vc]))
+                    except ValueError:
+                        values.append(0)
+                else:
+                    values.append(0)
+            series_list.append({"name": headers[vc], "data": values, "selected": True})
+
+        col_labels = [headers[vc] for vc in value_cols]
+        parts.append(f"chartData['{sid}'] = {{\"title\": {json.dumps(sec.get('title', ''))}, "
+                     f"\"categories\": {json.dumps(categories)}, "
+                     f"\"series\": {json.dumps(series_list, ensure_ascii=False)}, "
+                     f"\"colLabels\": {json.dumps(col_labels, ensure_ascii=False)}}};")
+    return "\n".join(parts)
+
+
 def _build_geo_data_js(sec: Dict) -> str:
     """序列化地图 section 的完整数据，供 JS 端动态构建图表（支持指标列切换+筛选）。
 
@@ -488,6 +540,23 @@ def _build_geo_data_js(sec: Dict) -> str:
         "filterValues": {str(k): v for k, v in filter_values.items()},
     }
     return f"  geoData['{sec['id']}'] = {json.dumps(data_obj, ensure_ascii=False)};\n"
+
+
+def _build_col_selector_html(sec: Dict) -> str:
+    """构建列选择复选框面板 HTML。用于普通图表（非地图），允许用户勾选要展示的数值列。"""
+    headers = sec["headers"]
+    rows = sec["rows"]
+    geo = _detect_geo_columns(headers)
+    if geo or not rows:
+        return ""
+    _, value_cols = _detect_chart_columns(headers)
+    if len(value_cols) <= 1:
+        return ""  # 只有1列时不显示选择器
+    checkboxes = ""
+    for vi, vc in enumerate(value_cols):
+        col_name = headers[vc]
+        checkboxes += f'<label class="col-cb-item"><input type="checkbox" checked onchange="onColChange(\'{sec["id"]}\')" data-series="{vi}">{_escape_html(col_name)}</label>'
+    return f'<div class="col-selector" id="col_sel_{sec["id"]}"><span class="col-sel-label">列选择:</span>{checkboxes}</div>'
 
 
 def _build_geo_controls_html(sec: Dict) -> str:
@@ -711,6 +780,7 @@ def generate_html_report(
     toc_html_parts = []
     all_chart_options_js = ""  # 累积所有 section 的 chartOptions，避免循环内重置
     all_geo_data_js = ""  # 累积地图 section 的完整数据，供 JS 动态构建
+    all_chart_data_js = ""  # 累积非地图 section 的图表数据，供 JS 动态构建+列选择
 
     for sec_idx, sec in enumerate(sections, 1):
         toc_html_parts.append(f'<li><a href="#{sec["id"]}"><span class="toc-num">{sec_idx}</span>{_escape_html(sec["title"])}</a></li>')
@@ -758,6 +828,8 @@ def generate_html_report(
                       "map": "地图", "heatmap": "热力图"}
             chart_buttons_html += f'<button class="chart-btn {active}" onclick="switchChart(\'{sec["id"]}\', \'{ct}\')">{labels.get(ct, ct)}</button>'
         
+        col_selector_html = _build_col_selector_html(sec)
+        
         header_cells = "".join(f"<th>{_escape_html(h)}</th>" for h in sec["headers"])
         body_rows = ""
         for row in sec["rows"]:
@@ -789,6 +861,7 @@ def generate_html_report(
   {summary_html}
   <div class="chart-container">
     <div class="chart-buttons">{chart_buttons_html}</div>
+    {col_selector_html}
     {geo_controls_html}
     <div id="chart_{sec["id"]}" class="chart-canvas"></div>
   </div>
@@ -799,6 +872,8 @@ def generate_html_report(
     </div>
   </div>
 </div>''')
+
+    all_chart_data_js = _build_chart_data_js(sections)
 
     summary_cards_html = ""
     top_summary = list(all_summary.items())[:6]
@@ -848,6 +923,11 @@ def generate_html_report(
   .chart-btn {{ padding: 6px 14px; background: #f5f7fa; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; color: #555; cursor: pointer; transition: all 0.2s; }}
   .chart-btn:hover {{ background: #e8f0fe; border-color: #2E75B6; color: #2E75B6; }}
   .chart-btn.active {{ background: #2E75B6; color: #fff; border-color: #2E75B6; }}
+  .col-selector {{ display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 6px 10px; margin-bottom: 8px; background: #fafbfc; border: 1px solid #eee; border-radius: 6px; font-size: 12px; }}
+  .col-sel-label {{ font-weight: 600; color: #555; margin-right: 2px; }}
+  .col-cb-item {{ display: inline-flex; align-items: center; gap: 3px; cursor: pointer; color: #444; user-select: none; }}
+  .col-cb-item input {{ margin: 0; accent-color: #2E75B6; }}
+  .col-cb-item:hover {{ color: #2E75B6; }}
   .geo-controls {{ display: none; flex-wrap: wrap; gap: 12px; align-items: flex-start; padding: 10px 12px; margin-bottom: 10px; background: #f5f7fa; border: 1px solid #e0e6ed; border-radius: 6px; font-size: 12px; }}
   .geo-ctrl-item {{ display: flex; align-items: center; gap: 6px; }}
   .geo-ctrl-item label {{ color: #555; font-weight: 600; white-space: nowrap; }}
@@ -937,8 +1017,10 @@ def generate_html_report(
   var chartInstances = {{}};
   var chartOptions = {{}};
   var geoData = {{}};  // 地图 section 的完整数据，供动态构建
+  var chartData = {{}};  // 普通 section 的图表数据，供动态构建+列选择
   {all_chart_options_js}
   {all_geo_data_js}
+  {all_chart_data_js}
   
   function initCharts() {{
     Object.keys(chartOptions).forEach(function(key) {{
@@ -973,6 +1055,12 @@ def generate_html_report(
       geoCtrl.style.display = (chartType === 'map' || chartType === 'heatmap') ? 'flex' : 'none';
     }}
 
+    // 显示/隐藏列选择面板
+    var colSel = document.getElementById('col_sel_' + sectionId);
+    if (colSel) {{
+      colSel.style.display = (chartType !== 'table' && chartType !== 'map' && chartType !== 'heatmap') ? 'flex' : 'none';
+    }}
+
     if (chartType === 'table') {{
       container.style.display = 'none';
       return;
@@ -990,6 +1078,8 @@ def generate_html_report(
       var options;
       if ((chartType === 'map' || chartType === 'heatmap') && geoData[sectionId]) {{
         options = buildGeoOptionFromData(sectionId, chartType);
+      }} else if (chartData[sectionId]) {{
+        options = buildChartOption(sectionId, chartType);
       }} else {{
         options = chartOptions[sectionId + '_' + chartType];
       }}
@@ -1158,6 +1248,104 @@ def generate_html_report(
   // 单个筛选值变化
   function onGeoFilterValChange(sectionId) {{
     onGeoMetricChange(sectionId);
+  }}
+
+  // 根据当前列选择状态动态构建普通图表 ECharts option
+  function buildChartOption(sectionId, chartType) {{
+    var d = chartData[sectionId];
+    if (!d) return chartOptions[sectionId + '_' + chartType];
+
+    // 读取列选择状态
+    var selected = {{}};
+    var checkboxes = document.querySelectorAll('#col_sel_' + sectionId + ' input[type="checkbox"]');
+    for (var i = 0; i < checkboxes.length; i++) {{
+      selected[parseInt(checkboxes[i].getAttribute('data-series'))] = checkboxes[i].checked;
+    }}
+
+    // 筛选已选系列
+    var activeSeries = [];
+    for (var i = 0; i < d.series.length; i++) {{
+      if (selected[i] !== false) {{
+        activeSeries.push(d.series[i]);
+      }}
+    }}
+    if (activeSeries.length === 0) {{
+      activeSeries = [d.series[0]];
+    }}
+
+    var palette = ['#C8102E', '#182B49', '#5B9BD5', '#ED7D31', '#70AD47', '#A5A5A5', '#FFC000', '#4472C4'];
+
+    if (chartType === 'pie') {{
+      var s = activeSeries[0];
+      var pieData = [];
+      for (var i = 0; i < d.categories.length; i++) {{
+        pieData.push({{name: d.categories[i], value: (s.data[i] || 0)}});
+      }}
+      return {{
+        title: {{text: d.title, left: 'center', textStyle: {{fontSize: 14}}}},
+        tooltip: {{trigger: 'item', formatter: '{{b}}: {{c}} ({{d}}%)'}},
+        legend: {{orient: 'vertical', left: 'left'}},
+        series: [{{
+          type: 'pie', radius: ['40%', '70%'], center: ['50%', '55%'],
+          avoidLabelOverlap: true, label: {{show: true}},
+          itemStyle: {{borderRadius: 4, borderColor: '#fff', borderWidth: 2}},
+          data: pieData,
+        }}],
+      }};
+    }}
+
+    if (chartType === 'line') {{
+      var series = [];
+      for (var i = 0; i < activeSeries.length; i++) {{
+        series.push({{
+          name: activeSeries[i].name, type: 'line', data: activeSeries[i].data,
+          smooth: true, symbol: 'circle', symbolSize: 8,
+          lineStyle: {{width: 3}}, itemStyle: {{color: palette[i % palette.length]}},
+        }});
+      }}
+      return {{
+        title: {{text: d.title, left: 'center', textStyle: {{fontSize: 14}}}},
+        tooltip: {{trigger: 'axis'}},
+        legend: {{data: activeSeries.map(function(s){{return s.name;}}), bottom: 0}},
+        grid: {{left: '3%', right: '4%', bottom: '15%', top: '15%', containLabel: true}},
+        xAxis: {{type: 'category', data: d.categories, axisLabel: {{rotate: 30}}}},
+        yAxis: {{type: 'value'}},
+        series: series,
+      }};
+    }}
+
+    // bar (default)
+    var series = [];
+    for (var i = 0; i < activeSeries.length; i++) {{
+      series.push({{
+        name: activeSeries[i].name, type: 'bar', data: activeSeries[i].data,
+        barWidth: '50%', itemStyle: {{color: palette[i % palette.length], borderRadius: [4,4,0,0]}},
+      }});
+    }}
+    return {{
+      title: {{text: d.title, left: 'center', textStyle: {{fontSize: 14}}}},
+      tooltip: {{trigger: 'axis', axisPointer: {{type: 'shadow'}}}},
+      legend: {{data: activeSeries.map(function(s){{return s.name;}}), bottom: 0}},
+      grid: {{left: '3%', right: '4%', bottom: '15%', top: '15%', containLabel: true}},
+      xAxis: {{type: 'category', data: d.categories, axisLabel: {{rotate: 30}}}},
+      yAxis: {{type: 'value'}},
+      series: series,
+    }};
+  }}
+
+  // 列选择复选框变更时重新渲染图表
+  function onColChange(sectionId) {{
+    var btns = document.querySelectorAll('#' + sectionId + ' .chart-btn');
+    var currentType = 'bar';
+    for (var i = 0; i < btns.length; i++) {{
+      if (btns[i].classList.contains('active')) {{
+        var m = btns[i].getAttribute('onclick').match(/'([^']+)'/g);
+        if (m && m.length >= 2) {{
+          currentType = m[1].replace(/'/g, '');
+        }}
+      }}
+    }}
+    renderChart(sectionId, currentType);
   }}
 
   // 全选/取消全选
