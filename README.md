@@ -244,6 +244,17 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.37.0 (2026-07-16)
+
+**🔧 多级分类 x 轴改用 ECharts 原生双 xAxis 方案**
+
+| 改动 | 说明 |
+|------|------|
+| **原生双 xAxis** | JS 端 `catAxis()` 多列分类时返回双 xAxis 数组：第一级父分组（组首显示名称，长刻度线 `length:28` 形成分组带，视觉上居中分组）；第二级子分类（每个都显示，`alignWithLabel` 对齐标签），更接近 PPT 的多分类 x 轴效果 |
+| **修复 NameError** | 移除注释中 `{start: 0}` 等被 Python `.format()` 误解析为格式化字段的内容，消除 `NameError: name 'start' is not defined` |
+| **清理死代码** | 删除 `bandTicks` 未使用变量及 `parentByIndex`/`_parentByIndex` 中间字段；JS 端直接从 `d.categoryGroups` 构建父分组轴数据 |
+| **fallback 同步** | Python 端 `_build_x_axis_option` 简化为返回第一级父分组轴配置，与 JS 端逻辑保持一致 |
+
 ### v2.36.0 (2026-07-16)
 
 **🔧 分类列识别改为基于透视配置的行维度**

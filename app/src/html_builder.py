@@ -366,18 +366,20 @@ def _build_category_data(category_cols: List[int], rows: List[List[str]]) -> Tup
 
 
 def _build_x_axis_option(categories: List[str], category_groups: List[Dict], multi_level: bool = True) -> Dict:
-    """构建 ECharts xAxis 配置。多列分类时返回双轴数组，单列返回普通对象。"""
+    """构建 fallback xAxis 配置（JS 端 buildChartOption 会覆盖，这里仅静态预览用）。
+
+    多列分类时返回第一级父分组轴配置，JS 端根据 categoryGroups 重建双 xAxis。
+    """
     if multi_level and category_groups:
-        # 多级分类轴：主轴显示子分类，副轴显示父分类
         parent_data = []
         for g in category_groups:
             for j in range(g["count"]):
                 parent_data.append(g["name"] if j == 0 else "")
-        return [
-            {"type": "category", "data": categories, "axisLabel": {"interval": 0}},
-            {"type": "category", "data": parent_data, "axisLabel": {"interval": 0}, "offset": 28,
-             "axisLine": {"show": False}, "axisTick": {"show": False}},
-        ]
+        return {
+            "type": "category",
+            "data": parent_data,
+            "axisLabel": {"interval": 0},
+        }
     return {"type": "category", "data": categories, "axisLabel": {"rotate": 30}}
 
 
@@ -1817,22 +1819,43 @@ def generate_html_report(
     var symbolBorder = isDarkTheme() ? '#16213e' : '#ffffff';
     var pieBorder = isDarkTheme() ? '#16213e' : '#ffffff';
     var isMultiLevel = !!(d.categoryGroups && d.categoryGroups.length > 0);
-    var baseGrid = {{left: '3%', right: '4%', bottom: isMultiLevel ? '24%' : '15%', top: '15%', containLabel: true}};
+    var baseGrid = {{left: '3%', right: '4%', bottom: isMultiLevel ? '22%' : '15%', top: '15%', containLabel: true}};
     function catAxis() {{
       if (isMultiLevel) {{
-        // 多级分类轴：主轴显示子分类，副轴显示父分类
+        // 原生多级分类轴：双 xAxis 数组（ECharts 原生支持）
+        // 第一级：父分组（组首显示名称，长刻度线形成分组带，视觉上居中分组）
+        // 第二级：子分类（每个都显示，短刻度线对齐标签）
+        var groups = d.categoryGroups;
+        var childCats = d.categories;
         var parentData = [];
-        for (var g = 0; g < d.categoryGroups.length; g++) {{
-          for (var j = 0; j < d.categoryGroups[g].count; j++) {{
-            parentData.push(j === 0 ? d.categoryGroups[g].name : '');
+        for (var g = 0; g < groups.length; g++) {{
+          for (var j = 0; j < groups[g].count; j++) {{
+            parentData.push(j === 0 ? groups[g].name : '');
           }}
         }}
         return [
-          {{type: 'category', data: d.categories, axisLabel: {{interval: 0, color: axisColor}}, axisLine: {{lineStyle: {{color: axisColor}}}}, axisTick: {{alignWithLabel: true}}}},
-          {{type: 'category', data: parentData, axisLabel: {{interval: 0, color: axisColor, fontWeight: 'bold'}}, offset: 28, axisLine: {{show: false}}, axisTick: {{show: false}}}}
+          {{
+            type: 'category',
+            data: parentData,
+            axisLabel: {{ interval: 0, color: axisColor, margin: 28, fontSize: 12, fontWeight: 'bold' }},
+            axisTick: {{
+              alignWithLabel: false,
+              length: 28,
+              interval: function(index) {{ return parentData[index] !== ''; }}
+            }},
+            axisLine: {{ lineStyle: {{ color: axisColor }} }}
+          }},
+          {{
+            type: 'category',
+            data: childCats,
+            axisLabel: {{ interval: 0, color: axisColor }},
+            axisTick: {{ alignWithLabel: true }},
+            axisLine: {{ lineStyle: {{ color: axisColor }} }},
+            splitLine: {{ show: false }}
+          }}
         ];
       }}
-      return {{type: 'category', data: d.categories, axisLabel: {{rotate: 30, color: axisColor}}, axisLine: {{lineStyle: {{color: axisColor}}}}, splitLine: {{lineStyle: {{color: splitColor}}}}}};
+      return {{ type: 'category', data: d.categories, axisLabel: {{ rotate: 30, color: axisColor }}, axisLine: {{ lineStyle: {{ color: axisColor }} }}, splitLine: {{ lineStyle: {{ color: splitColor }} }} }};
     }}
     function valAxis() {{ return {{type: 'value', axisLabel: {{formatter: yAxisLabelFormatter, color: axisColor}}, axisLine: {{lineStyle: {{color: axisColor}}}}, splitLine: {{lineStyle: {{color: splitColor}}}}}}; }}
 
