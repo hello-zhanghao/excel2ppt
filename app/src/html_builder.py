@@ -641,72 +641,15 @@ def generate_html_report(
 
     sections = []
 
-    if ppt_config:
-        print("[HTML] 从 PPT 配置生成报告结构...")
-        
-        for page_idx, page in enumerate(ppt_config):
-            page_title_full = page.get("页面标题", "")
-            if "|" in page_title_full:
-                title_parts = page_title_full.split("|", 1)
-                page_title = title_parts[0].strip()
-                page_subtitle = title_parts[1].strip()
-            else:
-                page_title = page_title_full
-                page_subtitle = ""
-
-            if page.get("页面类型") == "封面":
-                continue
-
-            charts = page.get("charts", [])
-            if not charts:
-                continue
-
-            for chart_idx, chart in enumerate(charts):
-                sheet_name = chart.get("数据Sheet", "")
-                block_name = chart.get("区块名", "")
-                data_sec = _find_data_in_excel(excel_sections, sheet_name, block_name)
-
-                if not data_sec and excel_sections:
-                    if page_idx == 0 and chart_idx == 0:
-                        print(f"    [警告] 未找到 Sheet '{sheet_name}'，尝试使用第一个可用数据")
-                    data_sec = excel_sections[0] if excel_sections else None
-
-                if not data_sec:
-                    continue
-
-                chart_type = _ppt_chart_type_to_html(chart.get("图表类型", "column"))
-
-                title = chart.get("图表标题", "") or page_title
-                summary = _compute_summary(data_sec["headers"], data_sec["rows"])
-
-                # 检测经纬度列，含经纬度的 section 追加地图类型
-                has_geo = _detect_geo_columns(data_sec["headers"]) is not None
-                if has_geo:
-                    available = ["map", "heatmap", "table"]
-                else:
-                    available = ["bar", "line", "pie", "table"]
-
-                sections.append({
-                    "id": f"section_{page_idx}_{chart_idx}",
-                    "title": title,
-                    "subtitle": page_subtitle if chart_idx == 0 else "",
-                    "chart_type": chart_type,
-                    "available_charts": available,
-                    "headers": data_sec["headers"],
-                    "rows": data_sec["rows"],
-                    "summary": summary,
-                })
-
-    if not sections and excel_sections:
-        print("[HTML] 无 PPT 配置，从 Excel 自动生成...")
+    if excel_sections:
+        print(f"[HTML] 从透视数据生成报告结构（共 {len(excel_sections)} 个区块）...")
         for sec in excel_sections:
-            if sec["name"] == "错误信息":
+            if sec["name"] in ("错误信息",):
                 continue
 
             chart_type = _infer_chart_type(sec["headers"], sec["rows"])
             summary = _compute_summary(sec["headers"], sec["rows"])
 
-            # 含经纬度列时追加地图类型
             has_geo = _detect_geo_columns(sec["headers"]) is not None
             if has_geo:
                 available = ["map", "heatmap", "table"]
@@ -778,12 +721,12 @@ def generate_html_report(
 
     section_html_parts = []
     toc_html_parts = []
-    all_chart_options_js = ""  # 累积所有 section 的 chartOptions，避免循环内重置
-    all_geo_data_js = ""  # 累积地图 section 的完整数据，供 JS 动态构建
-    all_chart_data_js = ""  # 累积非地图 section 的图表数据，供 JS 动态构建+列选择
+    all_chart_options_js = ""
+    all_geo_data_js = ""
+    all_chart_data_js = ""
 
     for sec_idx, sec in enumerate(sections, 1):
-        toc_html_parts.append(f'<li><a href="#{sec["id"]}"><span class="toc-num">{sec_idx}</span>{_escape_html(sec["title"])}</a></li>')
+        toc_html_parts.append(f'<li><a href="#{sec["id"]}"><span class="toc-num">{sec_idx}</span>{_escape_html(sec.get("title", ""))}</a></li>')
         
         if sec.get("ppt_images"):
             slide_html = ""
@@ -800,12 +743,11 @@ def generate_html_report(
   {slide_html}
 </div>''')
             continue
-        
+
         chart_options_js = ""
         is_geo_section = "map" in sec["available_charts"] or "heatmap" in sec["available_charts"]
         for ct in sec["available_charts"]:
             if ct in ("map", "heatmap"):
-                # 地图类型：预生成默认 option 作为初始渲染，同时注册 geoData 供动态切换
                 opts = _generate_geo_chart_options(sec["id"], sec, ct)
             else:
                 opts = _generate_chart_options(sec["id"], sec, ct)
@@ -813,7 +755,6 @@ def generate_html_report(
                 chart_options_js += f"  chartOptions['{sec['id']}_{ct}'] = {opts};\n"
         all_chart_options_js += chart_options_js
 
-        # 地图 section：注册 geoData 供 JS 动态构建（指标列切换+筛选）
         geo_controls_html = ""
         if is_geo_section:
             geo_js = _build_geo_data_js(sec)
@@ -827,9 +768,9 @@ def generate_html_report(
             labels = {"bar": "柱状图", "line": "折线图", "pie": "饼图", "table": "表格",
                       "map": "地图", "heatmap": "热力图"}
             chart_buttons_html += f'<button class="chart-btn {active}" onclick="switchChart(\'{sec["id"]}\', \'{ct}\')">{labels.get(ct, ct)}</button>'
-        
+
         col_selector_html = _build_col_selector_html(sec)
-        
+
         header_cells = "".join(f"<th>{_escape_html(h)}</th>" for h in sec["headers"])
         body_rows = ""
         for row in sec["rows"]:
@@ -840,7 +781,7 @@ def generate_html_report(
 
         row_count = len(sec["rows"])
         row_count_html = f'<span class="table-row-count">共 {row_count} 行</span>'
-        
+
         summary_html = ""
         if sec.get("summary"):
             summary_items = []
@@ -853,7 +794,7 @@ def generate_html_report(
                     summary_items.append(f"{key}: {val}")
             if summary_items:
                 summary_html = f'<div class="summary-bar"><span>数据摘要:</span> {" | ".join(summary_items)}</div>'
-        
+
         section_html_parts.append(f'''
 <div id="{sec["id"]}" class="section">
   <h2>{_escape_html(sec["title"])}</h2>
