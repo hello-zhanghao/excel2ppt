@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.29.0"
+__VERSION__ = "2.30.0"
 __UPDATE_DATE__ = "2026-07-15"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -405,6 +405,39 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_
     print(f"\n[OK] 完成！PPT已保存至: {output_path}")
     print(f"   共 {len(pages)} 页, {total_charts} 个原生图表")
     print(f"   提示: 双击PPT中的图表可查看和编辑数据")
+
+
+def _run_html_from_pivot(pivot_path, output_path=None):
+    """从透视结果 Excel 自动生成 HTML 报告（无需额外配置）。
+
+    每个 sheet 自动生成一个图表 section，图表类型自动推断，支持柱状/折线/饼图/表格切换。
+    """
+    from src.html_builder import generate_html_report
+
+    if not pivot_path or not os.path.exists(pivot_path):
+        print(f"[HTML] 透视结果文件不存在，跳过 HTML 生成: {pivot_path}")
+        return None
+
+    if not output_path:
+        base = os.path.basename(pivot_path).rsplit(".", 1)[0]
+        out_dir = os.path.dirname(pivot_path) or "."
+        output_path = os.path.join(out_dir, f"{base}_报告.html")
+
+    print(f"[HTML] 从透视结果生成 HTML 报告: {os.path.basename(pivot_path)}")
+    html_path = generate_html_report(
+        excel_path=pivot_path,
+        ppt_config=None,  # 无 PPT 配置 → 纯 Excel 自动生成模式
+        output_dir=os.path.dirname(output_path) or ".",
+        report_title="透视分析报告",
+        report_subtitle="自动生成",
+    )
+    if html_path:
+        # generate_html_report 内部用自己的文件名，重命名为用户指定的
+        if os.path.abspath(html_path) != os.path.abspath(output_path) and os.path.exists(html_path):
+            os.replace(html_path, output_path)
+            html_path = output_path
+        print(f"[OK] HTML 报告已保存至: {html_path}")
+    return html_path
 
 
 def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir=None):
@@ -1025,23 +1058,29 @@ def _dispatch_from_gui(raw_args):
     add_ts = getattr(args, 'timestamp', False)
     if detected == "all":
         print("[信息] 检测到综合配置（PPT + 透视分析），执行全部模式")
-        # auto 模式 -o 指定输出目录，生成两个文件
+        # auto 模式 -o 指定输出目录，生成 PPT + 透视 + HTML 三个文件
         out_dir = output_path if os.path.isdir(output_path) else os.path.dirname(output_path)
         os.makedirs(out_dir, exist_ok=True)
         base = os.path.basename(config_path).rsplit(".", 1)[0]
         ts_suffix = f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}" if add_ts else ""
         ppt_out = os.path.join(out_dir, f"{base}_报告{ts_suffix}.pptx")
         pivot_out = os.path.join(out_dir, f"{base}_分析{ts_suffix}.xlsx")
+        html_out = os.path.join(out_dir, f"{base}_报告{ts_suffix}.html")
         _run_pivot_mode(config_path, pivot_out, data_dir=data_dir)
         print()
         _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out, data_dir=data_dir)
+        print()
+        _run_html_from_pivot(pivot_out, html_out)
         return
     print(f"[信息] 自动检测配置类型: {detected}")
     if detected == "unknown":
         print("[错误] 未识别的配置类型，请确认 Excel 包含正确的配置 Sheet")
         sys.exit(1)
     if detected == "pivot":
-        _run_pivot_mode(config_path, _apply_timestamp(output_path, add_ts), data_dir=data_dir)
+        pivot_out_path = _apply_timestamp(output_path, add_ts)
+        _run_pivot_mode(config_path, pivot_out_path, data_dir=data_dir)
+        print()
+        _run_html_from_pivot(pivot_out_path)
     else:
         _run_ppt_mode(config_path, _apply_timestamp(output_path, add_ts), data_dir=data_dir)
 
@@ -1190,17 +1229,20 @@ def main():
         detected = _detect_mode(config_path)
         if detected == "all":
             print("[信息] 检测到综合配置（PPT + 透视分析），执行全部模式")
-            # auto 模式 -o 指定输出目录，生成两个文件
+            # auto 模式 -o 指定输出目录，生成 PPT + 透视 + HTML 三个文件
             out_dir = output_path if os.path.isdir(output_path) else os.path.dirname(output_path)
             os.makedirs(out_dir, exist_ok=True)
             base = os.path.basename(config_path).rsplit('.', 1)[0]
             ts_suffix = f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}" if add_ts else ""
             ppt_out = os.path.join(out_dir, f"{base}_报告{ts_suffix}.pptx")
             pivot_out = os.path.join(out_dir, f"{base}_分析{ts_suffix}.xlsx")
+            html_out = os.path.join(out_dir, f"{base}_报告{ts_suffix}.html")
             _run_pivot_mode(config_path, pivot_out, validate_only=validate_only, data_dir=data_dir)
             if not validate_only:
                 print()
                 _run_ppt_mode(config_path, ppt_out, pivot_data_file=pivot_out, data_dir=data_dir)
+                print()
+                _run_html_from_pivot(pivot_out, html_out)
             return
         print(f"[信息] 自动检测配置类型: {detected}")
         if detected == "unknown":
@@ -1209,8 +1251,12 @@ def main():
         mode = detected
 
     if mode == "pivot":
-        _run_pivot_mode(config_path, _apply_timestamp(output_path, add_ts),
+        pivot_out_path = _apply_timestamp(output_path, add_ts)
+        _run_pivot_mode(config_path, pivot_out_path,
                         validate_only=validate_only, data_dir=data_dir)
+        if not validate_only:
+            print()
+            _run_html_from_pivot(pivot_out_path)
     else:
         _run_ppt_mode(config_path, _apply_timestamp(output_path, add_ts),
                       pivot_data_file=getattr(args, "pivot_file", None),
