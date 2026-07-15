@@ -1017,19 +1017,30 @@ def generate_html_report(
             if summary_items:
                 summary_html = f'<div class="summary-bar"><span>数据摘要:</span> {" | ".join(summary_items)}</div>'
 
-        # 表格构建（含排序表头 + 工具栏）
+        # 表格构建（含排序表头 + 工具栏 + 维度列高亮）
+        # 计算维度列集合（分类列），用于颜色区分
+        _geo = _detect_geo_columns(sec["headers"])
+        _geo_set = set(_geo) if _geo else set()
+        _cat_cols, _ = _detect_chart_columns(sec["headers"])
+        _dim_set = set(_cat_cols) - _geo_set
+
+        _dim_class = ' class="dim-th"'
         header_cells = "".join(
-            f'<th onclick="sortTable(\'{sec["id"]}\', {i})" data-sort="" data-col="{i}">{_escape_html(h)}<span class="sort-arrow"></span></th>'
+            f'<th onclick="sortTable(\'{sec["id"]}\', {i})" data-sort="" data-col="{i}"{_dim_class if i in _dim_set else ""}>{_escape_html(h)}<span class="sort-arrow"></span></th>'
             for i, h in enumerate(sec["headers"])
         )
         body_rows = ""
         for row in sec["rows"]:
             is_total = any("合计" in str(v) or "总计" in str(v) for v in row)
             row_class = "total-row" if is_total else ""
-            cells = "".join(
-                f'<td class="num-cell">{_escape_html(v)}</td>' if _is_numeric_cell(v) else f"<td>{_escape_html(v)}</td>"
-                for v in row
-            )
+            cells = ""
+            for ci, v in enumerate(row):
+                if ci in _dim_set:
+                    cells += f'<td class="dim-cell">{_escape_html(v)}</td>'
+                elif _is_numeric_cell(v):
+                    cells += f'<td class="num-cell">{_escape_html(v)}</td>'
+                else:
+                    cells += f'<td>{_escape_html(v)}</td>'
             body_rows += f'<tr class="{row_class}">{cells}</tr>'
 
         row_count = len(sec["rows"])
@@ -1162,6 +1173,8 @@ def generate_html_report(
     --th-bg: #f8f9fa;
     --th-color: #495057;
     --total-bg: #D9E2F3;
+    --dim-bg: #e8f0fe;
+    --dim-color: #1a4a7a;
     --tooltip-bg: #ffffff;
     --tooltip-border: #e9ecef;
     --tooltip-text: #1a1a2e;
@@ -1186,6 +1199,8 @@ def generate_html_report(
     --th-bg: #1f2a4a;
     --th-color: #c0c8d8;
     --total-bg: #243456;
+    --dim-bg: #1a2a4a;
+    --dim-color: #8ab8f0;
     --tooltip-bg: #16213e;
     --tooltip-border: #2a3a5a;
     --tooltip-text: #e0e0e0;
@@ -1283,10 +1298,12 @@ def generate_html_report(
   table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
   th {{ background: var(--th-bg); color: var(--th-color); font-weight: 700; padding: 11px 14px; text-align: left; border-bottom: 2px solid var(--border); position: sticky; top: 0; z-index: 2; cursor: pointer; user-select: none; white-space: nowrap; }}
   th:hover {{ background: var(--primary-light); color: var(--primary); }}
+  th.dim-th {{ background: var(--dim-bg); color: var(--dim-color); }}
   .sort-arrow {{ font-size: 10px; color: var(--primary); margin-left: 4px; }}
   tbody tr.hidden {{ display: none; }}
-  td {{ padding: 9px 14px; border-bottom: 1px solid var(--border); color: var(--text); }}
-  td.num-cell {{ text-align: right; font-variant-numeric: tabular-nums; }}
+  td {{ padding: 9px 14px; border-bottom: 1px solid var(--border); color: var(--text); text-align: center; }}
+  td.num-cell {{ font-variant-numeric: tabular-nums; }}
+  td.dim-cell {{ background: var(--dim-bg); color: var(--dim-color); font-weight: 600; text-align: center; white-space: nowrap; }}
   tbody tr:nth-child(even) {{ background: var(--zebra); }}
   tbody tr:hover {{ background: var(--hover-bg); }}
   tbody tr.total-row {{ background: var(--total-bg); font-weight: bold; }}
@@ -1731,7 +1748,6 @@ def generate_html_report(
           name: activeSeries[i].name, type: 'line', data: activeSeries[i].data,
           smooth: true, symbol: 'circle', symbolSize: 8,
           lineStyle: {{width: 3, color: c}}, itemStyle: {{color: c, borderColor: symbolBorder, borderWidth: 2}},
-          areaStyle: {{color: areaGradient(c)}},
         }});
       }}
       return {{
@@ -1755,7 +1771,7 @@ def generate_html_report(
           name: activeSeries[i].name, type: 'line', data: activeSeries[i].data,
           smooth: true, symbol: 'circle', symbolSize: 8,
           lineStyle: {{width: 3, color: c}}, itemStyle: {{color: c, borderColor: symbolBorder, borderWidth: 2}},
-          areaStyle: {{color: areaGradient(c), opacity: 0.6}},
+          areaStyle: {{color: areaGradient(c), opacity: 0.5}},
         }});
       }}
       return {{
