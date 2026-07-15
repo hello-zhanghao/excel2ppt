@@ -819,8 +819,11 @@ def run_analysis(task, config_dir, scalar_context=None):
 
     for col in 值字段:
         af_for_col = _get_agg_for_col(col, 聚合函数, 值字段)
+        af_key, _ = _parse_join_sep(af_for_col)
+        af_mapped = AGG_MAP.get(af_key, af_key)
         # max/min 对字符串列合法（字典序），不强制转数值（如图片路径取值场景）
-        if af_for_col not in ("count", "nunique", "pct", "count_pct", "max", "min"):
+        # join 专门处理字符串列去重拼接，也不强制转数值
+        if af_mapped not in ("count", "nunique", "pct", "count_pct", "max", "min", "join"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df = df.dropna(subset=值字段, how="all")
