@@ -192,8 +192,8 @@ def verify_ppt_features(ppt_path):
     prs = Presentation(ppt_path)
     slides = list(prs.slides)
 
-    # 检查页数（期望22页配置→21页实际，页21跳过）
-    checks.append(("总页数=21", len(slides) == 21, f"实际{len(slides)}页"))
+    # 检查页数（期望24页配置→23页实际，页24跳过）
+    checks.append(("总页数=23", len(slides) == 23, f"实际{len(slides)}页"))
 
     def get_texts(slide):
         return [s.text_frame.text for s in slide.shapes if s.has_text_frame]
@@ -254,18 +254,12 @@ def verify_ppt_features(ppt_path):
     else:
         checks.append(("P1 结论卡片", False, "页数不足"))
 
-    # P1: 结尾页（第11页）
-    if len(slides) >= 11:
-        texts = get_texts(slides[10])
-        has_ending = any("谢谢" in t for t in texts)
-        checks.append(("P1 结尾页", has_ending, f"文本: {texts[:2]}"))
-    else:
-        checks.append(("P1 结尾页", False, "页数不足"))
+    # P1: 结尾页（页23→0-indexed 22，已在下方"结束页2"检查，此处跳过）
 
-    # 是否生成=否 的页面被跳过（配置22页，实际21页，"跳过测试页"不应出现）
+    # 是否生成=否 的页面被跳过（配置24页，实际23页，"跳过测试页"不应出现）
     all_texts = [t for slide in slides for t in get_texts(slide)]
     no_skip_page = not any("跳过测试页" in t or "不应出现" in t for t in all_texts)
-    checks.append(("是否生成跳过(页21)", no_skip_page and len(slides) == 21, f"配置22页→实际{len(slides)}页"))
+    checks.append(("是否生成跳过(页24)", no_skip_page and len(slides) == 23, f"配置24页→实际{len(slides)}页"))
 
     # P0: 百分比饼图数据为 0~1 小数（第5页饼图，引用占比透视结果）
     # 验证 PPT 拿到的是 0~1 小数，未被 Excel 的 0.0% 格式 ×100 影响
@@ -310,11 +304,11 @@ def verify_ppt_features(ppt_path):
         return sum(1 for s in slide.shapes if s.has_chart)
     from pptx.enum.chart import XL_CHART_TYPE
 
-    # 2图上下布局（页13→0-indexed 12）：应含area + column 两种图表
-    if len(slides) >= 13:
-        n = _count_charts(slides[12])
+    # 2图上下布局（页12→0-indexed 11）：应含area + column 两种图表
+    if len(slides) >= 12:
+        n = _count_charts(slides[11])
         types = set()
-        for s in slides[12].shapes:
+        for s in slides[11].shapes:
             if s.has_chart:
                 types.add(s.chart.chart_type)
         has_area = XL_CHART_TYPE.AREA in types
@@ -324,55 +318,55 @@ def verify_ppt_features(ppt_path):
     else:
         checks.append(("2图上下(area+column)", False, "页数不足"))
 
-    # 4图布局（页14→0-indexed 13）：应含4个图表
-    if len(slides) >= 14:
-        n = _count_charts(slides[13])
+    # 4图布局（页13→0-indexed 12）：应含4个图表
+    if len(slides) >= 13:
+        n = _count_charts(slides[12])
         checks.append(("4图网格", n == 4, f"charts={n}"))
     else:
         checks.append(("4图网格", False, "页数不足"))
 
-    # 上文下图（页15→0-indexed 14）：应有文字区+1个图表
-    if len(slides) >= 15:
-        n = _count_charts(slides[14])
-        has_top_text = any("布局说明" in t for t in get_texts(slides[14]))
+    # 上文下图（页14→0-indexed 13）：应有文字区+1个图表
+    if len(slides) >= 14:
+        n = _count_charts(slides[13])
+        has_top_text = any("布局说明" in t for t in get_texts(slides[13]))
         checks.append(("上文下图", n == 1 and has_top_text, f"charts={n}, text={has_top_text}"))
     else:
         checks.append(("上文下图", False, "页数不足"))
 
-    # 散点图（页16→0-indexed 15）
-    if len(slides) >= 16:
+    # 散点图（页15→0-indexed 14）
+    if len(slides) >= 15:
         has_scatter = any(s.has_chart and s.chart.chart_type == XL_CHART_TYPE.XY_SCATTER
-                          for s in slides[15].shapes)
+                          for s in slides[14].shapes)
         checks.append(("散点图(scatter)", has_scatter, ""))
     else:
         checks.append(("散点图(scatter)", False, "页数不足"))
 
-    # 环形图（页17→0-indexed 16）
-    if len(slides) >= 17:
+    # 环形图（页16→0-indexed 15）
+    if len(slides) >= 16:
         has_doughnut = any(s.has_chart and s.chart.chart_type == XL_CHART_TYPE.DOUGHNUT
-                           for s in slides[16].shapes)
+                           for s in slides[15].shapes)
         checks.append(("环形图(doughnut)", has_doughnut, ""))
     else:
         checks.append(("环形图(doughnut)", False, "页数不足"))
 
-    # 面积图（页18→0-indexed 17）
-    if len(slides) >= 18:
+    # 面积图（页17→0-indexed 16）
+    if len(slides) >= 17:
         has_area2 = any(s.has_chart and s.chart.chart_type == XL_CHART_TYPE.AREA
-                        for s in slides[17].shapes)
+                        for s in slides[16].shapes)
         checks.append(("面积图(area)", has_area2, ""))
     else:
         checks.append(("面积图(area)", False, "页数不足"))
 
-    # 组合图（页19→0-indexed 18）
-    if len(slides) >= 19:
-        has_combo = any("柱+折" in t for t in get_texts(slides[18]))
+    # 组合图（页18→0-indexed 17）
+    if len(slides) >= 18:
+        has_combo = any("柱+折" in t for t in get_texts(slides[17]))
         checks.append(("组合图(combo)", has_combo, ""))
     else:
         checks.append(("组合图(combo)", False, "页数不足"))
 
-    # 结束页2（页20→0-indexed 19）
-    if len(slides) >= 20:
-        texts = get_texts(slides[19])
+    # 结束页2（页23→0-indexed 22）
+    if len(slides) >= 23:
+        texts = get_texts(slides[22])
         has_ending2 = any("全特性" in t for t in texts)
         checks.append(("结束页2", has_ending2, f"text={texts[:2]}"))
     else:
@@ -810,7 +804,7 @@ def verify_template_mode(pivot_excel_path):
     # 2. 调用 template 子命令
     ok = run_cmd(
         f'"{PYTHON}" "{os.path.join(PROJECT_DIR, "app", "main.py")}" template '
-        f'"{template_path}" --pivot "{pivot_excel_path}" -o "{output_path}"'
+        f'"{template_path}" --pivot "{pivot_excel_path}" --image-dir "{SCRIPT_DIR}" -o "{output_path}"'
     )
     if not ok or not os.path.exists(output_path):
         print(f"  {RED}✗ 模板填充执行失败{RESET}")
@@ -823,6 +817,7 @@ def verify_template_mode(pivot_excel_path):
     try:
         from pptx import Presentation
         from pptx.util import Pt
+        from pptx.enum.chart import XL_CHART_TYPE
         prs = Presentation(output_path)
 
         # ---------- 页1: 文本占位符 + 图表占位符 ----------
@@ -2010,45 +2005,37 @@ def main():
 
     # Step 1: 透视分析
     print_header("Step 1: 透视分析 (pivot)")
+    pivot_out = os.path.join(SCRIPT_DIR, "项目配置_分析.xlsx")
     ok = run_cmd(
         f'"{PYTHON}" "{os.path.join(PROJECT_DIR, "app", "main.py")}" pivot '
-        f'-c "{config_path}"'
+        f'-c "{config_path}" --data-dir "{SCRIPT_DIR}" -o "{pivot_out}"'
     )
     if not ok:
         print(f"\n{RED}{BOLD}透视分析失败！请检查上方错误信息。{RESET}")
         sys.exit(1)
 
-    # Step 2: 查找透视分析输出
-    output_dir = find_latest_output()
-    if not output_dir:
-        print(f"  {RED}未找到输出目录{RESET}")
+    # Step 2: 透视结果（直接使用上一步指定的输出路径）
+    pivot_excel = pivot_out
+    if not pivot_excel or not os.path.exists(pivot_excel):
+        print(f"  {RED}透视结果文件不存在: {pivot_excel}{RESET}")
         sys.exit(1)
-
-    # 找到透视结果 Excel 文件
-    excel_files = glob.glob(os.path.join(output_dir, "*_分析_*.xlsx"))
-    if not excel_files:
-        # 尝试其他命名模式
-        excel_files = glob.glob(os.path.join(output_dir, "*.xlsx"))
-    pivot_excel = excel_files[0] if excel_files else None
 
     # Step 3: 生成 PPT
     print_header("Step 2: PPT 生成 (ppt)")
+    ppt_out = os.path.join(SCRIPT_DIR, "项目配置_报告.pptx")
     ok = run_cmd(
         f'"{PYTHON}" "{os.path.join(PROJECT_DIR, "app", "main.py")}" ppt '
-        f'-c "{config_path}" --pivot-file "{pivot_excel}"'
+        f'-c "{config_path}" --data-dir "{SCRIPT_DIR}" --pivot-file "{pivot_excel}" -o "{ppt_out}"'
     )
     if not ok:
         print(f"\n{RED}{BOLD}PPT 生成失败！请检查上方错误信息。{RESET}")
         sys.exit(1)
 
-    # Step 4: 查找 PPT 文件（可能在不同的时间戳目录中）
-    all_output_dirs = sorted(glob.glob(os.path.join(SCRIPT_DIR, "output_*")), key=os.path.getmtime)
-    ppt_path = None
-    for d in reversed(all_output_dirs):
-        ppt_files = glob.glob(os.path.join(d, "*.pptx"))
-        if ppt_files:
-            ppt_path = ppt_files[0]
-            break
+    # Step 4: PPT 结果（直接使用上一步指定的输出路径）
+    ppt_path = ppt_out
+    if not ppt_path or not os.path.exists(ppt_path):
+        print(f"  {RED}PPT 文件不存在: {ppt_path}{RESET}")
+        sys.exit(1)
 
     # Step 5: 检查输出
     inspect_excel(pivot_excel)
