@@ -724,8 +724,8 @@ def generate_html_report(
     all_chart_options_js = ""  # 累积所有 section 的 chartOptions，避免循环内重置
     all_geo_data_js = ""  # 累积地图 section 的完整数据，供 JS 动态构建
 
-    for sec in sections:
-        toc_html_parts.append(f'<li><a href="#{sec["id"]}">{_escape_html(sec["title"])}</a></li>')
+    for sec_idx, sec in enumerate(sections, 1):
+        toc_html_parts.append(f'<li><a href="#{sec["id"]}"><span class="toc-num">{sec_idx}</span>{_escape_html(sec["title"])}</a></li>')
         
         if sec.get("ppt_images"):
             slide_html = ""
@@ -777,6 +777,9 @@ def generate_html_report(
             row_class = "total-row" if is_total else ""
             cells = "".join(f"<td>{_escape_html(v)}</td>" for v in row)
             body_rows += f"<tr class=\"{row_class}\">{cells}</tr>"
+
+        row_count = len(sec["rows"])
+        row_count_html = f'<span class="table-row-count">共 {row_count} 行</span>'
         
         summary_html = ""
         if sec.get("summary"):
@@ -802,7 +805,7 @@ def generate_html_report(
     <div id="chart_{sec["id"]}" class="chart-canvas"></div>
   </div>
   <div class="table-container">
-    <div class="table-header">数据详情</div>
+    <div class="table-header"><span>数据详情</span>{row_count_html}</div>
     <div class="table-wrap">
       <table><thead><tr>{header_cells}</tr></thead><tbody>{body_rows}</tbody></table>
     </div>
@@ -837,10 +840,11 @@ def generate_html_report(
   .main-layout {{ display: flex; max-width: 1200px; margin: 0 auto; }}
   .sidebar {{ width: 260px; min-width: 260px; padding: 16px; background: #fff; position: sticky; top: 84px; height: calc(100vh - 84px); overflow-y: auto; }}
   .sidebar h3 {{ font-size: 14px; color: #2E75B6; margin-bottom: 12px; padding-left: 8px; border-left: 3px solid #2E75B6; }}
-  .sidebar ul {{ list-style: none; padding-left: 8px; }}
-  .sidebar li {{ margin-bottom: 8px; }}
-  .sidebar a {{ text-decoration: none; color: #555; font-size: 13px; transition: color 0.2s; display: block; padding: 4px 8px; border-radius: 4px; }}
+  .sidebar ul {{ list-style: none; padding-left: 0; }}
+  .sidebar li {{ margin-bottom: 4px; }}
+  .sidebar a {{ text-decoration: none; color: #555; font-size: 13px; transition: color 0.2s; display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 4px; line-height: 1.4; }}
   .sidebar a:hover {{ color: #2E75B6; background: #f0f5ff; }}
+  .toc-num {{ display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 4px; background: #e8f0fe; color: #2E75B6; border-radius: 4px; font-size: 11px; font-weight: 600; flex-shrink: 0; }}
   .summary-cards {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 16px; }}
   .summary-card {{ background: linear-gradient(135deg, #5B9BD5, #2E75B6); color: #fff; padding: 12px; border-radius: 8px; text-align: center; }}
   .summary-card .card-label {{ font-size: 11px; opacity: 0.8; margin-bottom: 4px; }}
@@ -865,10 +869,11 @@ def generate_html_report(
   .geo-fv-item input {{ margin: 0; }}
   .chart-canvas {{ height: 350px; }}
   .table-container {{ border-top: 1px solid #eee; padding-top: 16px; }}
-  .table-header {{ font-size: 14px; font-weight: 600; color: #2E75B6; margin-bottom: 10px; }}
-  .table-wrap {{ overflow-x: auto; -webkit-overflow-scrolling: touch; }}
+  .table-header {{ font-size: 14px; font-weight: 600; color: #2E75B6; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }}
+  .table-row-count {{ font-size: 12px; font-weight: normal; color: #999; }}
+  .table-wrap {{ overflow: auto; max-height: 360px; -webkit-overflow-scrolling: touch; border: 1px solid #eee; border-radius: 6px; }}
   table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-  th {{ background: #f8f9fa; color: #495057; font-weight: 600; padding: 10px 12px; text-align: left; border-bottom: 2px solid #dee2e6; position: sticky; top: 0; }}
+  th {{ background: #f8f9fa; color: #495057; font-weight: 600; padding: 10px 12px; text-align: left; border-bottom: 2px solid #dee2e6; position: sticky; top: 0; z-index: 2; }}
   td {{ padding: 8px 12px; border-bottom: 1px solid #f0f0f0; }}
   tbody tr:nth-child(even) {{ background: #fafbfc; }}
   tbody tr:hover {{ background: #e9f5ff; }}
