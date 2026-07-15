@@ -900,8 +900,8 @@ def generate_html_report(
   .nav-bar {{ display: flex; justify-content: center; gap: 12px; padding: 10px 0; background: #fff; border-bottom: 1px solid #eee; }}
   .nav-btn {{ padding: 6px 14px; background: #f5f7fa; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; color: #555; cursor: pointer; transition: all 0.2s; }}
   .nav-btn:hover {{ background: #2E75B6; color: #fff; border-color: #2E75B6; }}
-  .main-layout {{ display: flex; max-width: 1200px; margin: 0 auto; }}
-  .sidebar {{ width: 260px; min-width: 260px; padding: 16px; background: #fff; position: sticky; top: 84px; height: calc(100vh - 84px); overflow-y: auto; }}
+  .main-layout {{ display: flex; width: 100%; }}
+  .sidebar {{ width: 240px; min-width: 240px; padding: 16px; background: #fff; position: fixed; left: 0; top: 84px; bottom: 0; overflow-y: auto; z-index: 10; box-shadow: 2px 0 8px rgba(0,0,0,0.05); }}
   .sidebar h3 {{ font-size: 14px; color: #2E75B6; margin-bottom: 12px; padding-left: 8px; border-left: 3px solid #2E75B6; }}
   .sidebar ul {{ list-style: none; padding-left: 0; }}
   .sidebar li {{ margin-bottom: 4px; }}
@@ -912,7 +912,8 @@ def generate_html_report(
   .summary-card {{ background: linear-gradient(135deg, #5B9BD5, #2E75B6); color: #fff; padding: 12px; border-radius: 8px; text-align: center; }}
   .summary-card .card-label {{ font-size: 11px; opacity: 0.8; margin-bottom: 4px; }}
   .summary-card .card-value {{ font-size: 16px; font-weight: bold; }}
-  .content-area {{ flex: 1; padding: 20px; }}
+  .content-area {{ max-width: 960px; width: 100%; padding: 20px; }}
+  .content-wrapper {{ margin-left: 240px; flex: 1; display: flex; justify-content: center; min-width: 0; }}
   .section {{ background: #fff; border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); padding: 20px; margin-bottom: 20px; }}
   .section h2 {{ font-size: 18px; color: #182B49; margin-bottom: 4px; font-weight: 600; }}
   .section .subtitle {{ font-size: 13px; color: #999; margin-bottom: 12px; }}
@@ -953,7 +954,9 @@ def generate_html_report(
   .footer {{ text-align: center; padding: 24px; color: #999; font-size: 12px; }}
   @media (max-width: 768px) {{
     .main-layout {{ flex-direction: column; }}
-    .sidebar {{ width: 100%; min-width: 100%; position: static; height: auto; }}
+    .sidebar {{ position: static; width: 100%; min-width: 100%; height: auto; box-shadow: none; border-bottom: 1px solid #eee; }}
+    .content-wrapper {{ margin-left: 0; }}
+    .content-area {{ max-width: 100%; }}
     .summary-cards {{ grid-template-columns: repeat(3, 1fr); }}
     .chart-canvas {{ height: 280px; }}
   }}
@@ -975,9 +978,11 @@ def generate_html_report(
     <h3>数据摘要</h3>
     <div class="summary-cards">{summary_cards_html}</div>
   </div>
-  <div class="content-area">
-    {''.join(section_html_parts)}
-    <div class="footer">由 Excel 统一分析工具自动生成 | {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</div>
+  <div class="content-wrapper">
+    <div class="content-area">
+      {''.join(section_html_parts)}
+      <div class="footer">由 Excel 统一分析工具自动生成 | {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</div>
+    </div>
   </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>

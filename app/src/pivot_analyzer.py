@@ -22,6 +22,14 @@ _KNOWN_FMTS = {
 }
 
 
+def _col_round_precision(col_name) -> int:
+    """根据列名确定数值精度。经纬度坐标需要6位小数，其他默认2位。"""
+    name = str(col_name).lower()
+    if any(k in name for k in ["经度", "纬度", "lat", "lon", "lng", "longitude", "latitude"]):
+        return 6
+    return 2
+
+
 AGG_MAP = {
     "sum": "sum",
     "avg": "mean",
@@ -1346,9 +1354,9 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
                 
                 elif field_name not in pct_tmp_cols and field_name not in count_pct_tmp_cols:
                     if pd.api.types.is_numeric_dtype(grouped[col]):
-                        grouped[col] = grouped[col].round(2)
+                        grouped[col] = grouped[col].round(_col_round_precision(field_name))
             elif col not in group_cols and pd.api.types.is_numeric_dtype(grouped[col]):
-                grouped[col] = grouped[col].round(2)
+                grouped[col] = grouped[col].round(_col_round_precision(str(col)))
         
         new_cols = list(grouped.columns)
         for i, col in enumerate(new_cols):
@@ -1367,7 +1375,7 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
     else:
         for col in grouped.columns:
             if col not in group_cols and pd.api.types.is_numeric_dtype(grouped[col]):
-                grouped[col] = grouped[col].round(2)
+                grouped[col] = grouped[col].round(_col_round_precision(str(col)))
 
     # 检查是否有值映射配置
     val_map_str = task.get("值映射", "") if task else ""
