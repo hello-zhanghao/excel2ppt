@@ -57,18 +57,18 @@ def _parse_join_sep(agg_str):
 
 
 def _join_unique(series, sep: str = _JOIN_DEFAULT_SEP) -> str:
-    """对 series 做去重拼接，保持首次出现顺序，跳过 NaN/空值。"""
-    seen = []
+    """对 series 做去重拼接，排序后输出，跳过 NaN/空值。
+
+    排序保证同一组数据无论行顺序如何，拼接结果一致。
+    """
     seen_set = set()
     for v in series:
         if pd.isna(v):
             continue
         s = str(v).strip()
-        if not s or s in seen_set:
-            continue
-        seen_set.add(s)
-        seen.append(s)
-    return sep.join(seen)
+        if s:
+            seen_set.add(s)
+    return sep.join(sorted(seen_set))
 
 
 def read_pivot_config(config_path, sheet_name=None):
