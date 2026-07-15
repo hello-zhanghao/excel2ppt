@@ -244,6 +244,25 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.31.1 (2026-07-15)
+
+**✨ HTML 地图支持指标列切换 + 数据筛选**
+
+经纬度数据表中通常还包含其他列（指标列、分类列），本次更新支持：
+
+| 能力 | 说明 |
+|------|------|
+| **指标列切换** | 下拉选择哪一列作为散点大小依据（如用户数/流量GB），实时重渲染 |
+| **筛选列选择** | 下拉选择按哪一列筛选（如地区/运营商），自动填充该列唯一值 |
+| **筛选值多选** | 复选框勾选要显示的值，支持全选/取消全选，实时过滤数据点 |
+| **动态构建** | 客户端 JS 根据控件状态动态构建 ECharts option，无需重新请求 |
+
+**新增**：
+- `_build_geo_data_js()` — 序列化地图 section 完整数据到 JS `geoData` 对象
+- `_build_geo_controls_html()` — 构建控件面板 HTML（指标列下拉 + 筛选列下拉 + 筛选值复选框）
+- `buildGeoOptionFromData()` — JS 端动态构建地图 option（含指标列选择 + 筛选逻辑）
+- `onGeoMetricChange / onGeoFilterColChange / onGeoFilterValChange / onGeoFilterAllChange` — 控件交互处理
+
 ### v2.31.0 (2026-07-15)
 
 **✨ HTML 报告支持地图展示（经纬度数据自动渲染散点地图）**

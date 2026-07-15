@@ -421,6 +421,136 @@ def _generate_geo_chart_options(chart_id: str, data: Dict, chart_type: str) -> s
     return opt_json
 
 
+def _build_geo_data_js(sec: Dict) -> str:
+    """序列化地图 section 的完整数据，供 JS 端动态构建图表（支持指标列切换+筛选）。
+
+    返回 JS 字符串：geoData['sectionId'] = {...}
+    """
+    headers = sec["headers"]
+    rows = sec["rows"]
+    geo = _detect_geo_columns(headers)
+    if not geo:
+        return ""
+
+    lat_idx, lon_idx = geo
+    # 指标列候选：除经纬度外的数值列
+    metric_indices = []
+    for i, h in enumerate(headers):
+        if i in (lat_idx, lon_idx):
+            continue
+        h_lower = h.lower()
+        if any(k in h_lower for k in ["金额", "数量", "销售额", "利润", "成本", "值", "占比", "百分比", "pct", "计数", "总计", "合计"]):
+            metric_indices.append(i)
+    if not metric_indices:
+        for i, h in enumerate(headers):
+            if i in (lat_idx, lon_idx):
+                continue
+            try:
+                if rows:
+                    float(rows[0][i])
+                    metric_indices.append(i)
+            except (ValueError, IndexError):
+                continue
+
+    # 筛选列候选：非经纬度、非指标、非名称的列（通常是分类列）
+    name_idx = None
+    for i, h in enumerate(headers):
+        if i in (lat_idx, lon_idx) or i in metric_indices:
+            continue
+        if name_idx is None:
+            name_idx = i
+    # 筛选列：所有非数值列（排除经纬度）
+    filter_indices = []
+    for i, h in enumerate(headers):
+        if i in (lat_idx, lon_idx) or i in metric_indices:
+            continue
+        filter_indices.append(i)
+
+    # 收集每个筛选列的唯一值
+    filter_values = {}
+    for fi in filter_indices:
+        vals = set()
+        for row in rows:
+            if fi < len(row) and row[fi] != "":
+                vals.add(str(row[fi]))
+        # 唯一值超过 50 个时不作为筛选列（太多无意义）
+        if len(vals) <= 50:
+            filter_values[fi] = sorted(vals)
+
+    data_obj = {
+        "headers": headers,
+        "rows": rows,
+        "latIdx": lat_idx,
+        "lonIdx": lon_idx,
+        "nameIdx": name_idx,
+        "metricIndices": metric_indices,
+        "filterIndices": list(filter_values.keys()),
+        "filterValues": {str(k): v for k, v in filter_values.items()},
+    }
+    return f"  geoData['{sec['id']}'] = {json.dumps(data_obj, ensure_ascii=False)};\n"
+
+
+def _build_geo_controls_html(sec: Dict) -> str:
+    """构建地图 section 的控件面板 HTML（指标列下拉 + 筛选列下拉 + 筛选值）。"""
+    headers = sec["headers"]
+    geo = _detect_geo_columns(headers)
+    if not geo:
+        return ""
+    lat_idx, lon_idx = geo
+
+    # 指标列选项
+    metric_indices = []
+    for i, h in enumerate(headers):
+        if i in (lat_idx, lon_idx):
+            continue
+        h_lower = h.lower()
+        if any(k in h_lower for k in ["金额", "数量", "销售额", "利润", "成本", "值", "占比", "百分比", "pct", "计数", "总计", "合计"]):
+            metric_indices.append(i)
+    if not metric_indices:
+        for i, h in enumerate(headers):
+            if i in (lat_idx, lon_idx):
+                continue
+            try:
+                if sec["rows"]:
+                    float(sec["rows"][0][i])
+                    metric_indices.append(i)
+            except (ValueError, IndexError):
+                continue
+
+    metric_options = "".join(
+        f'<option value="{mi}">{_escape_html(headers[mi])}</option>' for mi in metric_indices
+    )
+
+    # 筛选列选项（非数值列，排除经纬度）
+    filter_indices = []
+    for i, h in enumerate(headers):
+        if i in (lat_idx, lon_idx) or i in metric_indices:
+            continue
+        # 唯一值不超过 50 个才作为筛选列
+        vals = set()
+        for row in sec["rows"]:
+            if i < len(row) and row[i] != "":
+                vals.add(str(row[i]))
+        if len(vals) <= 50:
+            filter_indices.append(i)
+    filter_options = '<option value="">-- 不筛选 --</option>' + "".join(
+        f'<option value="{fi}">{_escape_html(headers[fi])}</option>' for fi in filter_indices
+    )
+
+    sid = sec["id"]
+    return f'''<div class="geo-controls" id="geo_ctrl_{sid}" style="display:none">
+  <div class="geo-ctrl-item"><label>指标列:</label>
+    <select id="geo_metric_{sid}" onchange="onGeoMetricChange('{sid}')">{metric_options}</select>
+  </div>
+  <div class="geo-ctrl-item"><label>筛选列:</label>
+    <select id="geo_filter_col_{sid}" onchange="onGeoFilterColChange('{sid}')">{filter_options}</select>
+  </div>
+  <div class="geo-ctrl-item" id="geo_filter_vals_wrap_{sid}" style="display:none">
+    <label>筛选值:</label><div class="geo-filter-vals" id="geo_filter_vals_{sid}"></div>
+  </div>
+</div>'''
+
+
 def _ppt_chart_type_to_html(ppt_type: str) -> str:
     type_map = {
         "column": "bar",
@@ -592,6 +722,7 @@ def generate_html_report(
     section_html_parts = []
     toc_html_parts = []
     all_chart_options_js = ""  # 累积所有 section 的 chartOptions，避免循环内重置
+    all_geo_data_js = ""  # 累积地图 section 的完整数据，供 JS 动态构建
 
     for sec in sections:
         toc_html_parts.append(f'<li><a href="#{sec["id"]}">{_escape_html(sec["title"])}</a></li>')
@@ -613,14 +744,24 @@ def generate_html_report(
             continue
         
         chart_options_js = ""
+        is_geo_section = "map" in sec["available_charts"] or "heatmap" in sec["available_charts"]
         for ct in sec["available_charts"]:
             if ct in ("map", "heatmap"):
+                # 地图类型：预生成默认 option 作为初始渲染，同时注册 geoData 供动态切换
                 opts = _generate_geo_chart_options(sec["id"], sec, ct)
             else:
                 opts = _generate_chart_options(sec["id"], sec, ct)
             if opts:
                 chart_options_js += f"  chartOptions['{sec['id']}_{ct}'] = {opts};\n"
         all_chart_options_js += chart_options_js
+
+        # 地图 section：注册 geoData 供 JS 动态构建（指标列切换+筛选）
+        geo_controls_html = ""
+        if is_geo_section:
+            geo_js = _build_geo_data_js(sec)
+            if geo_js:
+                all_geo_data_js += geo_js
+                geo_controls_html = _build_geo_controls_html(sec)
 
         chart_buttons_html = ""
         for ct in sec["available_charts"]:
@@ -657,6 +798,7 @@ def generate_html_report(
   {summary_html}
   <div class="chart-container">
     <div class="chart-buttons">{chart_buttons_html}</div>
+    {geo_controls_html}
     <div id="chart_{sec["id"]}" class="chart-canvas"></div>
   </div>
   <div class="table-container">
@@ -714,6 +856,13 @@ def generate_html_report(
   .chart-btn {{ padding: 6px 14px; background: #f5f7fa; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; color: #555; cursor: pointer; transition: all 0.2s; }}
   .chart-btn:hover {{ background: #e8f0fe; border-color: #2E75B6; color: #2E75B6; }}
   .chart-btn.active {{ background: #2E75B6; color: #fff; border-color: #2E75B6; }}
+  .geo-controls {{ display: none; flex-wrap: wrap; gap: 12px; align-items: flex-start; padding: 10px 12px; margin-bottom: 10px; background: #f5f7fa; border: 1px solid #e0e6ed; border-radius: 6px; font-size: 12px; }}
+  .geo-ctrl-item {{ display: flex; align-items: center; gap: 6px; }}
+  .geo-ctrl-item label {{ color: #555; font-weight: 600; white-space: nowrap; }}
+  .geo-ctrl-item select {{ padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; max-width: 160px; }}
+  .geo-filter-vals {{ display: flex; flex-wrap: wrap; gap: 6px 12px; max-width: 520px; }}
+  .geo-fv-item {{ display: inline-flex; align-items: center; gap: 3px; cursor: pointer; color: #444; }}
+  .geo-fv-item input {{ margin: 0; }}
   .chart-canvas {{ height: 350px; }}
   .table-container {{ border-top: 1px solid #eee; padding-top: 16px; }}
   .table-header {{ font-size: 14px; font-weight: 600; color: #2E75B6; margin-bottom: 10px; }}
@@ -794,7 +943,9 @@ def generate_html_report(
 <script>
   var chartInstances = {{}};
   var chartOptions = {{}};
+  var geoData = {{}};  // 地图 section 的完整数据，供动态构建
   {all_chart_options_js}
+  {all_geo_data_js}
   
   function initCharts() {{
     Object.keys(chartOptions).forEach(function(key) {{
@@ -823,6 +974,12 @@ def generate_html_report(
     var container = document.getElementById('chart_' + sectionId);
     if (!container) return;
 
+    // 显示/隐藏地图控件面板
+    var geoCtrl = document.getElementById('geo_ctrl_' + sectionId);
+    if (geoCtrl) {{
+      geoCtrl.style.display = (chartType === 'map' || chartType === 'heatmap') ? 'flex' : 'none';
+    }}
+
     if (chartType === 'table') {{
       container.style.display = 'none';
       return;
@@ -836,7 +993,13 @@ def generate_html_report(
 
     var doRender = function() {{
       var chart = echarts.init(container);
-      var options = chartOptions[sectionId + '_' + chartType];
+      // 地图类型且有 geoData → 动态构建（支持指标列切换+筛选）
+      var options;
+      if ((chartType === 'map' || chartType === 'heatmap') && geoData[sectionId]) {{
+        options = buildGeoOptionFromData(sectionId, chartType);
+      }} else {{
+        options = chartOptions[sectionId + '_' + chartType];
+      }}
       if (options) {{
         chart.setOption(options);
         chartInstances[sectionId] = chart;
@@ -850,7 +1013,170 @@ def generate_html_report(
       doRender();
     }}
   }}
-  
+
+  // 根据当前控件状态动态构建地图 ECharts option
+  function buildGeoOptionFromData(sectionId, chartType) {{
+    var d = geoData[sectionId];
+    if (!d) return null;
+
+    // 读取控件状态
+    var metricSel = document.getElementById('geo_metric_' + sectionId);
+    var metricIdx = metricSel ? parseInt(metricSel.value) : (d.metricIndices[0] || -1);
+
+    var filterColSel = document.getElementById('geo_filter_col_' + sectionId);
+    var filterColIdx = filterColSel && filterColSel.value ? parseInt(filterColSel.value) : -1;
+
+    // 收集选中的筛选值
+    var selectedFilterVals = {{}};
+    if (filterColIdx >= 0) {{
+      var checkboxes = document.querySelectorAll('input[name="geo_fv_' + sectionId + '"]:checked');
+      for (var i = 0; i < checkboxes.length; i++) {{
+        selectedFilterVals[checkboxes[i].value] = true;
+      }}
+    }}
+
+    // 过滤+收集数据点
+    var points = [];
+    var metricVals = [];
+    for (var r = 0; r < d.rows.length; r++) {{
+      var row = d.rows[r];
+      var lat = parseFloat(row[d.latIdx]);
+      var lon = parseFloat(row[d.lonIdx]);
+      if (isNaN(lat) || isNaN(lon)) continue;
+      if (lat === 0 && lon === 0) continue;
+      // 筛选
+      if (filterColIdx >= 0) {{
+        var fv = String(row[filterColIdx] || '');
+        if (Object.keys(selectedFilterVals).length > 0 && !selectedFilterVals[fv]) continue;
+      }}
+      var name = d.nameIdx !== null && d.nameIdx < row.length ? String(row[d.nameIdx]) : '';
+      var values = [lon, lat];
+      for (var mi = 0; mi < d.metricIndices.length; mi++) {{
+        var v = parseFloat(row[d.metricIndices[mi]]) || 0;
+        values.push(v);
+      }}
+      points.push({{name: name, value: values}});
+      var mv = metricIdx >= 0 ? (parseFloat(row[metricIdx]) || 0) : 0;
+      metricVals.push(mv);
+    }}
+
+    if (points.length === 0) {{
+      return {{title: {{text: '无符合条件的数据', left: 'center'}}}};
+    }}
+
+    // 经纬度范围
+    var lats = points.map(function(p) {{ return p.value[1]; }});
+    var lons = points.map(function(p) {{ return p.value[0]; }});
+    var centerLon = (Math.min.apply(null, lons) + Math.max.apply(null, lons)) / 2;
+    var centerLat = (Math.min.apply(null, lats) + Math.max.apply(null, lats)) / 2;
+    var span = Math.max(Math.max.apply(null, lons) - Math.min.apply(null, lons),
+                        Math.max.apply(null, lats) - Math.min.apply(null, lats), 0.1);
+    var zoom = Math.max(1, Math.min(15, 8 - Math.log10(span + 1)));
+
+    // 指标名
+    var metricName = metricIdx >= 0 ? d.headers[metricIdx] : '指标';
+    // 指标在 value 数组中的位置
+    var metricPos = d.metricIndices.indexOf(metricIdx);
+    if (metricPos < 0) metricPos = 0;
+    var metricValuePos = metricPos + 2;  // +2 因为前两位是 lon, lat
+
+    // 散点大小归一化
+    var mMin = Math.min.apply(null, metricVals);
+    var mMax = Math.max.apply(null, metricVals);
+    var sizes = [];
+    for (var i = 0; i < metricVals.length; i++) {{
+      if (mMax === mMin) sizes.push(20);
+      else sizes.push(Math.round(10 + (metricVals[i] - mMin) / (mMax - mMin) * 40));
+    }}
+
+    // tooltip formatter
+    var tipParts = ['function(p){{var s=p.name+"<br/>";var lon=p.value[0],lat=p.value[1];'];
+    tipParts.push('s+="经度:"+lon.toFixed(4)+", 纬度:"+lat.toFixed(4)+"<br/>";');
+    for (var mi = 0; mi < d.metricIndices.length; mi++) {{
+      tipParts.push('s+="' + d.headers[d.metricIndices[mi]] + ':"+p.value[' + (mi+2) + ']+"<br/>";');
+    }}
+    tipParts.push('return s;}}');
+    var tipFn = tipParts.join('');
+
+    var seriesType = chartType === 'map' ? 'scatter' : 'effectScatter';
+    var itemStyle = chartType === 'map' ?
+      {{color: '#C8102E', opacity: 0.85, borderColor: '#333', borderWidth: 0.5}} :
+      {{color: '#ED7D31', shadowBlur: 10, shadowColor: 'rgba(237,125,49,0.5)'}};
+    var extra = chartType === 'heatmap' ?
+      {{showEffectOn: 'render', rippleEffect: {{brushType: 'stroke'}}}} : {{}};
+
+    var opt = {{
+      title: {{text: metricName + ' 分布', left: 'center', textStyle: {{fontSize: 14}}}},
+      tooltip: {{trigger: 'item'}},
+      geo: {{
+        map: 'china', roam: true, zoom: zoom,
+        center: [centerLon, centerLat],
+        itemStyle: {{areaColor: '#F2F0EB', borderColor: '#999'}},
+        emphasis: {{itemStyle: {{areaColor: '#DCE6F0'}}, label: {{show: false}}}}
+      }},
+      series: [{{
+        name: metricName, type: seriesType, coordinateSystem: 'geo',
+        data: points, symbolSize: sizes, itemStyle: itemStyle,
+        label: {{show: true, formatter: '{{b}}', position: 'right', fontSize: 10, color: '#182B49'}},
+      }}].concat([extra])
+    }};
+    // 合并 extra 到 series[0]
+    for (var k in extra) {{ opt.series[0][k] = extra[k]; }}
+    // 移除多余的空对象
+    opt.series = [opt.series[0]];
+    // 注入 tooltip formatter（不能 JSON 序列化函数，直接赋值）
+    opt.tooltip.formatter = tipFn;
+    // eval tipFn 为真实函数
+    try {{ opt.tooltip.formatter = eval('(' + tipFn + ')'); }} catch(e) {{}}
+    return opt;
+  }}
+
+  // 指标列切换
+  function onGeoMetricChange(sectionId) {{
+    var activeBtn = document.querySelector('#' + sectionId + ' .chart-btn.active');
+    var chartType = activeBtn ? (activeBtn.getAttribute('onclick').match(/'([^']+)'$/) || [])[1] : 'map';
+    renderChart(sectionId, chartType);
+  }}
+
+  // 筛选列切换 → 填充筛选值复选框
+  function onGeoFilterColChange(sectionId) {{
+    var sel = document.getElementById('geo_filter_col_' + sectionId);
+    var valsWrap = document.getElementById('geo_filter_vals_wrap_' + sectionId);
+    var valsBox = document.getElementById('geo_filter_vals_' + sectionId);
+    if (!sel || !valsBox) return;
+    if (!sel.value) {{
+      valsWrap.style.display = 'none';
+      onGeoMetricChange(sectionId);
+      return;
+    }}
+    var d = geoData[sectionId];
+    var vals = d.filterValues[sel.value] || [];
+    var html = '';
+    // 全选按钮
+    html += '<label class="geo-fv-item"><input type="checkbox" name="geo_fv_' + sectionId + '" value="__all__" checked onchange="onGeoFilterAllChange(\\'' + sectionId + '\\')"> 全选</label>';
+    for (var i = 0; i < vals.length; i++) {{
+      html += '<label class="geo-fv-item"><input type="checkbox" name="geo_fv_' + sectionId + '" value="' + vals[i].replace(/"/g, '&quot;') + '" checked onchange="onGeoFilterValChange(\\'' + sectionId + '\\')"> ' + vals[i] + '</label>';
+    }}
+    valsBox.innerHTML = html;
+    valsWrap.style.display = 'block';
+    onGeoMetricChange(sectionId);
+  }}
+
+  // 单个筛选值变化
+  function onGeoFilterValChange(sectionId) {{
+    onGeoMetricChange(sectionId);
+  }}
+
+  // 全选/取消全选
+  function onGeoFilterAllChange(sectionId) {{
+    var allBox = document.querySelector('input[name="geo_fv_' + sectionId + '"][value="__all__"]');
+    var boxes = document.querySelectorAll('input[name="geo_fv_' + sectionId + '"]:not([value="__all__"])');
+    for (var i = 0; i < boxes.length; i++) {{
+      boxes[i].checked = allBox.checked;
+    }}
+    onGeoMetricChange(sectionId);
+  }}
+
   function switchChart(sectionId, chartType) {{
     var btns = document.querySelectorAll('#' + sectionId + ' .chart-btn');
     for (var i = 0; i < btns.length; i++) {{
