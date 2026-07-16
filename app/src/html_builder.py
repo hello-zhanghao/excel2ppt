@@ -683,6 +683,11 @@ def _generate_geo_chart_options(chart_id: str, data: Dict, chart_type: str) -> s
     import math
     zoom = round(max(1, min(15, 8 - math.log10(span + 1))), 2)
 
+    # 根据经纬度范围判断使用中国地图还是世界地图
+    # 中国境内：经度 73-135，纬度 18-53
+    all_in_china = all(73 <= lo <= 135 for lo in lons) and all(18 <= la <= 53 for la in lats)
+    map_name = "china" if all_in_china else "world"
+
     metric_names = [headers[mi] for mi in metric_indices] or ["指标"]
     metric_idx_in_value = 2  # value 数组中指标的起始位置
 
@@ -719,7 +724,7 @@ def _generate_geo_chart_options(chart_id: str, data: Dict, chart_type: str) -> s
         "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
         "tooltip": {"trigger": "item"},  # formatter 稍后手动替换
         "geo": {
-            "map": "china",
+            "map": map_name,
             "roam": True,
             "zoom": zoom,
             "center": [center_lon, center_lat],
@@ -1464,31 +1469,36 @@ def generate_html_report(
 <button id="backToTopBtn" class="back-to-top" onclick="scrollToTop()" title="返回顶部">↑</button>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 <script>
-  // 地图数据加载状态：'pending' | 'ready' | 'failed'
-  var _chinaMapStatus = 'pending';
-  function _loadChinaMap(cb) {{
-    if (_chinaMapStatus === 'ready') {{ cb(); return; }}
-    if (_chinaMapStatus === 'pending') {{
-      _chinaMapStatus = 'loading';
+  // 地图数据加载状态：mapName -> 'pending' | 'loading' | 'ready' | 'failed'
+  var _mapStatus = {{}};
+  function _loadMapByName(mapName, cb) {{
+    if (mapName !== 'china' && mapName !== 'world') mapName = 'china';
+    var st = _mapStatus[mapName];
+    if (st === 'ready') {{ cb(); return; }}
+    if (st === 'pending' || st === undefined) {{
+      _mapStatus[mapName] = 'loading';
       var s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/echarts@4.9.0/map/js/china.js';
+      s.src = 'https://cdn.jsdelivr.net/npm/echarts@4.9.0/map/js/' + mapName + '.js';
       s.onload = function() {{
-        // echarts 4.x 的 china.js 会注册到 echarts.registerMap
-        _chinaMapStatus = 'ready';
+        // echarts 4.x 的 china.js / world.js 会注册到 echarts.registerMap
+        _mapStatus[mapName] = 'ready';
         cb();
       }};
       s.onerror = function() {{
-        // 回退：尝试用 fetch 加载 GeoJSON
-        fetch('https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json')
+        // 回退：用 fetch 加载 GeoJSON
+        var geoUrl = mapName === 'china'
+          ? 'https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json'
+          : 'https://cdn.jsdelivr.net/npm/echarts@4.9.0/map/json/world.json';
+        fetch(geoUrl)
           .then(function(r) {{ return r.json(); }})
-          .then(function(data) {{ echarts.registerMap('china', data); _chinaMapStatus='ready'; cb(); }})
-          .catch(function() {{ _chinaMapStatus='failed'; cb(); }});
+          .then(function(data) {{ echarts.registerMap(mapName, data); _mapStatus[mapName]='ready'; cb(); }})
+          .catch(function() {{ _mapStatus[mapName]='failed'; cb(); }});
       }};
       document.head.appendChild(s);
     }} else {{
       // loading 中：轮询
       var t = setInterval(function() {{
-        if (_chinaMapStatus === 'ready' || _chinaMapStatus === 'failed') {{
+        if (_mapStatus[mapName] === 'ready' || _mapStatus[mapName] === 'failed') {{
           clearInterval(t); cb();
         }}
       }}, 100);
@@ -1571,9 +1581,13 @@ def generate_html_report(
       }}
     }};
 
-    // 地图类型需先加载 china 地图数据
+    // 地图类型：先构建 options 获取 map 名，再加载对应地图数据后渲染
     if (chartType === 'map' || chartType === 'heatmap') {{
-      _loadChinaMap(doRender);
+      // 先确定 map 名（从动态构建的 option 中读取，或从预生成 option 读取）
+      var preOpt = geoData[sectionId] ? buildGeoOptionFromData(sectionId, chartType)
+                                      : chartOptions[sectionId + '_' + chartType];
+      var mn = (preOpt && preOpt.geo && preOpt.geo.map) || 'china';
+      _loadMapByName(mn, doRender);
     }} else {{
       doRender();
     }}
@@ -1638,6 +1652,12 @@ def generate_html_report(
                         Math.max.apply(null, lats) - Math.min.apply(null, lats), 0.1);
     var zoom = Math.max(1, Math.min(15, 8 - Math.log10(span + 1)));
 
+    // 根据经纬度范围判断使用中国地图还是世界地图
+    // 中国境内：经度 73-135，纬度 18-53
+    var allInChina = lons.every(function(lo) {{ return lo >= 73 && lo <= 135; }})
+                  && lats.every(function(la) {{ return la >= 18 && la <= 53; }});
+    var mapName = allInChina ? 'china' : 'world';
+
     // 指标名
     var metricName = metricIdx >= 0 ? d.headers[metricIdx] : '指标';
     // 指标在 value 数组中的位置
@@ -1672,7 +1692,7 @@ def generate_html_report(
       title: {{text: metricName + ' 分布', left: 'center', textStyle: {{fontSize: 14, color: getChartTextColor()}}}},
       tooltip: {{trigger: 'item'}},
       geo: {{
-        map: 'china', roam: true, zoom: zoom,
+        map: mapName, roam: true, zoom: zoom,
         center: [centerLon, centerLat],
         itemStyle: {{areaColor: _areaColor, borderColor: _areaBorder}},
         emphasis: {{itemStyle: {{areaColor: _emphArea}}, label: {{show: false}}}}

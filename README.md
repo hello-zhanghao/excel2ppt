@@ -244,6 +244,18 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.38.0 (2026-07-16)
+
+**🔧 修复国外经纬度地图显示问题**
+
+| 改动 | 说明 |
+|------|------|
+| **自动选择地图** | 根据经纬度范围自动判断：所有点经度 73-135 且纬度 18-53 → 用 `china` 地图；否则 → 用 `world` 世界地图，解决国外经纬度无法显示的问题 |
+| **Python 端** | `_generate_geo_chart_options` 新增 `all_in_china` 判断，geo.map 动态设为 `china` 或 `world` |
+| **JS 端动态构建** | `buildGeoOptionFromData` 新增 `allInChina` 判断，geo.map 动态设置 |
+| **地图加载器通用化** | `_loadChinaMap` 重构为 `_loadMapByName(mapName, cb)`，支持按需加载 china.js 或 world.js，GeoJSON 回退也区分 china/world |
+| **渲染流程调整** | 地图类型先构建 option 读取 map 名，再加载对应地图数据后渲染 |
+
 ### v2.37.1 (2026-07-16)
 
 **🔧 修复柱状图多系列重叠 + 多级分类轴顺序调整**
