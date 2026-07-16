@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.41.0"
+__VERSION__ = "2.42.0"
 __UPDATE_DATE__ = "2026-07-16"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -536,6 +536,10 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
                         if hasattr(df, "shape"):
                             # 同名区块后出现覆盖先出现（与模板填充的 load_pivot_results 一致）
                             block_results[block_name] = df
+                            # 同时用结果Sheet名作为别名存入，使后续任务既可用 {区块名}
+                            # 也可用 {结果Sheet名} 引用本任务输出（区块名与结果Sheet不同时两者都生效）
+                            if sheet_name and sheet_name != block_name:
+                                block_results[sheet_name] = df
                             break  # 一个任务只取第一个 DataFrame 作为区块
         except Exception as e:
             print(f"    [FAIL] [任务{seq}] 异常: {e}")

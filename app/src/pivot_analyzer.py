@@ -243,6 +243,56 @@ def _resolve_data_path(data_source, config_dir):
     return os.path.join(config_dir, data_source)
 
 
+def _resolve_block_reference(data_source, block_results):
+    """解析前序透视结果区块引用。
+
+    支持语法：
+      - ``{pivot}`` / ``{透视结果}`` / ``{prev}`` / ``{上一个}`` → 取 block_results 中最后插入的 DataFrame
+      - ``{区块名}`` → 取 block_results[区块名]
+      - ``{pivot:区块名}`` → 同上，显式指代透视结果中的某区块
+
+    :return: 命中则返回 DataFrame.copy()；未命中或 block_results 为空则返回 None
+    """
+    if not block_results:
+        return None
+    ds = str(data_source).strip()
+    if not ds:
+        return None
+
+    # {pivot:区块名} 形式
+    m = re.match(r"^\{pivot[:：](.+)\}$", ds, re.IGNORECASE)
+    if m:
+        block_name = m.group(1).strip()
+        if block_name in block_results:
+            return block_results[block_name].copy()
+        return None
+
+    # 单层 {…} 引用
+    m = re.match(r"^\{(.+)\}$", ds)
+    if not m:
+        return None
+    inner = m.group(1).strip()
+    inner_lower = inner.lower()
+
+    # 通配：上一个/前序结果
+    if inner_lower in ("pivot", "透视结果", "prev", "上一个", "上一个结果"):
+        # 取 block_results 中最后插入的 DataFrame（Python 3.7+ dict 保序）
+        last_df = None
+        for df in block_results.values():
+            last_df = df
+        return last_df.copy() if last_df is not None else None
+
+    # 指定区块名
+    if inner in block_results:
+        return block_results[inner].copy()
+    # 区块名大小写不敏感兜底
+    for k, df in block_results.items():
+        if k.lower() == inner_lower:
+            return df.copy()
+
+    return None
+
+
 def _parse_join_spec(data_source):
     if " JOIN " not in data_source.upper():
         return None
@@ -352,10 +402,23 @@ def _tokenize_join(data_source):
     return tokens
 
 
-def _load_joined_dataframe(config_dir, data_source, sheet_name):
-    """加载数据，支持 Excel 和 CSV 文件"""
+def _load_joined_dataframe(config_dir, data_source, sheet_name, block_results=None):
+    """加载数据，支持 Excel/CSV 文件、JOIN 语句、以及前序透视结果区块引用。
+
+    区块引用语法（将前序任务的输出 DataFrame 作为当前任务的输入数据源，实现二次透视）：
+      - ``{pivot}`` / ``{透视结果}`` / ``{prev}`` / ``{上一个}`` → 上一个成功任务的输出
+      - ``{区块名}`` → 引用指定区块名的结果（区块名来自前序任务的"区块名"或"结果Sheet"）
+      - ``{pivot:区块名}`` → 显式指代透视结果中的某区块
+
+    :param block_results: 前序任务累积的结果 {区块名: DataFrame}，由 _run_pivot_mode 滚动传入
+    """
     from src.excel_reader import find_data_file, read_data_file
-    
+
+    # 优先处理前序透视结果区块引用（{pivot}/{区块名}/{pivot:区块名}）
+    pivot_df = _resolve_block_reference(data_source, block_results)
+    if pivot_df is not None:
+        return pivot_df
+
     join_parts = _parse_join_spec(data_source)
 
     if not join_parts:
@@ -742,9 +805,15 @@ def validate_pivot_config(tasks, config_dir):
                 "column": "数据源"
             })
         else:
-            # 检查是否是透视结果引用
+            # 检查是否是前序透视结果区块引用（{pivot}/{透视结果}/{prev}/{区块名}/{pivot:区块名}）
+            # 区块引用的存在性在执行时由 block_results 决定，校验阶段跳过文件存在性检查
             ds_lower = str(data_source).strip().lower()
-            is_pivot_ref = ds_lower in ("{pivot}", "pivot", "透视结果")
+            is_pivot_ref = ds_lower in ("{pivot}", "pivot", "透视结果", "{prev}", "{上一个}", "{上一个结果}")
+            # 识别 {区块名} / {pivot:区块名} 形式
+            if not is_pivot_ref:
+                ds_str = str(data_source).strip()
+                if re.match(r"^\{.+\}$", ds_str):
+                    is_pivot_ref = True
             if not is_pivot_ref:
                 file_path = _resolve_data_path(data_source, config_dir)
                 if not file_path or not os.path.exists(file_path):
@@ -966,7 +1035,7 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         聚合函数.append(a_no_fmt)
         number_formats.append(fmt)
 
-    df = _load_joined_dataframe(config_dir, data_source, sheet_name)
+    df = _load_joined_dataframe(config_dir, data_source, sheet_name, block_results=block_results)
     if df is None or df.empty:
         return None, f"[任务{序号}] 数据为空或文件不存在: {data_source}"
 
