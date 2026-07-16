@@ -1184,6 +1184,39 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         if col not in df.columns:
             missing_cols.append(col)
 
+    # 智能列名映射：级联引用前序分组聚合结果时，用户可能写原字段名（如"5G用户数"），
+    # 但实际列名带聚合后缀（如"5G用户数_求和"）。自动做前缀匹配映射，避免报错。
+    # 仅当数据源是区块引用（{...}）时启用，避免对原始文件误映射。
+    is_block_ref = bool(re.match(r"^\{.+\}$", str(data_source).strip())) or \
+                   _resolve_block_reference(str(data_source), block_results) is not None
+    if missing_cols and is_block_ref:
+        available_cols = list(df.columns)
+        col_map_smart = {}  # {用户写的列名: 实际列名}
+        for mc in missing_cols[:]:
+            mc_str = str(mc)
+            # 精确匹配跳过
+            if mc_str in available_cols:
+                continue
+            # 前缀匹配：可用列以 "用户列名_聚合后缀" 形式存在
+            candidates = [str(c) for c in available_cols
+                          if str(c).startswith(mc_str + "_")]
+            if len(candidates) == 1:
+                # 唯一匹配，自动映射
+                col_map_smart[mc_str] = candidates[0]
+                missing_cols.remove(mc)
+            elif len(candidates) > 1:
+                # 多个候选（如"5G用户数_求和"和"5G用户数_均值"），不自动映射，留给报错建议
+                pass
+        # 应用自动映射
+        if col_map_smart:
+            行维度 = [col_map_smart.get(d, d) for d in 行维度]
+            列维度 = [col_map_smart.get(d, d) for d in 列维度]
+            值字段 = [col_map_smart.get(v, v) for v in 值字段]
+            # 同步更新 task 中的值，供后续 _cross_pivot/_group_aggregate 使用
+            task["行维度"] = ",".join(行维度)
+            task["列维度"] = ",".join(列维度)
+            task["值字段"] = ",".join(值字段)
+
     if missing_cols:
         available = list(df.columns)
         # 增强报错：显示列总数和完整列名，方便排查（列多时截断显示前10+后5）
@@ -1191,10 +1224,21 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
             avail_str = str(available)
         else:
             avail_str = f"[{available[:10]} ... {available[-5:]}] (共{len(available)}列)"
+        # 智能建议：缺失列是某可用列前缀时（如写"5G用户数"，实际列"5G用户数_求和"）
+        suggestions = []
+        for mc in missing_cols:
+            mc_str = str(mc)
+            candidates = [str(c) for c in available
+                          if str(c).startswith(mc_str + "_") or str(c) == mc_str]
+            if candidates and mc_str not in candidates:
+                suggestions.append(f"'{mc_str}' → 可能是 {candidates[:3]}")
+        hint_parts = []
+        if suggestions:
+            hint_parts.append("；".join(suggestions))
         # 提示是否引用了交叉透视结果（列被展开）
-        hint = ""
         if any("_" in str(c) for c in missing_cols):
-            hint = "。提示：若引用前序交叉透视结果，原列维度值可能已被展开为列名（如'地区'→'华东/华北/华南'）"
+            hint_parts.append("若引用前序交叉透视结果，原列维度值可能已被展开为列名（如'地区'→'华东/华北/华南'）")
+        hint = "。提示：" + "；".join(hint_parts) if hint_parts else ""
         return None, f"[任务{序号}] 列不存在: {missing_cols}。可用列: {avail_str}{hint}"
 
     for col in 值字段:
