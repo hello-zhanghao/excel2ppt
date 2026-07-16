@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.52.1"
+__VERSION__ = "2.52.2"
 __UPDATE_DATE__ = "2026-07-17"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -603,7 +603,9 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
                         join_df = result.pop(jk)
                         # 提取原始 sheet 名（去掉 _JOIN中间表_ 前缀）
                         orig_sheet = str(jk).replace("_JOIN中间表_", "", 1)
-                        join_intermediate[orig_sheet] = join_df
+                        # key 加任务序号防止多个 JOIN 任务结果Sheet同名时互相覆盖
+                        # sheet 名用 "任务{seq}_{orig_sheet}" 防止 Excel sheet 重名（Excel sheet 名必须唯一）
+                        join_intermediate[f"任务{seq}_{orig_sheet}"] = join_df
                         print(f"    [JOIN] [任务{seq}] 中间表已收集: {orig_sheet} -> {join_df.shape[0]}行 x {join_df.shape[1]}列")
 
                 if isinstance(result, dict):
