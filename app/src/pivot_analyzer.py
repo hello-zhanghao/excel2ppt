@@ -246,9 +246,10 @@ def _resolve_data_path(data_source, config_dir):
 def _resolve_block_reference(data_source, block_results):
     """解析前序透视结果区块引用。
 
-    支持语法：
+    支持语法（按精确度从高到低）：
+      - ``{区块名.结果Sheet名}`` → 精确匹配：同时匹配区块名和结果Sheet名（推荐，区块名不唯一时使用）
       - ``{pivot}`` / ``{透视结果}`` / ``{prev}`` / ``{上一个}`` → 取 block_results 中最后插入的 DataFrame
-      - ``{区块名}`` → 取 block_results[区块名]
+      - ``{区块名}`` → 取 block_results[区块名]（区块名唯一时使用）
       - ``{pivot:区块名}`` → 同上，显式指代透视结果中的某区块
 
     :return: 命中则返回 DataFrame.copy()；未命中或 block_results 为空则返回 None
@@ -282,12 +283,27 @@ def _resolve_block_reference(data_source, block_results):
             last_df = df
         return last_df.copy() if last_df is not None else None
 
-    # 指定区块名
+    # {区块名.结果Sheet名} 组合精确匹配（区块名不唯一时使用）
+    # 注意：区块名和结果Sheet名本身不应包含 "."，若包含会导致解析歧义
+    if "." in inner:
+        parts = inner.split(".", 1)
+        block_name_part = parts[0].strip()
+        sheet_name_part = parts[1].strip()
+        # 在 block_results 中查找组合 key (区块名, 结果Sheet名)
+        for k, df in block_results.items():
+            if isinstance(k, tuple) and len(k) == 2:
+                k_block, k_sheet = k
+                if str(k_block) == block_name_part and str(k_sheet) == sheet_name_part:
+                    return df.copy()
+        # 组合 key 未命中，尝试宽松匹配：区块名或Sheet名任一匹配且另一项也匹配
+        return None
+
+    # 指定区块名（单层引用）
     if inner in block_results:
         return block_results[inner].copy()
     # 区块名大小写不敏感兜底
     for k, df in block_results.items():
-        if k.lower() == inner_lower:
+        if not isinstance(k, tuple) and k.lower() == inner_lower:
             return df.copy()
 
     return None
