@@ -1510,16 +1510,39 @@ def generate_html_report(
   {all_chart_data_js}
   
   function initCharts() {{
-    Object.keys(chartOptions).forEach(function(key) {{
-      // key 格式: section_0_bar / section_1_pie，sectionId 含下划线，从末尾分割
-      var lastUnderscore = key.lastIndexOf('_');
-      var sectionId = key.substring(0, lastUnderscore);
-      var chartType = key.substring(lastUnderscore + 1);
-      var container = document.getElementById('chart_' + sectionId);
-      if (container && chartType === getDefaultChart(sectionId)) {{
-        renderChart(sectionId, chartType);
-      }}
-    }});
+    // 懒加载：仅渲染进入视口的图表，避免一次性初始化所有图表导致打开卡顿
+    var pendingKeys = Object.keys(chartOptions);
+    if (!pendingKeys.length) return;
+    // 不支持 IntersectionObserver 时回退到一次性渲染
+    if (!('IntersectionObserver' in window)) {{
+      pendingKeys.forEach(function(key) {{
+        var lastUnderscore = key.lastIndexOf('_');
+        var sectionId = key.substring(0, lastUnderscore);
+        var chartType = key.substring(lastUnderscore + 1);
+        if (chartType === getDefaultChart(sectionId)) {{
+          renderChart(sectionId, chartType);
+        }}
+      }});
+      return;
+    }}
+    var rendered = {{}};
+    var io = new IntersectionObserver(function(entries) {{
+      entries.forEach(function(entry) {{
+        if (!entry.isIntersecting) return;
+        var sid = entry.target.id;
+        if (rendered[sid]) return;
+        rendered[sid] = true;
+        // 渲染该 section 的默认图表
+        var chartType = getDefaultChart(sid);
+        renderChart(sid, chartType);
+        io.unobserve(entry.target);
+      }});
+    }}, {{rootMargin: '200px 0px', threshold: 0}});
+    // 遍历所有 section 注册观察
+    var sections = document.querySelectorAll('.section[id]');
+    for (var i = 0; i < sections.length; i++) {{
+      io.observe(sections[i]);
+    }}
   }}
   
   function getDefaultChart(sectionId) {{
@@ -1571,7 +1594,7 @@ def generate_html_report(
         options = chartOptions[sectionId + '_' + chartType];
       }}
       if (options) {{
-        chart.setOption(options);
+        chart.setOption(options, {{lazyUpdate: true}});
         chartInstances[sectionId] = chart;
       }}
     }};

@@ -244,6 +244,16 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.40.0 (2026-07-16)
+
+**⚡ HTML 打开性能优化：图表懒加载**
+
+| 改动 | 说明 |
+|------|------|
+| **图表懒加载** | `initCharts()` 从一次性渲染所有图表改为 IntersectionObserver 懒加载：仅当 section 进入视口（提前 200px）时才初始化对应图表，避免打开时同时初始化 28 个 ECharts 实例导致卡顿 |
+| **回退兼容** | 不支持 IntersectionObserver 的浏览器回退到一次性渲染 |
+| **lazyUpdate** | `chart.setOption(options, {lazyUpdate: true})` 让 ECharts 延迟到下一帧渲染，减少主线程阻塞 |
+
 ### v2.39.0 (2026-07-16)
 
 **🔧 地图散点样式优化：小点+指标染色+hover显示名称**
