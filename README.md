@@ -244,6 +244,25 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.52.1 (2026-07-17)
+
+**🔧 修复 JOIN 中间表被覆盖成透视结果的问题**
+
+**问题现象**：用户反馈"join中间表保留join的结果，不是透视的结果"。当 JOIN 任务有值映射时，JOIN 中间表 Excel 里存的是透视后的聚合结果，而非 JOIN 后的原始明细数据。
+
+**根因**：[pivot_analyzer.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py) 中 `run_analysis` 的值映射循环 `for key, df in result.items():` 把 `df` 变量重新赋值成了透视结果（聚合后的 DataFrame）。后续 `result[f"_JOIN中间表_{结果Sheet}"] = df.copy()` 存入的 `df` 已经是被覆盖的透视结果，而非 JOIN 后的原始明细。
+
+**修复**：在 JOIN 完成后（过滤/映射/分箱/聚合之前）立即保存原始 JOIN 结果到 `join_df_original`，存入 `_JOIN中间表_` 时用 `join_df_original` 而非被循环覆盖的 `df`。
+
+**对比**（防护用例任务8，有值映射的 JOIN 任务）：
+
+| 版本 | JOIN 中间表内容 | 说明 |
+|------|----------------|------|
+| v2.52.0 | 2行 x 2列 | ✗ 被覆盖成透视结果 |
+| v2.52.1 | 12行 x 12列 | ✓ 原始 JOIN 明细 |
+
+**验证结果**：防护用例 32 任务 + 级联透视 6 任务 + 多字段JOIN 5 任务零回归；所有 JOIN 中间表均保存原始 JOIN 明细数据。
+
 ### v2.52.0 (2026-07-17)
 
 **🔧 修复 JOIN 任务"执行两次"问题 + JOIN 中间表单独输出 Excel**

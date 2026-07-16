@@ -1194,6 +1194,10 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         return None, f"[任务{序号}] 数据为空或文件不存在: {data_source}"
 
     join_happened = _parse_join_spec(str(data_source)) is not None
+    # JOIN 完成后立即保存原始 JOIN 结果（未经过滤/映射/分箱/聚合），用于输出到 JOIN 中间表 Excel
+    # 修复 bug：原代码 L1321 的 `for key, df in result.items()` 循环把 df 重新赋值为透视结果，
+    # 导致 L1363 存入 _JOIN中间表_ 的 df 是透视后的聚合结果，而非 JOIN 后的原始明细
+    join_df_original = df.copy() if join_happened else None
 
     # 应用过滤条件
     filter_expr = task.get("过滤条件", "")
@@ -1358,9 +1362,9 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         if col_fmts:
             task["_number_formats"] = col_fmts
 
-    if join_happened and not df.empty:
+    if join_happened and join_df_original is not None and not join_df_original.empty:
         结果Sheet = task.get("结果Sheet", f"结果{序号}")
-        result[f"_JOIN中间表_{结果Sheet}"] = df.copy()
+        result[f"_JOIN中间表_{结果Sheet}"] = join_df_original
 
     return result, None
 
