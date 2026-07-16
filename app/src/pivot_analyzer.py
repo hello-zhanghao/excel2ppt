@@ -294,7 +294,8 @@ def _resolve_block_reference(data_source, block_results):
 
 
 def _parse_join_spec(data_source):
-    if " JOIN " not in data_source.upper():
+    # 修复 P1 问题8：JOIN 检测对换行/制表符友好（Excel Alt+Enter 换行场景）
+    if not re.search(r"\bJOIN\b", data_source, re.IGNORECASE):
         return None
 
     tokens = _tokenize_join(data_source)
@@ -339,6 +340,14 @@ def _parse_join_spec(data_source):
             and_conditions = re.split(r"\s+AND\s+", on_expr, flags=re.IGNORECASE)
             for cond in and_conditions:
                 cond = cond.strip()
+                # 修复 P1 问题7：只支持等值 JOIN（pandas merge 本身只支持等值）
+                # 非等值条件（!=, >, <, >=, <=）显式报错而非静默丢弃
+                non_eq_ops = ["!=", ">=", "<=", ">", "<"]
+                if any(op in cond for op in non_eq_ops):
+                    raise ValueError(
+                        f"JOIN ON 仅支持等值条件(=)，不支持非等值: '{cond}'。"
+                        f"如需非等值过滤，请在「过滤条件」列配置"
+                    )
                 if "=" in cond:
                     eq_parts = cond.split("=", 1)
                     left_keys.append(eq_parts[0].strip())
@@ -423,7 +432,14 @@ def _load_joined_dataframe(config_dir, data_source, sheet_name, block_results=No
       - ``{区块名}`` → 引用指定区块名的结果（区块名来自前序任务的"区块名"或"结果Sheet"）
       - ``{pivot:区块名}`` → 显式指代透视结果中的某区块
 
+    JOIN 语法（多表 JOIN 用空格连接，ON 条件用 AND 分隔多键）：
+      - ``表A.xlsx JOIN 表B.xlsx ON k1=k1``
+      - ``表A.xlsx@Sheet1 JOIN 表B.xlsx@Sheet2 ON k1=k1 AND k2=k2``
+      - ``{区块名} JOIN 表B.xlsx ON k1=k1``（左表为前序透视结果区块引用）
+      - 支持 INNER/LEFT/RIGHT/OUTER JOIN（默认 INNER）
+
     :param block_results: 前序任务累积的结果 {区块名: DataFrame}，由 _run_pivot_mode 滚动传入
+    :raises ValueError: JOIN 右表加载失败、ON 列名不存在、左右键数量不一致时抛出
     """
     from src.excel_reader import find_data_file, read_data_file
 
@@ -446,55 +462,71 @@ def _load_joined_dataframe(config_dir, data_source, sheet_name, block_results=No
 
     candidate_files = _collect_candidate_xlsx(config_dir)
 
-    def _resolve_table_source(table_name, config_dir, candidate_files, block_results):
+    def _resolve_table_source(table_name, sheet_hint, config_dir, candidate_files, block_results):
+        """解析单表数据源：优先区块引用，否则按文件名+sheet_hint 加载。
+
+        :param sheet_hint: 由 _split_table_token 解析出的 @Sheet 提示，优先于模糊匹配
+        """
+        # 先处理区块引用（{pivot}/{区块名}）
         df = _resolve_block_reference(table_name, block_results)
         if df is not None:
             return df, None
         file_path, sheet = _resolve_join_table(table_name, config_dir, candidate_files)
         if file_path is not None:
-            use_sheet = sheet
+            # sheet_hint 优先（@Sheet 语法），其次用 _resolve_join_table 的模糊匹配结果
+            use_sheet = sheet_hint or sheet
             if use_sheet is None:
                 use_sheet = "Sheet1"
             df = read_data_file(file_path, use_sheet)
             return df, use_sheet
         return None, None
 
-    df, left_sheet = _resolve_table_source(join_parts[0]["left"], config_dir, candidate_files, block_results)
+    # 第一段 JOIN 的左表（使用 @Sheet 提示）
+    first_left = join_parts[0]["left"]
+    first_left_sheet = join_parts[0]["left_sheet"]
+    df, left_sheet = _resolve_table_source(first_left, first_left_sheet, config_dir, candidate_files, block_results)
     if df is None:
-        return None
+        raise ValueError(f"JOIN 左表加载失败: {first_left}")
 
     for jp in join_parts:
-        df_right, right_sheet = _resolve_table_source(jp["right"], config_dir, candidate_files, block_results)
+        right_name = jp["right"]
+        right_sheet_hint = jp["right_sheet"]
+        df_right, right_sheet = _resolve_table_source(right_name, right_sheet_hint, config_dir,
+                                                       candidate_files, block_results)
         if df_right is None:
-            continue
+            # 修复 P0 问题2：右表加载失败必须报错，不再静默跳过
+            raise ValueError(f"JOIN 右表加载失败: {right_name}")
 
         left_on = jp["left_key"]
         right_on = jp["right_key"]
         left_keys = jp.get("left_keys", [])
         right_keys = jp.get("right_keys", [])
 
-        if len(left_keys) > 1 and len(right_keys) > 1:
-            valid = True
-            for lk in left_keys:
-                if lk not in df.columns:
-                    valid = False
-                    break
-            for rk in right_keys:
-                if rk not in df_right.columns:
-                    valid = False
-                    break
-            if valid:
-                df = pd.merge(df, df_right, left_on=left_keys, right_on=right_keys, how=jp["how"], suffixes=("", "_r"))
-        else:
-            if left_on not in df.columns:
-                left_on = left_on.strip()
-            if right_on not in df_right.columns:
-                right_on = right_on.strip()
+        # 修复 P0 问题3：多键 JOIN 左右键数量必须一致
+        if len(left_keys) != len(right_keys):
+            raise ValueError(
+                f"JOIN ON 条件左右键数量不一致: 左 {left_keys}({len(left_keys)}个) vs 右 {right_keys}({len(right_keys)}个)"
+            )
 
-            if left_on not in df.columns or right_on not in df_right.columns:
-                continue
+        # 统一走多键分支（单键也用列表形式处理，逻辑更清晰）
+        # strip 列名两端空格
+        left_keys = [k.strip() for k in left_keys]
+        right_keys = [k.strip() for k in right_keys]
 
-            df = pd.merge(df, df_right, left_on=left_on, right_on=right_on, how=jp["how"], suffixes=("", "_r"))
+        # 校验列名存在
+        missing_left = [k for k in left_keys if k not in df.columns]
+        missing_right = [k for k in right_keys if k not in df_right.columns]
+        if missing_left or missing_right:
+            # 修复 P0 问题2：列名不存在必须报错
+            msg_parts = []
+            if missing_left:
+                msg_parts.append(f"左表缺少列 {missing_left}")
+            if missing_right:
+                msg_parts.append(f"右表({right_name})缺少列 {missing_right}")
+            raise ValueError(f"JOIN ON 列名不存在: {'; '.join(msg_parts)}")
+
+        df = pd.merge(df, df_right, left_on=left_keys, right_on=right_keys,
+                      how=jp["how"], suffixes=("", "_r"))
 
     return df
 
@@ -840,43 +872,84 @@ def validate_pivot_config(tasks, config_dir):
                 if re.match(r"^\{.+\}$", ds_str):
                     is_pivot_ref = True
             if not is_pivot_ref:
-                # 处理 JOIN 语法：提取左表文件名为实际数据源
+                # 处理 JOIN 语法：逐表校验文件存在性
+                # 修复 P0 问题4：JOIN 中左/右表为 {...} 区块引用时跳过文件检查
                 ds_check = str(data_source).strip()
-                if " JOIN " in ds_check.upper():
-                    join_parts = _parse_join_spec(ds_check)
-                    if join_parts and join_parts[0]["left"]:
-                        ds_check = join_parts[0]["left"]
-                file_path = _resolve_data_path(ds_check, config_dir)
-                if not file_path or not os.path.exists(file_path):
-                    from src.excel_reader import find_data_file
-                    file_path = find_data_file(ds_check, config_dir)
-                if not file_path or not os.path.exists(file_path):
-                    results.append({
-                        "task_seq": seq,
-                        "level": "error",
-                        "message": f"数据源文件不存在: {data_source}",
-                        "column": "数据源"
-                    })
+                join_parts = _parse_join_spec(ds_check)
+                if join_parts:
+                    # 收集 JOIN 中所有非区块引用的表名，逐个校验文件存在性
+                    tables_to_check = []
+                    # 第一段的左表
+                    left_first = join_parts[0]["left"]
+                    left_first_sheet = join_parts[0].get("left_sheet")
+                    if not re.match(r"^\{.+\}$", left_first.strip()):
+                        tables_to_check.append((left_first, left_first_sheet, "左表"))
+                    # 每段的右表
+                    for jp in join_parts:
+                        right_name = jp["right"]
+                        right_sheet = jp.get("right_sheet")
+                        if not re.match(r"^\{.+\}$", right_name.strip()):
+                            tables_to_check.append((right_name, right_sheet, "右表"))
+
+                    from src.excel_reader import find_data_file, get_data_file_sheets
+                    all_files_ok = True
+                    for tbl_name, tbl_sheet, tbl_role in tables_to_check:
+                        file_path = _resolve_data_path(tbl_name, config_dir)
+                        if not file_path or not os.path.exists(file_path):
+                            file_path = find_data_file(tbl_name, config_dir)
+                        if not file_path or not os.path.exists(file_path):
+                            results.append({
+                                "task_seq": seq,
+                                "level": "error",
+                                "message": f"JOIN {tbl_role}文件不存在: {tbl_name}",
+                                "column": "数据源"
+                            })
+                            all_files_ok = False
+                        else:
+                            # 校验 @Sheet 提示的 sheet 是否存在
+                            if tbl_sheet:
+                                sheets = get_data_file_sheets(file_path)
+                                if sheets and tbl_sheet not in sheets:
+                                    results.append({
+                                        "task_seq": seq,
+                                        "level": "error",
+                                        "message": f"JOIN {tbl_role}Sheet '{tbl_sheet}' 不存在。可用Sheet: {sheets}",
+                                        "column": "数据源"
+                                    })
+                                    all_files_ok = False
+                    # JOIN 任务跳过列名校验（列可能来自右表，需执行时合并后才能判断）
                 else:
-                    # 4. 检查 Sheet 是否存在
-                    from src.excel_reader import get_data_file_sheets
-                    sheets = get_data_file_sheets(file_path)
-                    if sheets and sheet_name not in sheets:
+                    # 非 JOIN、非区块引用：原有文件存在性检查
+                    file_path = _resolve_data_path(ds_check, config_dir)
+                    if not file_path or not os.path.exists(file_path):
+                        from src.excel_reader import find_data_file
+                        file_path = find_data_file(ds_check, config_dir)
+                    if not file_path or not os.path.exists(file_path):
                         results.append({
                             "task_seq": seq,
                             "level": "error",
-                            "message": f"Sheet '{sheet_name}' 不存在。可用Sheet: {sheets}",
-                            "column": "Sheet"
+                            "message": f"数据源文件不存在: {data_source}",
+                            "column": "数据源"
                         })
                     else:
-                        # 5. 检查列名是否存在（JOIN 任务跳过：列可能来自右表）
-                        if " JOIN " not in str(data_source).upper():
+                        # 4. 检查 Sheet 是否存在
+                        from src.excel_reader import get_data_file_sheets
+                        sheets = get_data_file_sheets(file_path)
+                        if sheets and sheet_name not in sheets:
+                            results.append({
+                                "task_seq": seq,
+                                "level": "error",
+                                "message": f"Sheet '{sheet_name}' 不存在。可用Sheet: {sheets}",
+                                "column": "Sheet"
+                            })
+                        else:
+                            # 5. 检查列名是否存在（JOIN 任务跳过：列可能来自右表）
                             from src.excel_reader import read_data_file
                             try:
                                 df = read_data_file(file_path, sheet_name)
                                 if df is not None and not df.empty:
                                     all_cols = list(df.columns)
-                                
+
                                 # 检查行维度
                                 row_dims = [d.strip() for d in 行维度_str.split(",") if d.strip()]
                                 missing_row = [d for d in row_dims if d not in all_cols]
@@ -887,7 +960,7 @@ def validate_pivot_config(tasks, config_dir):
                                         "message": f"行维度列不存在: {missing_row}",
                                         "column": "行维度"
                                     })
-                                
+
                                 # 检查列维度
                                 col_dims = [d.strip() for d in 列维度_str.split(",") if d.strip()]
                                 missing_col = [d for d in col_dims if d not in all_cols]
@@ -898,7 +971,7 @@ def validate_pivot_config(tasks, config_dir):
                                         "message": f"列维度列不存在: {missing_col}",
                                         "column": "列维度"
                                     })
-                                
+
                                 # 检查值字段
                                 value_cols = [v.strip() for v in 值字段_str.split(",") if v.strip()]
                                 missing_val = [v for v in value_cols if v not in all_cols]
@@ -1067,11 +1140,15 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         聚合函数.append(a_no_fmt)
         number_formats.append(fmt)
 
-    df = _load_joined_dataframe(config_dir, data_source, sheet_name, block_results=block_results)
+    try:
+        df = _load_joined_dataframe(config_dir, data_source, sheet_name, block_results=block_results)
+    except ValueError as e:
+        # JOIN 加载失败（右表缺失/列名不存在/键数量不一致等）显式报错
+        return None, f"[任务{序号}] {str(e)}"
     if df is None or df.empty:
         return None, f"[任务{序号}] 数据为空或文件不存在: {data_source}"
 
-    join_happened = " JOIN " in str(data_source).upper()
+    join_happened = _parse_join_spec(str(data_source)) is not None
 
     # 应用过滤条件
     filter_expr = task.get("过滤条件", "")

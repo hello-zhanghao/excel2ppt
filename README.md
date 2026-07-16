@@ -244,6 +244,44 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.45.0 (2026-07-17)
+
+**🔧 修复 JOIN 数据源拼接 4 个 P0 级问题 + 2 个 P1 级问题**
+
+| 改动 | 说明 |
+|------|------|
+| **P0-1：`@Sheet` 语法在 JOIN 中生效** | `_resolve_table_source` 新增 `sheet_hint` 参数，优先使用 `_split_table_token` 解析出的 `@Sheet`，而非模糊匹配。修复前 `表A@销售明细 JOIN 表A@产品目录` 会两次都读销售明细（自连接），结果错误但无报错 |
+| **P0-2：JOIN 静默跳过改为报错** | 右表加载失败、ON 列名不存在时改抛 `ValueError`，由 `run_analysis` 捕获转为错误信息。修复前会静默丢失 JOIN 数据，用户得到部分 JOIN 的错误结果 |
+| **P0-3：多键 JOIN 统一走列表分支** | 移除 `if len(left_keys)>1 and len(right_keys)>1` 的二分支判断，统一用列表形式处理单键/多键。新增左右键数量不一致的防御性校验 |
+| **P0-4：validate 对 `{区块}+JOIN` 不误报** | 校验阶段识别 JOIN 中左右表的 `{...}` 区块引用，跳过文件存在性检查；对非区块引用的表逐个校验文件和 `@Sheet` 存在性 |
+| **P1-7：ON 条件非等值时报错** | 检测 `!=`/`>`/`<`/`>=`/`<=` 非等值条件并抛 `ValueError`，提示用户在「过滤条件」列配置。修复前 `ON a.x=b.x AND a.y>b.y` 会静默丢弃 `>` 条件 |
+| **P1-8：JOIN 检测对换行友好** | `_parse_join_spec` 入口检测从字面 `" JOIN "` 改为正则 `\bJOIN\b`，支持 Excel Alt+Enter 换行写法 |
+
+**JOIN 写法示例**：
+```
+# 基础单键 JOIN
+表A.xlsx JOIN 表B.xlsx ON 产品=产品
+
+# 多键 JOIN（AND 分隔）
+表A.xlsx JOIN 表B.xlsx ON 产品=产品 AND 地区=地区
+
+# @Sheet 语法指定 sheet（同一文件多 sheet 场景）
+测试数据.xlsx@销售明细 JOIN 测试数据.xlsx@产品目录 ON 产品=产品
+
+# 区块引用作为左表（前序透视结果参与 JOIN）
+{站点级} JOIN 场景映射表.xlsx ON 场景=场景
+
+# 多表级联 JOIN
+表A.xlsx JOIN 表B.xlsx ON k1=k1 JOIN 表C.xlsx ON k2=k2
+
+# JOIN 类型（默认 INNER）
+表A.xlsx LEFT JOIN 表B.xlsx ON 产品=产品
+表A.xlsx RIGHT JOIN 表B.xlsx ON 产品=产品
+表A.xlsx OUTER JOIN 表B.xlsx ON 产品=产品
+```
+
+**验证结果**：9 个专项测试全部 PASS（@Sheet 生效、右表缺失报错、列名不存在报错、单键 JOIN 正常、区块+JOIN 不误报、非等值报错、换行识别、区块引用+JOIN、多键 JOIN）；防护用例 32 个任务零回归。
+
 ### v2.44.0 (2026-07-16)
 
 **✨ 透视结果支持混合布局：同一 sheet 内横向段 + 纵向段共存**
