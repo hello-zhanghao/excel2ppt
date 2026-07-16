@@ -260,8 +260,7 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_
         return None
 
     if not all_ok:
-        print("[错误] 配置校验未通过，请修正后再执行")
-        sys.exit(1)
+        print("[警告] 配置校验发现以上错误，将继续执行（运行时可能失败）")
 
     # 跳过「是否生成=否」的页面
     skip_keywords = ("否", "no", "false", "0", "不生成", "跳过", "skip")
@@ -487,8 +486,7 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
         return None
     
     if not all_ok:
-        print("[错误] 配置校验未通过，请修正后再执行")
-        sys.exit(1)
+        print("[警告] 配置校验发现以上错误，将继续执行（运行时可能失败）")
 
     print(f"[Pivot/2] 执行透视分析...")
     results = []

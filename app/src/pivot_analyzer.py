@@ -328,16 +328,27 @@ def _parse_join_spec(data_source):
 
         if i + 1 <= len(tokens) and i < len(tokens) and tokens[i].upper() == "ON":
             i += 1
-            on_expr = tokens[i]
-            i += 1
-            if "=" in on_expr:
-                parts_eq = on_expr.split("=", 1)
-                left_key = parts_eq[0].strip()
-                right_key = parts_eq[1].strip()
-            else:
-                left_key = on_expr
-                right_key = ""
+            on_parts = []
+            while i < len(tokens) and tokens[i].upper() not in ("JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "OUTER JOIN"):
+                on_parts.append(tokens[i])
+                i += 1
+            on_expr = " ".join(on_parts)
+
+            left_keys = []
+            right_keys = []
+            and_conditions = re.split(r"\s+AND\s+", on_expr, flags=re.IGNORECASE)
+            for cond in and_conditions:
+                cond = cond.strip()
+                if "=" in cond:
+                    eq_parts = cond.split("=", 1)
+                    left_keys.append(eq_parts[0].strip())
+                    right_keys.append(eq_parts[1].strip())
+
+            left_key = ",".join(left_keys) if left_keys else ""
+            right_key = ",".join(right_keys) if right_keys else ""
         else:
+            left_keys = []
+            right_keys = []
             left_key = ""
             right_key = ""
 
@@ -360,6 +371,8 @@ def _parse_join_spec(data_source):
             "right_sheet": right_sheet,
             "left_key": left_key,
             "right_key": right_key,
+            "left_keys": left_keys,
+            "right_keys": right_keys,
             "how": how,
         })
 
@@ -375,7 +388,7 @@ def _split_table_token(token):
 
 def _tokenize_join(data_source):
     s = data_source.strip()
-    keywords = ["INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "OUTER JOIN", "JOIN", "ON"]
+    keywords = ["INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "OUTER JOIN", "JOIN", "ON", "AND"]
     tokens = []
     remaining = s
     while remaining:
@@ -389,7 +402,7 @@ def _tokenize_join(data_source):
                 found = True
                 break
         if not found:
-            m = re.match(r"^\s*(.+?)(?=\s+(?:INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|OUTER\s+JOIN|JOIN|ON)\b|$)", remaining, re.IGNORECASE)
+            m = re.match(r"^\s*(.+?)(?=\s+(?:INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|OUTER\s+JOIN|JOIN|ON|AND)\b|$)", remaining, re.IGNORECASE)
             if m:
                 raw = m.group(1).strip()
                 tokens.append(raw)
@@ -460,16 +473,31 @@ def _load_joined_dataframe(config_dir, data_source, sheet_name, block_results=No
 
         left_on = jp["left_key"]
         right_on = jp["right_key"]
+        left_keys = jp.get("left_keys", [])
+        right_keys = jp.get("right_keys", [])
 
-        if left_on not in df.columns:
-            left_on = left_on.strip()
-        if right_on not in df_right.columns:
-            right_on = right_on.strip()
+        if len(left_keys) > 1 and len(right_keys) > 1:
+            valid = True
+            for lk in left_keys:
+                if lk not in df.columns:
+                    valid = False
+                    break
+            for rk in right_keys:
+                if rk not in df_right.columns:
+                    valid = False
+                    break
+            if valid:
+                df = pd.merge(df, df_right, left_on=left_keys, right_on=right_keys, how=jp["how"], suffixes=("", "_r"))
+        else:
+            if left_on not in df.columns:
+                left_on = left_on.strip()
+            if right_on not in df_right.columns:
+                right_on = right_on.strip()
 
-        if left_on not in df.columns or right_on not in df_right.columns:
-            continue
+            if left_on not in df.columns or right_on not in df_right.columns:
+                continue
 
-        df = pd.merge(df, df_right, left_on=left_on, right_on=right_on, how=jp["how"], suffixes=("", "_r"))
+            df = pd.merge(df, df_right, left_on=left_on, right_on=right_on, how=jp["how"], suffixes=("", "_r"))
 
     return df
 
@@ -815,10 +843,16 @@ def validate_pivot_config(tasks, config_dir):
                 if re.match(r"^\{.+\}$", ds_str):
                     is_pivot_ref = True
             if not is_pivot_ref:
-                file_path = _resolve_data_path(data_source, config_dir)
+                # 处理 JOIN 语法：提取左表文件名为实际数据源
+                ds_check = str(data_source).strip()
+                if " JOIN " in ds_check.upper():
+                    join_parts = _parse_join_spec(ds_check)
+                    if join_parts and join_parts[0]["left"]:
+                        ds_check = join_parts[0]["left"]
+                file_path = _resolve_data_path(ds_check, config_dir)
                 if not file_path or not os.path.exists(file_path):
                     from src.excel_reader import find_data_file
-                    file_path = find_data_file(data_source, config_dir)
+                    file_path = find_data_file(ds_check, config_dir)
                 if not file_path or not os.path.exists(file_path):
                     results.append({
                         "task_seq": seq,
@@ -838,12 +872,13 @@ def validate_pivot_config(tasks, config_dir):
                             "column": "Sheet"
                         })
                     else:
-                        # 5. 检查列名是否存在
-                        from src.excel_reader import read_data_file
-                        try:
-                            df = read_data_file(file_path, sheet_name)
-                            if df is not None and not df.empty:
-                                all_cols = list(df.columns)
+                        # 5. 检查列名是否存在（JOIN 任务跳过：列可能来自右表）
+                        if " JOIN " not in str(data_source).upper():
+                            from src.excel_reader import read_data_file
+                            try:
+                                df = read_data_file(file_path, sheet_name)
+                                if df is not None and not df.empty:
+                                    all_cols = list(df.columns)
                                 
                                 # 检查行维度
                                 row_dims = [d.strip() for d in 行维度_str.split(",") if d.strip()]
@@ -883,13 +918,13 @@ def validate_pivot_config(tasks, config_dir):
                                         results, seq, df, value_cols,
                                         _split_agg_funcs(聚合方式_str)
                                     )
-                        except Exception as e:
-                            results.append({
-                                "task_seq": seq,
-                                "level": "warning",
-                                "message": f"读取数据失败: {str(e)}",
-                                "column": "数据源"
-                            })
+                            except Exception as e:
+                                results.append({
+                                    "task_seq": seq,
+                                    "level": "warning",
+                                    "message": f"读取数据失败: {str(e)}",
+                                    "column": "数据源"
+                                })
         
         # 6. 值映射数量检查（对比实际输出列数，考虑单字段多聚合）
         val_map_str = task.get("值映射", "")
@@ -1039,6 +1074,8 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
     if df is None or df.empty:
         return None, f"[任务{序号}] 数据为空或文件不存在: {data_source}"
 
+    join_happened = " JOIN " in str(data_source).upper()
+
     # 应用过滤条件
     filter_expr = task.get("过滤条件", "")
     if filter_expr:
@@ -1139,6 +1176,10 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         col_fmts = _collect_number_formats(result, 行维度, number_formats)
         if col_fmts:
             task["_number_formats"] = col_fmts
+
+    if join_happened and not df.empty:
+        结果Sheet = task.get("结果Sheet", f"结果{序号}")
+        result[f"_JOIN中间表_{结果Sheet}"] = df.copy()
 
     return result, None
 
