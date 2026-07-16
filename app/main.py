@@ -20,8 +20,8 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.50.0"
-__UPDATE_DATE__ = "2026-07-16"
+__VERSION__ = "2.51.0"
+__UPDATE_DATE__ = "2026-07-17"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -452,6 +452,42 @@ def _run_html_from_pivot(pivot_path, output_path=None, tasks=None):
     return html_path
 
 
+def _merge_same_block_results(prev_df, new_df, block_name, seq):
+    """同名区块结果横向合并（按行维度列对齐）。
+
+    修复级联透视"找不到字段"根因：多行配置相同区块名时，旧逻辑直接覆盖，
+    导致后续 {区块名} 引用只能拿到最后一个任务的列，前面任务的列丢失。
+
+    合并策略：
+    1. 找两个 df 的公共列（通常是行维度列）
+    2. 有公共列 → 基于公共列做 outer merge，列变多，行按公共列对齐
+    3. 无公共列 → 退化为 concat(axis=0) 纵向堆叠（行变多），并打印警告
+    """
+    import pandas as pd
+    try:
+        prev_cols = list(prev_df.columns)
+        new_cols = list(new_df.columns)
+        common_cols = [c for c in prev_cols if c in new_cols]
+        if common_cols:
+            # 基于公共列（行维度）outer merge，保留两边所有行和列
+            merged = pd.merge(prev_df, new_df, on=common_cols, how="outer")
+            # 去除 merge 可能产生的重复列（非公共列同名时 merge 会加 _x/_y 后缀）
+            merged = merged.loc[:, ~merged.columns.duplicated()]
+            print(f"    [信息] 区块名 '{block_name}' 同名任务横向合并（任务{seq}）")
+            print(f"           公并行维度列: {common_cols}，合并后列数: {len(merged.columns)}")
+            return merged
+        else:
+            # 无公共列，纵向堆叠
+            merged = pd.concat([prev_df, new_df], axis=0, ignore_index=True)
+            print(f"    [警告] 区块名 '{block_name}' 同名任务无公共行维度列，纵向堆叠（任务{seq}）")
+            print(f"           前序列: {prev_cols}，当前列: {new_cols}")
+            print(f"           建议改用 {{结果Sheet名.区块名}} 分别精确引用")
+            return merged
+    except Exception as e:
+        print(f"    [警告] 区块名 '{block_name}' 同名任务合并失败({e})，回退为覆盖")
+        return new_df
+
+
 def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir=None):
     from src.pivot_analyzer import (
         read_pivot_config, run_analysis, find_data_files,
@@ -552,21 +588,19 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
                                 merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()]
                             else:
                                 merged_df = dfs_in_result[0][1]
-                        # 区块名重复检测：同名区块后出现会覆盖先出现，给出警告提示用组合语法引用
-                        # 这是级联透视"找不到字段"的常见根因：多行配置相同区块名，最后一行覆盖前面的
+                        # 同名区块处理：不再覆盖，而是按行维度对齐横向合并
+                        # 修复级联透视"找不到字段"根因：多行配置相同区块名，最后一行覆盖前面的，
+                        # 导致后续 {区块名} 引用只能拿到最后一个任务的列，前面任务的列丢失
+                        # 组合 key 始终指向本任务自己的原始结果（未合并），用于 {结果Sheet名.区块名} 精确引用
+                        block_results[(block_name, sheet_name)] = merged_df
                         if block_name in block_results:
-                            print(f"    [警告] 区块名 '{block_name}' 重复，任务{seq}覆盖了前面的同名区块")
-                            print(f"           当前结果Sheet: {sheet_name}")
-                            print(f"           后续若需分别引用，请用 {{结果Sheet名.区块名}} 精确指定")
-                            print(f"           例如: 数据源={{地区汇总.汇总}} 或 {{产品汇总.汇总}}")
+                            prev_df = block_results[block_name]
+                            merged_df = _merge_same_block_results(prev_df, merged_df, block_name, seq)
                         block_results[block_name] = merged_df
                         # 同时用结果Sheet名作为别名存入，使后续任务既可用 {区块名}
                         # 也可用 {结果Sheet名} 引用本任务输出（区块名与结果Sheet不同时两者都生效）
                         if sheet_name and sheet_name != block_name:
                             block_results[sheet_name] = merged_df
-                        # 组合 key (区块名, 结果Sheet名) 存入，支持 {结果Sheet名.区块名} 精确引用
-                        # 用于区块名不唯一时精确指定某个任务的结果，避免覆盖问题
-                        block_results[(block_name, sheet_name)] = merged_df
         except Exception as e:
             print(f"    [FAIL] [任务{seq}] 异常: {e}")
             errors.append({"序号": seq, "错误": str(e)})
