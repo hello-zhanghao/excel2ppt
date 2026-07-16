@@ -1191,8 +1191,10 @@ def generate_html_report(
         labels = {"bar": "柱状图", "line": "折线图", "area": "面积图", "pie": "饼图",
                   "radar": "雷达图", "scatter": "散点图", "table": "表格",
                   "map": "地图", "heatmap": "热力图"}
+        # 默认激活"表格"按钮（初始展示表格，点击图表按钮再渲染图表，避免大量数据点地图卡顿）
+        default_active = "table" if "table" in sec["available_charts"] else sec["available_charts"][0]
         for ct in sec["available_charts"]:
-            active = "active" if ct == sec["chart_type"] else ""
+            active = "active" if ct == default_active else ""
             chart_buttons_html += f'<button class="chart-btn {active}" onclick="switchChart(\'{sec["id"]}\', \'{ct}\')">{labels.get(ct, ct)}</button>'
 
         col_selector_html = _build_col_selector_html(sec)
@@ -1217,7 +1219,7 @@ def generate_html_report(
     {col_selector_html}
     {geo_controls_html}
     {chart_toolbar_html}
-    <div id="chart_{sec["id"]}" class="chart-canvas"></div>
+    <div id="chart_{sec["id"]}" class="chart-canvas" style="display:none"></div>
   </div>
   {table_block_html}
 </div>''')
@@ -1510,54 +1512,17 @@ def generate_html_report(
   {all_chart_data_js}
   
   function initCharts() {{
-    // 懒加载：仅渲染进入视口的图表，避免一次性初始化所有图表导致打开卡顿
-    var pendingKeys = Object.keys(chartOptions);
-    if (!pendingKeys.length) return;
-    // 不支持 IntersectionObserver 时回退到一次性渲染
-    if (!('IntersectionObserver' in window)) {{
-      pendingKeys.forEach(function(key) {{
-        var lastUnderscore = key.lastIndexOf('_');
-        var sectionId = key.substring(0, lastUnderscore);
-        var chartType = key.substring(lastUnderscore + 1);
-        if (chartType === getDefaultChart(sectionId)) {{
-          renderChart(sectionId, chartType);
-        }}
-      }});
-      return;
-    }}
-    var rendered = {{}};
-    var io = new IntersectionObserver(function(entries) {{
-      entries.forEach(function(entry) {{
-        if (!entry.isIntersecting) return;
-        var sid = entry.target.id;
-        if (rendered[sid]) return;
-        rendered[sid] = true;
-        // 渲染该 section 的默认图表
-        var chartType = getDefaultChart(sid);
-        renderChart(sid, chartType);
-        io.unobserve(entry.target);
-      }});
-    }}, {{rootMargin: '200px 0px', threshold: 0}});
-    // 遍历所有 section 注册观察
-    var sections = document.querySelectorAll('.section[id]');
-    for (var i = 0; i < sections.length; i++) {{
-      io.observe(sections[i]);
-    }}
+    // 默认所有 section 展示表格（chart-canvas 已通过 inline style display:none 隐藏）
+    // 图表在用户点击图表按钮时才按需渲染，避免打开时初始化大量 ECharts 实例
+    // 此处无需主动渲染任何图表
   }}
-  
-  function getDefaultChart(sectionId) {{
-    var btns = document.querySelectorAll('#' + sectionId + ' .chart-btn');
-    for (var i = 0; i < btns.length; i++) {{
-      if (btns[i].classList.contains('active')) {{
-        return btns[i].getAttribute('onclick').match(/'([^']+)'/g)[1].replace(/'/g, '');
-      }}
-    }}
-    return 'bar';
-  }}
-  
+
   function renderChart(sectionId, chartType) {{
     var container = document.getElementById('chart_' + sectionId);
     if (!container) return;
+
+    // 表格容器（切换到图表时隐藏表格，切换到表格时显示表格）
+    var tableWrap = document.querySelector('#' + sectionId + ' .table-container');
 
     // 显示/隐藏地图控件面板
     var geoCtrl = document.getElementById('geo_ctrl_' + sectionId);
@@ -1572,11 +1537,15 @@ def generate_html_report(
     }}
 
     if (chartType === 'table') {{
+      // 表格模式：隐藏图表 canvas，显示表格
       container.style.display = 'none';
+      if (tableWrap) tableWrap.style.display = '';
       return;
     }}
 
+    // 图表模式：显示图表 canvas，隐藏表格
     container.style.display = 'block';
+    if (tableWrap) tableWrap.style.display = 'none';
 
     if (chartInstances[sectionId]) {{
       chartInstances[sectionId].dispose();
