@@ -41,13 +41,28 @@ def write_results(tasks, results, errors, output_path):
     for task, result in zip(tasks, results):
         if result is None:
             continue
-        sheet_name = _safe_sheet_name(task.get("结果Sheet", "分析结果"))
+        # 识别横向布局标记：结果Sheet名以"|横向"或"|横"结尾时启用列追加模式
+        raw_sheet = str(task.get("结果Sheet", "分析结果"))
+        is_horizontal = False
+        for suffix in ("|横向", "|横", "|horizontal", "|Horizontal"):
+            if raw_sheet.endswith(suffix):
+                is_horizontal = True
+                raw_sheet = raw_sheet[:-len(suffix)].strip()
+                break
+        task["结果Sheet"] = raw_sheet  # 原地更新为剥离后缀的真实 sheet 名
+        sheet_name = _safe_sheet_name(raw_sheet)
         if sheet_name not in groups:
-            groups[sheet_name] = []
-        groups[sheet_name].append((task, result))
+            groups[sheet_name] = {"items": [], "horizontal": is_horizontal}
+        groups[sheet_name]["items"].append((task, result))
+        # 任一任务标记横向则整 sheet 横向
+        if is_horizontal:
+            groups[sheet_name]["horizontal"] = True
 
-    for sheet_name, group_items in groups.items():
-        _write_multi_result_sheet(wb, sheet_name, group_items)
+    for sheet_name, group in groups.items():
+        if group["horizontal"]:
+            _write_horizontal_layout_sheet(wb, sheet_name, group["items"])
+        else:
+            _write_multi_result_sheet(wb, sheet_name, group["items"])
 
     if errors:
         ws = wb.create_sheet("错误信息")
@@ -117,6 +132,172 @@ def _write_multi_result_sheet(wb, sheet_name, group_items):
     if ws.max_column and ws.max_row:
         _auto_fit_columns(ws)
         ws.freeze_panes = ws.cell(row=1, column=1)
+
+
+def _write_horizontal_layout_sheet(wb, sheet_name, group_items):
+    """横向布局：同 sheet 内多个区块从左到右并列，区块间空 1 列分隔。
+
+    适用于区块名/行维度各不相同但希望避免行数过多的场景。
+    每个区块独立写入自己的列区域：顶部区块标题行（合并该区块所有列）→ 表头行 → 数据行。
+    """
+    ws = wb.create_sheet(sheet_name)
+
+    # 按「区块名」分组（与 _write_multi_result_sheet 一致），保持首次出现顺序
+    block_groups = []
+    seen_blocks = set()
+    for task, result in group_items:
+        block_name = _get_block_title(task)
+        if block_name not in seen_blocks:
+            block_groups.append((block_name, []))
+            seen_blocks.add(block_name)
+        for name, items in block_groups:
+            if name == block_name:
+                items.append((task, result))
+                break
+
+    current_col = 1
+    for block_name, items in block_groups:
+        # 同名区块多任务时仍按行维度横向合并（复用现有合并逻辑）
+        row_dims = _get_row_dims(items[0][0])
+
+        if not isinstance(items[0][1], dict):
+            # 标量区块：逐个任务横向排列
+            for task, result in items:
+                if current_col > 1:
+                    current_col += 1  # 区块间空 1 列
+                block_cols = 2  # 标量区块固定 2 列（指标名+值）
+                _write_block_title_at(ws, block_name, 1, current_col, block_cols)
+                _write_scalar_block_at(ws, task, result, 2, current_col,
+                                       task.get("_pct_columns", []), task.get("_number_formats", {}))
+                current_col += block_cols
+            continue
+
+        if current_col > 1:
+            current_col += 1  # 区块间空 1 列
+
+        if len(items) > 1:
+            merged_df, merged_pct_cols, merged_number_formats = _merge_same_dim_results(items, row_dims)
+            if merged_df is None:
+                continue
+            block_cols = len(merged_df.columns)
+            _write_block_title_at(ws, block_name, 1, current_col, block_cols)
+            _write_df_block_at(ws, merged_df, 2, current_col, merged_pct_cols, row_dims, merged_number_formats)
+            current_col += block_cols
+        else:
+            task, result = items[0]
+            pct_cols = task.get("_pct_columns", [])
+            num_fmts = task.get("_number_formats", {})
+            # 取第一个 DataFrame（与行追加模式一致）
+            df_to_write = None
+            for key, df in result.items():
+                df_to_write = df
+                break
+            if df_to_write is None:
+                continue
+            block_cols = len(df_to_write.columns)
+            _write_block_title_at(ws, block_name, 1, current_col, block_cols)
+            _write_df_block_at(ws, df_to_write, 2, current_col, pct_cols, row_dims, num_fmts)
+            current_col += block_cols
+
+    if ws.max_column and ws.max_row:
+        _auto_fit_columns(ws)
+        ws.freeze_panes = ws.cell(row=1, column=1)
+
+
+def _write_block_title_at(ws, title, row, start_col, col_count):
+    """在指定行、指定起始列写入区块标题（合并单元格，深蓝底白字）。"""
+    end_col = start_col + col_count - 1
+    cell = ws.cell(row=row, column=start_col, value=title)
+    cell.font = BLOCK_TITLE_FONT
+    cell.fill = BLOCK_TITLE_FILL
+    cell.alignment = BLOCK_TITLE_ALIGNMENT
+    cell.border = THIN_BORDER
+    if col_count > 1:
+        ws.merge_cells(start_row=row, start_column=start_col, end_row=row, end_column=end_col)
+    for ci in range(start_col + 1, end_col + 1):
+        c = ws.cell(row=row, column=ci)
+        c.fill = BLOCK_TITLE_FILL
+        c.border = THIN_BORDER
+
+
+def _write_df_block_at(ws, df, start_row, start_col, pct_columns=None, row_dims=None, number_formats=None):
+    """写入 DataFrame 区块到指定起始行、起始列（横向布局用，支持 start_col 偏移）。"""
+    pct_columns = set(pct_columns or [])
+    row_dims = set(row_dims or [])
+    number_formats = number_formats or {}
+    headers = list(df.columns)
+    # 表头行
+    for ci, h in enumerate(headers):
+        ws.cell(row=start_row, column=start_col + ci, value=str(h))
+    _style_header_row_at(ws, start_row, start_col, len(headers), row_dims)
+    # 数据行
+    for ri, (idx, row_data) in enumerate(df.iterrows()):
+        row_num = start_row + 1 + ri
+        is_total = str(idx) == "合计" or str(idx) == "总计"
+        for ci, val in enumerate(row_data):
+            col_name = headers[ci] if ci < len(headers) else None
+            col_name_str = str(col_name) if col_name is not None else ""
+            is_pct = _is_pct_col(col_name, pct_columns)
+            cell = ws.cell(row=row_num, column=start_col + ci, value=_format_cell_value(val, col_name, is_pct))
+            excel_fmt = _ppt_fmt_to_excel_fmt(number_formats.get(col_name_str, ""))
+            if excel_fmt:
+                cell.number_format = excel_fmt
+            elif is_pct:
+                cell.number_format = PCT_NUMBER_FORMAT
+            elif isinstance(val, (int, float)):
+                cell.number_format = VALID_NUMBER_FORMAT
+            cell.alignment = DATA_ALIGNMENT
+            cell.font = TOTAL_FONT if is_total else DATA_FONT
+            if is_total:
+                cell.fill = TOTAL_FILL
+            elif col_name_str in row_dims:
+                cell.fill = DIM_DATA_FILL
+            else:
+                cell.fill = PatternFill()
+            cell.border = THIN_BORDER
+
+
+def _write_scalar_block_at(ws, task, result, start_row, start_col, pct_columns=None, number_formats=None):
+    """写入标量区块到指定起始行、起始列（横向布局用）。"""
+    pct_columns = set(pct_columns or [])
+    number_formats = number_formats or {}
+    if isinstance(result, dict):
+        items = list(result.items())
+    else:
+        items = [("指标", result)]
+    for ri, (key, val) in enumerate(items):
+        row_num = start_row + ri
+        # 指标名列
+        cell_name = ws.cell(row=row_num, column=start_col, value=str(key))
+        cell_name.font = DATA_FONT
+        cell_name.alignment = DATA_ALIGNMENT
+        cell_name.border = THIN_BORDER
+        cell_name.fill = DIM_DATA_FILL
+        # 值列
+        is_pct = _is_pct_col(key, pct_columns)
+        cell_val = ws.cell(row=row_num, column=start_col + 1, value=_format_cell_value(val, key, is_pct))
+        excel_fmt = _ppt_fmt_to_excel_fmt(number_formats.get(str(key), ""))
+        if excel_fmt:
+            cell_val.number_format = excel_fmt
+        elif is_pct:
+            cell_val.number_format = PCT_NUMBER_FORMAT
+        elif isinstance(val, (int, float)):
+            cell_val.number_format = VALID_NUMBER_FORMAT
+        cell_val.font = DATA_FONT
+        cell_val.alignment = DATA_ALIGNMENT
+        cell_val.border = THIN_BORDER
+
+
+def _style_header_row_at(ws, row, start_col, max_col, dim_cols=None):
+    """为指定行、指定起始列的表头应用样式（横向布局用）。"""
+    dim_cols = set(dim_cols or [])
+    end_col = start_col + max_col - 1
+    for ci in range(start_col, end_col + 1):
+        cell = ws.cell(row=row, column=ci)
+        cell.font = HEADER_FONT
+        cell.fill = DIM_HEADER_FILL if (cell.value and str(cell.value) in dim_cols) else HEADER_FILL
+        cell.alignment = HEADER_ALIGNMENT
+        cell.border = THIN_BORDER
 
 
 def _get_block_title(task):
