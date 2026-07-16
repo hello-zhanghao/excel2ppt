@@ -553,16 +553,19 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
                             else:
                                 merged_df = dfs_in_result[0][1]
                         # 区块名重复检测：同名区块后出现会覆盖先出现，给出警告提示用组合语法引用
+                        # 这是级联透视"找不到字段"的常见根因：多行配置相同区块名，最后一行覆盖前面的
                         if block_name in block_results:
                             print(f"    [警告] 区块名 '{block_name}' 重复，任务{seq}覆盖了前面的同名区块")
-                            print(f"           当前结果Sheet: {sheet_name}，后续若需分别引用请用 {{区块名.结果Sheet名}}")
+                            print(f"           当前结果Sheet: {sheet_name}")
+                            print(f"           后续若需分别引用，请用 {{结果Sheet名.区块名}} 精确指定")
+                            print(f"           例如: 数据源={{地区汇总.汇总}} 或 {{产品汇总.汇总}}")
                         block_results[block_name] = merged_df
                         # 同时用结果Sheet名作为别名存入，使后续任务既可用 {区块名}
                         # 也可用 {结果Sheet名} 引用本任务输出（区块名与结果Sheet不同时两者都生效）
                         if sheet_name and sheet_name != block_name:
                             block_results[sheet_name] = merged_df
-                        # 组合 key (区块名, 结果Sheet名) 存入，支持 {区块名.结果Sheet名} 精确引用
-                        # 用于区块名不唯一时精确指定某个任务的结果
+                        # 组合 key (区块名, 结果Sheet名) 存入，支持 {结果Sheet名.区块名} 精确引用
+                        # 用于区块名不唯一时精确指定某个任务的结果，避免覆盖问题
                         block_results[(block_name, sheet_name)] = merged_df
         except Exception as e:
             print(f"    [FAIL] [任务{seq}] 异常: {e}")

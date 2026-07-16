@@ -247,10 +247,14 @@ def _resolve_block_reference(data_source, block_results):
     """解析前序透视结果区块引用。
 
     支持语法（按精确度从高到低）：
-      - ``{区块名.结果Sheet名}`` → 精确匹配：同时匹配区块名和结果Sheet名（推荐，区块名不唯一时使用）
+      - ``{结果Sheet名.区块名}`` → 精确匹配：同时匹配结果Sheet名和区块名（推荐，区块名不唯一时使用）
       - ``{pivot}`` / ``{透视结果}`` / ``{prev}`` / ``{上一个}`` → 取 block_results 中最后插入的 DataFrame
       - ``{区块名}`` → 取 block_results[区块名]（区块名唯一时使用）
       - ``{pivot:区块名}`` → 同上，显式指代透视结果中的某区块
+
+    注意：结果Sheet名优先级高于区块名，组合语法格式为 ``{结果Sheet名.区块名}``（先Sheet名后区块名）。
+    当多行配置有相同区块名时，最后一行会覆盖前面的，导致后续引用找不到列。
+    此时必须用 ``{结果Sheet名.区块名}`` 精确指定。
 
     :return: 命中则返回 DataFrame.copy()；未命中或 block_results 为空则返回 None
     """
@@ -283,19 +287,21 @@ def _resolve_block_reference(data_source, block_results):
             last_df = df
         return last_df.copy() if last_df is not None else None
 
-    # {区块名.结果Sheet名} 组合精确匹配（区块名不唯一时使用）
-    # 注意：区块名和结果Sheet名本身不应包含 "."，若包含会导致解析歧义
+    # {结果Sheet名.区块名} 组合精确匹配（区块名不唯一时使用）
+    # 格式：先结果Sheet名，后区块名，用 "." 分隔
+    # 注意：结果Sheet名和区块名本身不应包含 "."，若包含会导致解析歧义
     if "." in inner:
         parts = inner.split(".", 1)
-        block_name_part = parts[0].strip()
-        sheet_name_part = parts[1].strip()
+        sheet_name_part = parts[0].strip()
+        block_name_part = parts[1].strip()
         # 在 block_results 中查找组合 key (区块名, 结果Sheet名)
+        # 注意 block_results 的 tuple key 顺序是 (区块名, 结果Sheet名)
         for k, df in block_results.items():
             if isinstance(k, tuple) and len(k) == 2:
                 k_block, k_sheet = k
-                if str(k_block) == block_name_part and str(k_sheet) == sheet_name_part:
+                if str(k_sheet) == sheet_name_part and str(k_block) == block_name_part:
                     return df.copy()
-        # 组合 key 未命中，尝试宽松匹配：区块名或Sheet名任一匹配且另一项也匹配
+        # 组合 key 未命中
         return None
 
     # 指定区块名（单层引用）
