@@ -552,6 +552,10 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
                                 merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()]
                             else:
                                 merged_df = dfs_in_result[0][1]
+                        # 区块名重复检测：同名区块后出现会覆盖先出现，给出警告提示用结果Sheet名引用
+                        if block_name in block_results:
+                            print(f"    [警告] 区块名 '{block_name}' 重复，任务{seq}覆盖了前面的同名区块")
+                            print(f"           当前结果Sheet: {sheet_name}，后续若需分别引用请用 {{结果Sheet名}}")
                         block_results[block_name] = merged_df
                         # 同时用结果Sheet名作为别名存入，使后续任务既可用 {区块名}
                         # 也可用 {结果Sheet名} 引用本任务输出（区块名与结果Sheet不同时两者都生效）
