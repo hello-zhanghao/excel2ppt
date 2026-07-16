@@ -1835,23 +1835,25 @@ def generate_html_report(
         }}
         return [
           {{
-            type: 'category',
-            data: parentData,
-            axisLabel: {{ interval: 0, color: axisColor, margin: 28, fontSize: 12, fontWeight: 'bold' }},
-            axisTick: {{
-              alignWithLabel: false,
-              length: 28,
-              interval: function(index) {{ return parentData[index] !== ''; }}
-            }},
-            axisLine: {{ lineStyle: {{ color: axisColor }} }}
-          }},
-          {{
+            // 第一级（靠近图表）：子分类，每个都显示，对齐数据点
             type: 'category',
             data: childCats,
             axisLabel: {{ interval: 0, color: axisColor }},
             axisTick: {{ alignWithLabel: true }},
             axisLine: {{ lineStyle: {{ color: axisColor }} }},
             splitLine: {{ show: false }}
+          }},
+          {{
+            // 第二级（下方）：父分组，组首显示名称，长刻度线形成分组带
+            type: 'category',
+            data: parentData,
+            axisLabel: {{ interval: 0, color: axisColor, margin: 14, fontSize: 12, fontWeight: 'bold' }},
+            axisTick: {{
+              alignWithLabel: false,
+              length: 28,
+              interval: function(index) {{ return parentData[index] !== ''; }}
+            }},
+            axisLine: {{ lineStyle: {{ color: axisColor }} }}
           }}
         ];
       }}
@@ -1983,7 +1985,7 @@ def generate_html_report(
       var c = palette[i % palette.length];
       var item = {{
         name: activeSeries[i].name, type: 'bar', data: activeSeries[i].data,
-        barWidth: '50%', itemStyle: {{color: barGradient(c), borderRadius: [6, 6, 0, 0]}},
+        itemStyle: {{color: barGradient(c), borderRadius: [6, 6, 0, 0]}},
         label: {{show: true, position: 'top', fontSize: 11, color: '#555', formatter: function(p){{ return formatNumber(p.value, isPctName(p.seriesName)); }}}},
       }};
       if (stackKey) item.stack = stackKey;
