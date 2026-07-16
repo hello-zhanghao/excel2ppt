@@ -446,30 +446,27 @@ def _load_joined_dataframe(config_dir, data_source, sheet_name, block_results=No
 
     candidate_files = _collect_candidate_xlsx(config_dir)
 
-    first_file, first_sheet = _resolve_join_table(join_parts[0]["left"], config_dir, candidate_files)
-    if first_file is None:
-        return None
-    if first_sheet is None:
-        first_sheet = join_parts[0].get("left_sheet") or sheet_name
+    def _resolve_table_source(table_name, config_dir, candidate_files, block_results):
+        df = _resolve_block_reference(table_name, block_results)
+        if df is not None:
+            return df, None
+        file_path, sheet = _resolve_join_table(table_name, config_dir, candidate_files)
+        if file_path is not None:
+            use_sheet = sheet
+            if use_sheet is None:
+                use_sheet = "Sheet1"
+            df = read_data_file(file_path, use_sheet)
+            return df, use_sheet
+        return None, None
 
-    df = read_data_file(first_file, first_sheet)
+    df, left_sheet = _resolve_table_source(join_parts[0]["left"], config_dir, candidate_files, block_results)
+    if df is None:
+        return None
 
     for jp in join_parts:
-        right_file, right_sheet = _resolve_join_table(jp["right"], config_dir, candidate_files)
-        if right_file is None:
-            right_file = first_file
-            right_sheet = jp["right"]
-            # 移除扩展名
-            for ext in (".xlsx", ".csv"):
-                if right_sheet.lower().endswith(ext):
-                    right_sheet = right_sheet[:-len(ext)]
-                    break
-            if not _sheet_exists(right_file, right_sheet):
-                continue
-        if right_sheet is None:
-            right_sheet = jp.get("right_sheet")
-
-        df_right = read_data_file(right_file, right_sheet)
+        df_right, right_sheet = _resolve_table_source(jp["right"], config_dir, candidate_files, block_results)
+        if df_right is None:
+            continue
 
         left_on = jp["left_key"]
         right_on = jp["right_key"]
