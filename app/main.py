@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.51.1"
+__VERSION__ = "2.52.0"
 __UPDATE_DATE__ = "2026-07-17"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -452,6 +452,46 @@ def _run_html_from_pivot(pivot_path, output_path=None, tasks=None):
     return html_path
 
 
+def _write_join_intermediate(output_path, join_intermediate):
+    """把 JOIN 中间表写入独立 Excel 文件，方便检查多表 JOIN 后的数据是否正确。
+
+    :param output_path: 主输出文件路径，JOIN 中间表文件名基于此推导
+    :param join_intermediate: {sheet名: DataFrame}，每个 JOIN 任务一个条目
+    :return: JOIN 中间表文件路径，失败返回 None
+    """
+    import openpyxl
+    import pandas as pd
+    from src.excel_writer import _safe_sheet_name, _auto_fit_columns
+
+    dirname = os.path.dirname(output_path)
+    basename = os.path.basename(output_path)
+    if "." in basename:
+        stem, ext = basename.rsplit(".", 1)
+    else:
+        stem, ext = basename, "xlsx"
+    join_path = os.path.join(dirname, f"{stem}_JOIN中间表.{ext}")
+
+    try:
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        for sheet_name, df in join_intermediate.items():
+            safe_name = _safe_sheet_name(str(sheet_name))
+            ws = wb.create_sheet(safe_name)
+            # 写表头
+            ws.append(list(df.columns))
+            # 写数据行
+            for _, row in df.iterrows():
+                ws.append([row[c] if not pd.isna(row[c]) else None for c in df.columns])
+            # 冻结首行 + 自动列宽
+            ws.freeze_panes = "A2"
+            _auto_fit_columns(ws)
+        wb.save(join_path)
+        return join_path
+    except Exception as e:
+        print(f"    [警告] JOIN 中间表写入失败: {e}")
+        return None
+
+
 def _merge_same_block_results(prev_df, new_df, block_name, seq):
     """同名区块结果横向合并（按行维度列对齐）。
 
@@ -535,6 +575,7 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
     skipped = 0
     scalar_context: dict = {}
     block_results: dict = {}  # {区块名: DataFrame}，供后续任务的值映射占位符引用
+    join_intermediate: dict = {}  # {sheet名: DataFrame}，JOIN 中间表单独收集，写入独立 Excel 供检查
 
     for task in tasks:
         seq = task.get("序号", "?")
@@ -554,6 +595,17 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
                 errors.append({"序号": seq, "错误": error})
                 results.append(None)
             else:
+                # 剥离 JOIN 中间表：单独收集到 join_intermediate，不混入正常结果
+                # 修复"JOIN 任务执行两次"问题：原逻辑遍历 result.items() 会把 _JOIN中间表_ 当正常结果打印和写入
+                if isinstance(result, dict):
+                    join_keys_to_pop = [k for k in result.keys() if str(k).startswith("_JOIN中间表_")]
+                    for jk in join_keys_to_pop:
+                        join_df = result.pop(jk)
+                        # 提取原始 sheet 名（去掉 _JOIN中间表_ 前缀）
+                        orig_sheet = str(jk).replace("_JOIN中间表_", "", 1)
+                        join_intermediate[orig_sheet] = join_df
+                        print(f"    [JOIN] [任务{seq}] 中间表已收集: {orig_sheet} -> {join_df.shape[0]}行 x {join_df.shape[1]}列")
+
                 if isinstance(result, dict):
                     for key, df in result.items():
                         if hasattr(df, "shape"):
@@ -571,7 +623,7 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
                 # 区块名优先用 task 的"区块名"，否则用"结果Sheet"
                 block_name = task.get("区块名", "") or sheet_name
                 if isinstance(result, dict):
-                    # 收集所有 DataFrame 类型的结果
+                    # 收集所有 DataFrame 类型的结果（result 已剥离 _JOIN中间表_，无需再过滤）
                     dfs_in_result = [(key, df) for key, df in result.items() if hasattr(df, "shape")]
                     if dfs_in_result:
                         if len(dfs_in_result) == 1:
@@ -580,15 +632,10 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
                         else:
                             # 多结果（多值字段交叉透视等场景）：横向合并所有 DataFrame
                             # 保证后续 {区块名} 引用能看到所有值字段的列
-                            # 跳过 _JOIN中间表_ 等内部辅助 key
-                            real_dfs = [df for key, df in dfs_in_result
-                                        if not str(key).startswith("_JOIN中间表_")]
-                            if len(real_dfs) == 1:
-                                merged_df = real_dfs[0]
-                            elif len(real_dfs) > 1:
+                            if len(dfs_in_result) > 1:
                                 import pandas as _pd
                                 # 按行维度列对齐横向合并，相同列名用后缀区分
-                                merged_df = _pd.concat(real_dfs, axis=1)
+                                merged_df = _pd.concat([df for _, df in dfs_in_result], axis=1)
                                 # 去除合并后可能重复的行维度列（取第一次出现的）
                                 merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()]
                             else:
@@ -629,6 +676,13 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
     print(f"[Pivot/3] 输出结果: {output_path}")
     valid_tasks = [t for t, r in zip(tasks, results) if r is not None]
     write_results(valid_tasks, valid_results, errors, output_path)
+
+    # JOIN 中间表单独写入 Excel，方便检查多表 JOIN 后的数据是否正确
+    # 文件名：{输出文件stem}_JOIN中间表.xlsx，每个 JOIN 任务一个 sheet
+    if join_intermediate:
+        join_output_path = _write_join_intermediate(output_path, join_intermediate)
+        if join_output_path:
+            print(f"   JOIN 中间表已保存至: {join_output_path}（共 {len(join_intermediate)} 个 JOIN 任务）")
 
     print(f"\n[OK] 完成！分析结果已保存至: {output_path}")
     print(f"   共 {len(tasks)} 个任务: {len(valid_tasks)} 个成功" + (f", {skipped} 个跳过" if skipped else "") + (f", {len(errors)} 个失败" if errors else ""))

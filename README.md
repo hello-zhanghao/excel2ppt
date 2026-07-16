@@ -244,6 +244,43 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.52.0 (2026-07-17)
+
+**🔧 修复 JOIN 任务"执行两次"问题 + JOIN 中间表单独输出 Excel**
+
+**问题现象**：多表 JOIN 的任务每个都打印两次 `[OK]`，结果 Excel 中每个 JOIN 任务的 sheet 出现两个"任务X"标题块——第一个是正常透视结果，第二个是 JOIN 后的原始 df（中间表）。用户反馈："多表join的任务发现会执行两次"。
+
+**根因**：`run_analysis` 返回的 result dict 包含 `_JOIN中间表_{结果Sheet}` key（JOIN 后的原始 df），main.py 遍历 `result.items()` 时把它当正常结果处理，导致：
+1. 打印两次 `[OK]`（正常结果 + JOIN 中间表）
+2. excel_writer 把 JOIN 中间表当普通区块写入结果 Excel
+3. HTML 报告也多出 JOIN 中间表区块
+
+**修复**：
+
+| 改动 | 说明 |
+|------|------|
+| **剥离 JOIN 中间表** | main.py 从 result 中 pop 出 `_JOIN中间表_` key，单独收集到 `join_intermediate` dict，不混入正常结果 |
+| **不打印/不写入结果** | JOIN 中间表不再打印 `[OK]`，不再传给 excel_writer 和 html_builder |
+| **单独输出 Excel** | 新增 `_write_join_intermediate` 函数，把 JOIN 中间表写入 `{输出文件stem}_JOIN中间表.xlsx`，每个 JOIN 任务一个 sheet，方便检查 JOIN 是否正确 |
+| **日志区分** | JOIN 中间表用 `[JOIN]` 标签打印，与正常 `[OK]` 区分 |
+
+**输出文件**：
+- `分析结果.xlsx` — 正常透视结果（不含 JOIN 中间表）
+- `分析结果_JOIN中间表.xlsx` — JOIN 后的原始 df（每个 JOIN 任务一个 sheet，含所有 JOIN 字段）
+
+**示例输出**：
+```
+[JOIN] [任务1] 中间表已收集: 城市等级x频段_用户数 -> 14行 x 10列
+[OK] [任务1] 城市等级x频段_用户数 -> 3行 x 7列
+...
+JOIN 中间表已保存至: cases/05_多字段JOIN\结果_JOIN中间表.xlsx（共 4 个 JOIN 任务）
+```
+
+**验证结果**：
+- 05_多字段JOIN 用例 5 任务零回归，4 个 JOIN 中间表正确输出到独立 Excel
+- 防护用例 32 任务零回归，HTML 报告区块数从 29 变 28（少 1 个 JOIN 中间表区块）
+- 级联透视用例 6 任务零回归，HTML 报告区块数从 7 变 6（少 1 个 JOIN 中间表区块）
+
 ### v2.51.1 (2026-07-17)
 
 **🔧 修复 {结果Sheet名.区块名} 组合语法返回原始结果而非合并后结果**
