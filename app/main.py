@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.51.0"
+__VERSION__ = "2.51.1"
 __UPDATE_DATE__ = "2026-07-17"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -464,6 +464,7 @@ def _merge_same_block_results(prev_df, new_df, block_name, seq):
     3. 无公共列 → 退化为 concat(axis=0) 纵向堆叠（行变多），并打印警告
     """
     import pandas as pd
+    import traceback
     try:
         prev_cols = list(prev_df.columns)
         new_cols = list(new_df.columns)
@@ -474,17 +475,21 @@ def _merge_same_block_results(prev_df, new_df, block_name, seq):
             # 去除 merge 可能产生的重复列（非公共列同名时 merge 会加 _x/_y 后缀）
             merged = merged.loc[:, ~merged.columns.duplicated()]
             print(f"    [信息] 区块名 '{block_name}' 同名任务横向合并（任务{seq}）")
-            print(f"           公并行维度列: {common_cols}，合并后列数: {len(merged.columns)}")
+            print(f"           公共列: {common_cols}，合并后列数: {len(merged.columns)}，行数: {len(merged)}")
             return merged
         else:
             # 无公共列，纵向堆叠
             merged = pd.concat([prev_df, new_df], axis=0, ignore_index=True)
-            print(f"    [警告] 区块名 '{block_name}' 同名任务无公共行维度列，纵向堆叠（任务{seq}）")
+            print(f"    [警告] 区块名 '{block_name}' 同名任务无公共列，纵向堆叠（任务{seq}）")
             print(f"           前序列: {prev_cols}，当前列: {new_cols}")
             print(f"           建议改用 {{结果Sheet名.区块名}} 分别精确引用")
             return merged
     except Exception as e:
-        print(f"    [警告] 区块名 '{block_name}' 同名任务合并失败({e})，回退为覆盖")
+        print(f"    [错误] 区块名 '{block_name}' 同名任务合并失败（任务{seq}），回退为覆盖")
+        print(f"           异常: {type(e).__name__}: {e}")
+        print(f"           前序列: {list(prev_df.columns) if hasattr(prev_df, 'columns') else type(prev_df)}")
+        print(f"           当前列: {list(new_df.columns) if hasattr(new_df, 'columns') else type(new_df)}")
+        traceback.print_exc()
         return new_df
 
 

@@ -217,7 +217,12 @@ def read_pivot_config(config_path, sheet_name=None):
         task["值字段"] = str(item.get("值字段", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值字段") else ""
         task["聚合方式"] = str(item.get("聚合方式", "sum")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("聚合方式") else "sum"
         task["结果Sheet"] = str(item.get("结果Sheet", "")).strip() if item.get("结果Sheet") else f"结果{task.get('序号','')}"
-        task["区块名"] = str(item.get("区块名", item.get("备注", ""))).strip() if (item.get("区块名") or item.get("备注")) else ""
+        # 区块名仅取"区块名"列的值，不 fallback 到"备注"列
+        # 原因：1) item.get("区块名", default) 当值为 None 时返回 None 而非 default，str(None)="None" 会误判为同名区块
+        #       2) "备注"列用途是显示标题（见 guide.html），不是引用 key；fallback 会污染 block_results
+        # 区块名为空时返回空字符串，由 main.py 用 sheet_name 作为 block_name
+        _block_name_raw = item.get("区块名")
+        task["区块名"] = str(_block_name_raw).strip() if (_block_name_raw is not None and str(_block_name_raw).strip()) else ""
         task["行映射"] = str(item.get("行映射", "")).strip() if item.get("行映射") else (str(item.get("行维度映射", "")).strip() if item.get("行维度映射") else str(item.get("映射表", "")).strip() if item.get("映射表") else "")
         task["列映射"] = str(item.get("列映射", "")).strip() if item.get("列映射") else (str(item.get("列维度映射", "")).strip() if item.get("列维度映射") else "")
         task["值映射"] = str(item.get("值映射", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值映射") else (str(item.get("值字段映射", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值字段映射") else "")
@@ -290,17 +295,35 @@ def _resolve_block_reference(data_source, block_results):
     # {结果Sheet名.区块名} 组合精确匹配（区块名不唯一时使用）
     # 格式：先结果Sheet名，后区块名，用 "." 分隔
     # 注意：结果Sheet名和区块名本身不应包含 "."，若包含会导致解析歧义
+    #
+    # v2.51.1 修复：组合语法返回合并后结果（block_results[block_name]），而非单个任务原始结果。
+    # 原因：v2.51.0 同名区块改为横向合并后，{区块名} 返回合并后结果（包含所有同名任务列），
+    # 但 {结果Sheet名.区块名} 仍返回组合 key 的原始结果（只有该任务自己的列），导致
+    # 用户用组合语法引用时"可用列只有最后一个任务"。现在两种语法行为一致，都返回合并后结果。
+    # 组合 key 仅用于验证该 sheet+block 任务存在。
     if "." in inner:
         parts = inner.split(".", 1)
         sheet_name_part = parts[0].strip()
         block_name_part = parts[1].strip()
-        # 在 block_results 中查找组合 key (区块名, 结果Sheet名)
+        # 在 block_results 中查找组合 key (区块名, 结果Sheet名)，确认该任务存在
         # 注意 block_results 的 tuple key 顺序是 (区块名, 结果Sheet名)
-        for k, df in block_results.items():
+        task_exists = False
+        for k in block_results.keys():
             if isinstance(k, tuple) and len(k) == 2:
                 k_block, k_sheet = k
                 if str(k_sheet) == sheet_name_part and str(k_block) == block_name_part:
-                    return df.copy()
+                    task_exists = True
+                    break
+        if task_exists:
+            # 返回合并后结果（与 {区块名} 行为一致）
+            if block_name_part in block_results:
+                return block_results[block_name_part].copy()
+            # block_name 未合并（只出现过一次），回退到组合 key 原始结果
+            for k, df in block_results.items():
+                if isinstance(k, tuple) and len(k) == 2:
+                    k_block, k_sheet = k
+                    if str(k_sheet) == sheet_name_part and str(k_block) == block_name_part:
+                        return df.copy()
         # 组合 key 未命中
         return None
 
