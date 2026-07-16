@@ -878,7 +878,7 @@ def validate_pivot_config(tasks, config_dir):
         _check_forbidden_chars(行维度_str, "行维度", seq)
         _check_forbidden_chars(列维度_str, "列维度", seq)
 
-        if not 行维度_str and not 列维度_str:
+        if not 行维度_str and not 列维度_str and not is_detail_mode:
             results.append({
                 "task_seq": seq,
                 "level": "warning",
@@ -887,22 +887,24 @@ def validate_pivot_config(tasks, config_dir):
             })
         
         # 2. 检查聚合方式（用 _split_agg_funcs 拆分，保护 | 后参数内的逗号）
-        agg_funcs = _split_agg_funcs(聚合方式_str)
-        invalid_aggs = []
-        for a in agg_funcs:
-            a_no_fmt, _ = _parse_agg_format(a)  # 先剥离 |数字格式
-            a_key, _ = _parse_join_sep(a_no_fmt)
-            mapped = AGG_MAP.get(a_key, a_key)
-            valid_aggs = {"sum", "mean", "count", "max", "min", "nunique", "pct", "count_pct", "join"}
-            if mapped not in valid_aggs:
-                invalid_aggs.append(a)
-        if invalid_aggs:
-            results.append({
-                "task_seq": seq,
-                "level": "error",
-                "message": f"不支持的聚合方式: {invalid_aggs}",
-                "column": "聚合方式"
-            })
+        # 明细模式跳过聚合方式校验：聚合方式为 明细/raw/passthrough 等时不参与合法聚合函数检查
+        if not is_detail_mode:
+            agg_funcs = _split_agg_funcs(聚合方式_str)
+            invalid_aggs = []
+            for a in agg_funcs:
+                a_no_fmt, _ = _parse_agg_format(a)  # 先剥离 |数字格式
+                a_key, _ = _parse_join_sep(a_no_fmt)
+                mapped = AGG_MAP.get(a_key, a_key)
+                valid_aggs = {"sum", "mean", "count", "max", "min", "nunique", "pct", "count_pct", "join"}
+                if mapped not in valid_aggs:
+                    invalid_aggs.append(a)
+            if invalid_aggs:
+                results.append({
+                    "task_seq": seq,
+                    "level": "error",
+                    "message": f"不支持的聚合方式: {invalid_aggs}",
+                    "column": "聚合方式"
+                })
         
         # 3. 检查数据源文件是否存在
         if not data_source:

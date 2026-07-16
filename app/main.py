@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.53.0"
+__VERSION__ = "2.53.1"
 __UPDATE_DATE__ = "2026-07-17"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -608,15 +608,23 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
                         join_intermediate[f"任务{seq}_{orig_sheet}"] = join_df
                         print(f"    [JOIN] [任务{seq}] 中间表已收集: {orig_sheet} -> {join_df.shape[0]}行 x {join_df.shape[1]}列")
 
+                # 明细模式：结果仅作中间数据供后续任务引用，不写入主结果 Excel
+                # 适用场景：原表 JOIN 前序拼接结果等"中间步骤"，不应污染最终输出
+                _agg_check = str(task.get("聚合方式", "sum")).strip().lower()
+                _is_detail_mode = _agg_check in ("明细", "raw", "passthrough", "detail", "原样", "不聚合")
+
                 if isinstance(result, dict):
                     for key, df in result.items():
                         if hasattr(df, "shape"):
-                            print(f"    [OK] [任务{seq}] {sheet_name} -> {df.shape[0]}行 x {df.shape[1]}列")
+                            tag = "[明细]" if _is_detail_mode else "[OK]"
+                            print(f"    {tag} [任务{seq}] {sheet_name} -> {df.shape[0]}行 x {df.shape[1]}列"
+                                  + ("（仅中间数据，不写入主Excel）" if _is_detail_mode else ""))
                         else:
                             print(f"    [OK] [任务{seq}] {sheet_name} (标量)")
                 else:
                     print(f"    [OK] [任务{seq}] {sheet_name}")
-                results.append(result)
+                # 明细模式：不 append 到 results（不写入主 Excel），但 block_results 仍存入供后续引用
+                results.append(None if _is_detail_mode else result)
                 # 收集无行维度任务产生的标量，供后续任务公式引用
                 task_scalars = collect_task_scalars(result)
                 if task_scalars:
