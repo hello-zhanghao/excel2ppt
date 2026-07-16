@@ -1228,16 +1228,25 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         suggestions = []
         for mc in missing_cols:
             mc_str = str(mc)
+            # 1. 前缀+后缀匹配（聚合后缀场景）
             candidates = [str(c) for c in available
                           if str(c).startswith(mc_str + "_") or str(c) == mc_str]
             if candidates and mc_str not in candidates:
                 suggestions.append(f"'{mc_str}' → 可能是 {candidates[:3]}")
+            else:
+                # 2. 模糊包含匹配（值映射重命名场景：原字段名"销售额" → 值映射名"总销售额"）
+                fuzzy = [str(c) for c in available if mc_str in str(c) and str(c) != mc_str]
+                if fuzzy:
+                    suggestions.append(f"'{mc_str}' → 可能是 {fuzzy[:3]}（前序任务可能用值映射重命名了列）")
         hint_parts = []
         if suggestions:
             hint_parts.append("；".join(suggestions))
         # 提示是否引用了交叉透视结果（列被展开）
         if any("_" in str(c) for c in missing_cols):
             hint_parts.append("若引用前序交叉透视结果，原列维度值可能已被展开为列名（如'地区'→'华东/华北/华南'）")
+        # 区块引用场景的特殊提示
+        if is_block_ref and not suggestions:
+            hint_parts.append("前序任务可能通过「值映射」重命名了列，请检查前序任务的值映射配置，用映射后的列名引用")
         hint = "。提示：" + "；".join(hint_parts) if hint_parts else ""
         return None, f"[任务{序号}] 列不存在: {missing_cols}。可用列: {avail_str}{hint}"
 
