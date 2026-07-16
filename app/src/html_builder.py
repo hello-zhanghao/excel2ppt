@@ -691,16 +691,8 @@ def _generate_geo_chart_options(chart_id: str, data: Dict, chart_type: str) -> s
     metric_names = [headers[mi] for mi in metric_indices] or ["指标"]
     metric_idx_in_value = 2  # value 数组中指标的起始位置
 
-    # 散点大小归一化（用第一个指标列）
-    if metric_indices:
-        m_vals = [p["value"][metric_idx_in_value] for p in points]
-        m_min, m_max = min(m_vals), max(m_vals)
-        if m_max == m_min:
-            sizes = [20] * len(points)
-        else:
-            sizes = [int(10 + (v - m_min) / (m_max - m_min) * 40) for v in m_vals]
-    else:
-        sizes = [20] * len(points)
+    # 固定小点大小（不随指标值变化）
+    dot_size = 8
 
     # tooltip 的 formatter 是 JS 函数，不能放进 json，改用模板字符串拼装整个选项
     tooltip_fn_parts = ['function(p){var s=p.name+"<br/>";var lon=p.value[0],lat=p.value[1];',
@@ -736,10 +728,13 @@ def _generate_geo_chart_options(chart_id: str, data: Dict, chart_type: str) -> s
             "type": series_type,
             "coordinateSystem": "geo",
             "data": points,
-            "symbolSize": sizes,
+            "symbolSize": dot_size,
             "itemStyle": item_style,
-            "label": {"show": True, "formatter": "{b}", "position": "right",
-                      "fontSize": 10, "color": "#182B49"},
+            # 默认隐藏标签，hover 时显示
+            "label": {"show": False, "formatter": "{b}", "position": "right",
+                      "fontSize": 11, "color": "#182B49",
+                      "backgroundColor": "rgba(255,255,255,0.85)", "padding": [2, 4], "borderRadius": 3},
+            "emphasis": {"label": {"show": True}},
             **extra_series,
         }],
     }
@@ -1617,6 +1612,7 @@ def generate_html_report(
     // 过滤+收集数据点
     var points = [];
     var metricVals = [];
+    var metricRawVals = [];  // 原始字符串值，用于离散色判断
     for (var r = 0; r < d.rows.length; r++) {{
       var row = d.rows[r];
       var lat = parseFloat(row[d.latIdx]);
@@ -1635,8 +1631,10 @@ def generate_html_report(
         values.push(v);
       }}
       points.push({{name: name, value: values}});
-      var mv = metricIdx >= 0 ? (parseFloat(row[metricIdx]) || 0) : 0;
-      metricVals.push(mv);
+      var rawVal = metricIdx >= 0 ? String(row[metricIdx] || '') : '';
+      var numVal = parseFloat(rawVal);
+      metricVals.push(isNaN(numVal) ? 0 : numVal);
+      metricRawVals.push(rawVal);
     }}
 
     if (points.length === 0) {{
@@ -1665,14 +1663,8 @@ def generate_html_report(
     if (metricPos < 0) metricPos = 0;
     var metricValuePos = metricPos + 2;  // +2 因为前两位是 lon, lat
 
-    // 散点大小归一化
-    var mMin = Math.min.apply(null, metricVals);
-    var mMax = Math.max.apply(null, metricVals);
-    var sizes = [];
-    for (var i = 0; i < metricVals.length; i++) {{
-      if (mMax === mMin) sizes.push(20);
-      else sizes.push(Math.round(10 + (metricVals[i] - mMin) / (mMax - mMin) * 40));
-    }}
+    // 固定小点大小（不随指标值变化）
+    var dotSize = 8;
 
     // tooltip formatter 稍后以真实函数注入（避免 eval）
     var metricHeaders = d.metricIndices.map(function(mi) {{ return d.headers[mi]; }});
@@ -1682,11 +1674,65 @@ def generate_html_report(
     var _areaColor = isDarkTheme() ? '#1f2a4a' : '#F2F0EB';
     var _areaBorder = isDarkTheme() ? '#3a4a6a' : '#999';
     var _emphArea = isDarkTheme() ? '#2a3a5a' : '#DCE6F0';
-    var itemStyle = chartType === 'map' ?
-      {{color: '#C8102E', opacity: 0.85, borderColor: _labelColor, borderWidth: 0.5}} :
-      {{color: '#ED7D31', shadowBlur: 10, shadowColor: 'rgba(237,125,49,0.5)'}};
+
+    // 判断当前指标列是否为数值类型（用于决定染色方式：渐变 vs 离散）
+    var isNumericMetric = metricIdx >= 0 && metricRawVals.length > 0
+      && metricRawVals.every(function(v) {{ return v !== '' && !isNaN(parseFloat(v)); }});
+
+    // 染色方案构建
+    var visualMapCfg = null;
+    var pointsWithColor = points;
+    var colorPalette = ['#C8102E', '#182B49', '#5B9BD5', '#ED7D31', '#70AD47', '#A5A5A5', '#FFC000', '#4472C4'];
+
+    if (metricIdx >= 0) {{
+      if (isNumericMetric) {{
+        // 数值型指标：使用 visualMap 连续渐变染色
+        var mMin = Math.min.apply(null, metricVals);
+        var mMax = Math.max.apply(null, metricVals);
+        visualMapCfg = {{
+          type: 'continuous', min: mMin, max: mMax,
+          calculable: true, realtime: false,
+          inRange: {{ color: ['#5B9BD5', '#ED7D31', '#C8102E'] }},
+          text: [String(mMax), String(mMin)], textStyle: {{ color: _labelColor, fontSize: 10 }},
+          left: 20, bottom: 40
+        }};
+      }} else {{
+        // 离散型指标：每个类别分配一个颜色，写入 itemStyle.color
+        var categories = [];
+        var colorMap = {{}};
+        for (var i = 0; i < metricRawVals.length; i++) {{
+          var cat = metricRawVals[i];
+          if (!(cat in colorMap)) {{
+            colorMap[cat] = colorPalette[categories.length % colorPalette.length];
+            categories.push(cat);
+          }}
+        }}
+        pointsWithColor = [];
+        for (var i = 0; i < points.length; i++) {{
+          var p = points[i];
+          p.itemStyle = {{ color: colorMap[metricRawVals[i]] }};
+          pointsWithColor.push(p);
+        }}
+        // 离散图例
+        visualMapCfg = {{
+          type: 'piecewise', categories: categories,
+          textStyle: {{ color: _labelColor, fontSize: 10 }},
+          left: 20, bottom: 40,
+          inRange: {{ color: colorPalette }}
+        }};
+      }}
+    }} else {{
+      // 无指标列：统一颜色
+      var _defaultColor = chartType === 'map' ? '#C8102E' : '#ED7D31';
+    }}
+
     var extra = chartType === 'heatmap' ?
       {{showEffectOn: 'render', rippleEffect: {{brushType: 'stroke'}}}} : {{}};
+
+    var _seriesItemStyle = isNumericMetric
+      ? {{opacity: 0.85, borderColor: _labelColor, borderWidth: 0.5}}
+      : (metricIdx >= 0 ? {{opacity: 0.85, borderColor: _labelColor, borderWidth: 0.5}}
+                        : {{color: _defaultColor, opacity: 0.85, borderColor: _labelColor, borderWidth: 0.5}});
 
     var opt = {{
       title: {{text: metricName + ' 分布', left: 'center', textStyle: {{fontSize: 14, color: getChartTextColor()}}}},
@@ -1699,14 +1745,17 @@ def generate_html_report(
       }},
       series: [{{
         name: metricName, type: seriesType, coordinateSystem: 'geo',
-        data: points, symbolSize: sizes, itemStyle: itemStyle,
-        label: {{show: true, formatter: '{{b}}', position: 'right', fontSize: 10, color: _labelColor}},
-      }}].concat([extra])
+        data: pointsWithColor, symbolSize: dotSize, itemStyle: _seriesItemStyle,
+        // 默认隐藏标签，hover 时显示
+        label: {{show: false, formatter: '{{b}}', position: 'right', fontSize: 11, color: _labelColor,
+                 backgroundColor: 'rgba(255,255,255,0.85)', padding: [2, 4], borderRadius: 3}},
+        emphasis: {{label: {{show: true}}}}
+      }}]
     }};
-    // 合并 extra 到 series[0]
+    // 合并 extra 到 series[0]（heatmap 涟漪效果）
     for (var k in extra) {{ opt.series[0][k] = extra[k]; }}
-    // 移除多余的空对象
-    opt.series = [opt.series[0]];
+    // 数值型或离散型指标添加 visualMap
+    if (visualMapCfg) opt.visualMap = visualMapCfg;
     // 直接注入 tooltip formatter 为真实函数（不使用 eval）
     opt.tooltip.formatter = function(p) {{
       var s = p.name + '<br/>';
