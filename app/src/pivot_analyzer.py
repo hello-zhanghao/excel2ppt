@@ -231,7 +231,10 @@ def read_pivot_config(config_path, sheet_name=None):
         task["是否计算"] = str(item.get("是否计算", "是")).strip() if item.get("是否计算") else "是"
         task["过滤条件"] = str(item.get("过滤条件", "")).strip() if item.get("过滤条件") else ""
 
-        if not task["行维度"] and not task["值字段"]:
+        # 明细模式（聚合方式=明细/raw/passthrough 等）允许行维度和值字段都为空（保留全部行）
+        _agg_check = (task["聚合方式"] or "sum").strip().lower()
+        _is_detail = _agg_check in ("明细", "raw", "passthrough", "detail", "原样", "不聚合")
+        if not task["行维度"] and not task["值字段"] and not _is_detail:
             continue
 
         tasks.append(task)
@@ -859,7 +862,10 @@ def validate_pivot_config(tasks, config_dir):
             continue
         
         # 1. 检查必填项
-        if not 值字段_str:
+        # 明细模式（聚合方式=明细/raw/passthrough 等）允许值字段为空
+        _agg_lower_check = (聚合方式_str or "sum").strip().lower()
+        is_detail_mode = _agg_lower_check in ("明细", "raw", "passthrough", "detail", "原样", "不聚合")
+        if not 值字段_str and not is_detail_mode:
             results.append({
                 "task_seq": seq,
                 "level": "error",
@@ -1164,7 +1170,11 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
     聚合方式_str = task.get("聚合方式", "sum")
     sheet_name = task.get("sheet", "Sheet1")
 
-    if not 值字段_str:
+    # 明细模式豁免：聚合方式为 明细/raw/passthrough/detail/原样/不聚合 时允许值字段为空
+    # 适用场景：原表 JOIN 前序拼接结果，跳过聚合直接输出全部列（原表+拼接列并排）
+    _agg_lower_check = (聚合方式_str or "sum").strip().lower()
+    _is_detail_mode = _agg_lower_check in ("明细", "raw", "passthrough", "detail", "原样", "不聚合")
+    if not 值字段_str and not _is_detail_mode:
         return None, f"[任务{序号}] 未指定值字段"
 
     行维度_str = 行维度_str or ""
@@ -1298,6 +1308,20 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
             hint_parts.append("前序任务可能通过「值映射」重命名了列，请检查前序任务的值映射配置，用映射后的列名引用")
         hint = "。提示：" + "；".join(hint_parts) if hint_parts else ""
         return None, f"[任务{序号}] 列不存在: {missing_cols}。可用列: {avail_str}{hint}"
+
+    # 明细模式：聚合方式填 "明细"/"raw"/"passthrough" 时，跳过聚合直接输出 JOIN 后的全部列
+    # 适用场景：原表 JOIN 前序拼接结果，需要保留原表所有行 + 拼接列并排
+    # 行维度用于按维度去重（同组保留第一行），留空则保留全部行
+    聚合方式_lower = 聚合方式_str.strip().lower()
+    if 聚合方式_lower in ("明细", "raw", "passthrough", "detail", "原样", "不聚合"):
+        if 行维度:
+            # 按行维度去重，保留每组第一行的全部列
+            detail_df = df.drop_duplicates(subset=行维度, keep="first").reset_index(drop=True)
+        else:
+            # 无行维度：保留全部行
+            detail_df = df.reset_index(drop=True)
+        block_name = task.get("区块名", "") or task.get("结果Sheet", f"结果{序号}")
+        return {block_name: detail_df}, None
 
     for col in 值字段:
         af_for_col = _get_agg_for_col(col, 聚合函数, 值字段)
