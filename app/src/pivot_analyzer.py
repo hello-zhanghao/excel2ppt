@@ -1186,7 +1186,16 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
 
     if missing_cols:
         available = list(df.columns)
-        return None, f"[任务{序号}] 列不存在: {missing_cols}。可用列: {available}"
+        # 增强报错：显示列总数和完整列名，方便排查（列多时截断显示前10+后5）
+        if len(available) <= 15:
+            avail_str = str(available)
+        else:
+            avail_str = f"[{available[:10]} ... {available[-5:]}] (共{len(available)}列)"
+        # 提示是否引用了交叉透视结果（列被展开）
+        hint = ""
+        if any("_" in str(c) for c in missing_cols):
+            hint = "。提示：若引用前序交叉透视结果，原列维度值可能已被展开为列名（如'地区'→'华东/华北/华南'）"
+        return None, f"[任务{序号}] 列不存在: {missing_cols}。可用列: {avail_str}{hint}"
 
     for col in 值字段:
         af_for_col = _get_agg_for_col(col, 聚合函数, 值字段)

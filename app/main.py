@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.45.0"
+__VERSION__ = "2.46.0"
 __UPDATE_DATE__ = "2026-07-16"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -530,15 +530,33 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
                 # 区块名优先用 task 的"区块名"，否则用"结果Sheet"
                 block_name = task.get("区块名", "") or sheet_name
                 if isinstance(result, dict):
-                    for key, df in result.items():
-                        if hasattr(df, "shape"):
-                            # 同名区块后出现覆盖先出现（与模板填充的 load_pivot_results 一致）
-                            block_results[block_name] = df
-                            # 同时用结果Sheet名作为别名存入，使后续任务既可用 {区块名}
-                            # 也可用 {结果Sheet名} 引用本任务输出（区块名与结果Sheet不同时两者都生效）
-                            if sheet_name and sheet_name != block_name:
-                                block_results[sheet_name] = df
-                            break  # 一个任务只取第一个 DataFrame 作为区块
+                    # 收集所有 DataFrame 类型的结果
+                    dfs_in_result = [(key, df) for key, df in result.items() if hasattr(df, "shape")]
+                    if dfs_in_result:
+                        if len(dfs_in_result) == 1:
+                            # 单结果：直接存入
+                            merged_df = dfs_in_result[0][1]
+                        else:
+                            # 多结果（多值字段交叉透视等场景）：横向合并所有 DataFrame
+                            # 保证后续 {区块名} 引用能看到所有值字段的列
+                            # 跳过 _JOIN中间表_ 等内部辅助 key
+                            real_dfs = [df for key, df in dfs_in_result
+                                        if not str(key).startswith("_JOIN中间表_")]
+                            if len(real_dfs) == 1:
+                                merged_df = real_dfs[0]
+                            elif len(real_dfs) > 1:
+                                import pandas as _pd
+                                # 按行维度列对齐横向合并，相同列名用后缀区分
+                                merged_df = _pd.concat(real_dfs, axis=1)
+                                # 去除合并后可能重复的行维度列（取第一次出现的）
+                                merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()]
+                            else:
+                                merged_df = dfs_in_result[0][1]
+                        block_results[block_name] = merged_df
+                        # 同时用结果Sheet名作为别名存入，使后续任务既可用 {区块名}
+                        # 也可用 {结果Sheet名} 引用本任务输出（区块名与结果Sheet不同时两者都生效）
+                        if sheet_name and sheet_name != block_name:
+                            block_results[sheet_name] = merged_df
         except Exception as e:
             print(f"    [FAIL] [任务{seq}] 异常: {e}")
             errors.append({"序号": seq, "错误": str(e)})
