@@ -223,6 +223,18 @@ def read_pivot_config(config_path, sheet_name=None):
         # 区块名为空时返回空字符串，由 main.py 用 sheet_name 作为 block_name
         _block_name_raw = item.get("区块名")
         task["区块名"] = str(_block_name_raw).strip() if (_block_name_raw is not None and str(_block_name_raw).strip()) else ""
+        # ------------------------------------------------------------------
+        # 映射列正式名（v2.54.0+ 统一）：
+        #   行映射 / 列映射 / 值映射
+        # 以下别名仅为向后兼容而保留，标记 DEPRECATED，新配置请勿使用：
+        #   行映射 ← 行维度映射 / 映射表
+        #   列映射 ← 列维度映射
+        #   值映射 ← 值字段映射
+        # 注意：「映射表」别名有语义损失——原意是同时映射列名和值名（旧=新 语法），
+        #       fallback 到「行映射」后只会进入 _map_fields 路径（仅映射列名），
+        #       不会触发 _parse_old_new_mapping 的 val_map 分支。新配置请直接使用
+        #       「行映射」「列映射」「值映射」三列分别填写。
+        # ------------------------------------------------------------------
         task["行映射"] = str(item.get("行映射", "")).strip() if item.get("行映射") else (str(item.get("行维度映射", "")).strip() if item.get("行维度映射") else str(item.get("映射表", "")).strip() if item.get("映射表") else "")
         task["列映射"] = str(item.get("列映射", "")).strip() if item.get("列映射") else (str(item.get("列维度映射", "")).strip() if item.get("列维度映射") else "")
         task["值映射"] = str(item.get("值映射", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值映射") else (str(item.get("值字段映射", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值字段映射") else "")

@@ -318,7 +318,7 @@ Y轴范围: 基站数</pre>
 
 <h2 id="pivot-config" style="color:var(--accent2);border-bottom-color:var(--accent2);">四、透视分析配置列说明</h2>
 <div class="card">
-<p>Sheet 名 <code>透视分析</code>，标题行首列为 <code>序号</code>，系统自动识别。共 <b>16 列</b>：</p>
+<p>Sheet 名 <code>透视分析</code>，标题行首列为 <code>序号</code>，系统自动识别。共 <b>18 列</b>：</p>
 <table>
 <tr><th style="width:10%">列名</th><th style="width:12%">必填</th><th>说明</th></tr>
 <tr><td><b>序号</b></td><td>&mdash;</td><td>任务序号，相同序号+同结果Sheet可合并</td></tr>
@@ -329,13 +329,15 @@ Y轴范围: 基站数</pre>
 <tr><td><b>值字段</b></td><td>&#x2714;</td><td>逗号分隔，如 <code>基站数,5G用户数</code></td></tr>
 <tr><td><b>聚合方式</b></td><td>&mdash;</td><td>见「聚合方式」</td></tr>
 <tr><td><b>结果Sheet</b></td><td>&mdash;</td><td>输出 Sheet 名，同名合并输出。同 Sheet 内不同行维度的结果会分区块上下排列</td></tr>
-<tr><td><b>行映射</b></td><td>&mdash;</td><td>行维度列显示别名，逗号对应</td></tr>
-<tr><td><b>列映射</b></td><td>&mdash;</td><td>列维度列显示别名</td></tr>
-<tr><td><b>值映射</b></td><td>&mdash;</td><td>值字段显示别名，如 <code>基站数(个),用户数(户)</code></td></tr>
+<tr><td><b>区块名</b></td><td>&mdash;</td><td>级联引用 key，下游任务用 <code>{区块名}</code> 或 <code>{结果Sheet名.区块名}</code> 引用本任务结果。留空时默认取结果Sheet名</td></tr>
+<tr><td><b>行映射</b></td><td>&mdash;</td><td>行维度列显示别名，逗号对应。<span style="color:#888">（v2.54.0+ 正式列名；<code>行维度映射</code>/<code>映射表</code> 为 DEPRECATED 别名）</span></td></tr>
+<tr><td><b>列映射</b></td><td>&mdash;</td><td>列维度列显示别名。<span style="color:#888">（v2.54.0+ 正式列名；<code>列维度映射</code> 为 DEPRECATED 别名）</span></td></tr>
+<tr><td><b>值映射</b></td><td>&mdash;</td><td>值字段显示别名，如 <code>基站数(个),用户数(户)</code>。<span style="color:#888">（v2.54.0+ 正式列名；<code>值字段映射</code> 为 DEPRECATED 别名）</span></td></tr>
 <tr><td><b>分箱</b></td><td>&mdash;</td><td>见「分箱」</td></tr>
 <tr><td><b>值计算</b></td><td>&mdash;</td><td>见「值后处理」</td></tr>
 <tr><td><b>是否计算</b></td><td>&mdash;</td><td>控制该行是否执行计算。填 <code>否</code>/<code>0</code>/<code>跳过</code>/<code>skip</code> 则跳过；填 <code>是</code> 或留空则计算（默认）</td></tr>
 <tr><td><b>过滤条件</b></td><td>&mdash;</td><td>数据过滤表达式，见「过滤条件」</td></tr>
+<tr><td><b>导出列</b></td><td>&mdash;</td><td>JOIN 后裁剪保留的列，逗号分隔。详见「导出列」章节</td></tr>
 <tr><td><b>备注</b></td><td>&mdash;</td><td>任务说明文字。填写后会作为输出 Sheet 中该结果区块的<b>标题行</b>显示（深蓝底白字）；留空则显示「任务{序号}」</td></tr>
 </table>
 <div class="callout callout-info">
