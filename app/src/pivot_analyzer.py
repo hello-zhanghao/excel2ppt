@@ -187,45 +187,74 @@ def _join_unique(series, sep: str = _JOIN_DEFAULT_SEP) -> str:
 
 
 def _resolve_export_cols_from_sheet(cols_str, config_path):
-    """解析 ``@Sheet名@列标识`` 语法，从配置文件另一个 sheet 读取列清单。
+    """解析 ``Sheet名.列标识`` 语法，从配置文件另一个 sheet 读取列清单。
 
     场景：导出列很多时，在配置 Excel 里加一个 sheet（如"列清单"），
-    A 列逐行写列名，导出列单元格填 ``@列清单@A`` 即可引用，避免手写一长串。
+    A 列逐行写列名，导出列单元格填 ``列清单.A`` 即可引用，避免手写一长串。
 
-    语法：
-      - ``@Sheet名@A``       → 取该 sheet 的 A 列所有非空值（跳过表头）
-      - ``@Sheet名@列标题``   → 取该 sheet 中第一行匹配"列标题"的列
-      - ``@文件名@Sheet名@列标识`` → 从外部 Excel 文件取（相对配置文件目录）
+    语法（用 ``.`` 分隔，无前缀符号）：
+      - ``Sheet名.A``       → 取该 sheet 的 A 列所有非空值（跳过表头）
+      - ``Sheet名.列标题``   → 取该 sheet 中第一行匹配"列标题"的列
+      - ``文件名.Sheet名.列标识`` → 从外部 Excel 文件取（相对配置文件目录）
+
+    冲突规避：仅当第一个点前的部分是配置文件中真实存在的 sheet 名（或外部文件名）
+    时才解析为引用，否则按普通列名原样返回（避免误判含点的列名）。
 
     列清单去重去空、保留首次出现顺序。
 
-    :return: 解析成功返回逗号分隔的列名串；非 @ 语法或解析失败原样返回。
+    :return: 解析成功返回逗号分隔的列名串；非引用语法或解析失败原样返回。
     """
-    if not cols_str or not str(cols_str).lstrip().startswith("@"):
+    if not cols_str or "." not in str(cols_str):
         return cols_str
-    s = str(cols_str).strip().lstrip("@")
-    parts = s.split("@")
-    # 三段：@文件@Sheet@列标识；两段：@Sheet@列标识（配置文件自身）
-    if len(parts) == 3:
-        file_name, sheet_name_ref, col_ref = parts
-        file_path = os.path.join(os.path.dirname(config_path), file_name.strip())
-    elif len(parts) == 2:
-        file_path = config_path
-        sheet_name_ref, col_ref = parts
-    else:
+    s = str(cols_str).strip()
+    parts = s.split(".")
+    if len(parts) < 2:
         return cols_str
 
-    sheet_name_ref = sheet_name_ref.strip()
-    col_ref = col_ref.strip()
+    # 先判断第一段是否为配置文件内的 sheet 名（两段语法）
+    sheet_name_ref = parts[0].strip()
+    col_ref = ".".join(parts[1:]).strip()  # 列标识可能含点？保守起见取剩余部分
+    file_path = config_path
+
+    # 检查配置文件里是否有该 sheet
+    try:
+        wb_check = openpyxl.load_workbook(config_path, data_only=True, read_only=True)
+        config_sheet_names = set(wb_check.sheetnames)
+        wb_check.close()
+    except Exception:
+        return cols_str
+
+    if sheet_name_ref not in config_sheet_names:
+        # 尝试三段语法：文件名.Sheet名.列标识
+        if len(parts) >= 3:
+            file_name = parts[0].strip()
+            sheet_name_ref = parts[1].strip()
+            col_ref = ".".join(parts[2:]).strip()
+            ext_file = os.path.join(os.path.dirname(config_path), file_name)
+            if not os.path.exists(ext_file):
+                return cols_str
+            try:
+                wb_check = openpyxl.load_workbook(ext_file, data_only=True, read_only=True)
+                if sheet_name_ref not in wb_check.sheetnames:
+                    wb_check.close()
+                    return cols_str
+                wb_check.close()
+                file_path = ext_file
+            except Exception:
+                return cols_str
+        else:
+            # 两段且第一段不是 sheet 名，按普通列名原样返回
+            return cols_str
+
     if not sheet_name_ref or not col_ref:
         return cols_str
 
     try:
-        from openpyxl.utils import get_column_letter, column_index_from_string
+        from openpyxl.utils import column_index_from_string
         wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
         if sheet_name_ref not in wb.sheetnames:
             wb.close()
-            return cols_str  # 找不到 sheet，原样返回让下游报错
+            return cols_str
         ws = wb[sheet_name_ref]
         rows = list(ws.iter_rows(values_only=True))
         wb.close()
