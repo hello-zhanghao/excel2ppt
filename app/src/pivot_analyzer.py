@@ -230,6 +230,7 @@ def read_pivot_config(config_path, sheet_name=None):
         task["值计算"] = str(item.get("值计算", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值计算") else ""
         task["是否计算"] = str(item.get("是否计算", "是")).strip() if item.get("是否计算") else "是"
         task["过滤条件"] = str(item.get("过滤条件", "")).strip() if item.get("过滤条件") else ""
+        task["导出列"] = str(item.get("导出列", "")).strip() if item.get("导出列") else ""
 
         # 明细模式（聚合方式=明细/raw/passthrough 等）允许行维度和值字段都为空（保留全部行）
         _agg_check = (task["聚合方式"] or "sum").strip().lower()
@@ -1220,6 +1221,15 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
                 return None, f"[任务{序号}] 过滤后数据为空，过滤条件: {filter_expr}"
         except Exception as e:
             return None, f"[任务{序号}] 过滤条件执行失败: {str(e)}"
+
+    keep_cols = task.get("导出列", "")
+    if keep_cols:
+        keep_list = [c.strip() for c in keep_cols.replace("，", ",").split(",") if c.strip()]
+        if keep_list:
+            missing = [c for c in keep_list if c not in df.columns]
+            if missing:
+                return None, f"[任务{序号}] 导出列不存在于数据中: {missing}"
+            df = df[keep_list]
 
     mapping_str = task.get("映射表", "")
     row_map_str = task.get("行映射", "")

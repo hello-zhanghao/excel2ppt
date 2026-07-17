@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+<title>透视分析报告</title>
+<style>
+  :root {
+    --bg: #f0f2f5;
+    --surface: #ffffff;
+    --surface-2: #f8f9fa;
+    --surface-3: #f5f7fa;
+    --text: #1a1a2e;
+    --text-secondary: #6c757d;
+    --primary: #2E75B6;
+    --primary-dark: #1a4a7a;
+    --primary-light: #e8f0fe;
+    --border: #e9ecef;
+    --shadow: 0 4px 20px rgba(0,0,0,0.06);
+    --shadow-hover: 0 8px 30px rgba(0,0,0,0.1);
+    --radius: 12px;
+    --radius-sm: 8px;
+    --header-grad: linear-gradient(135deg, #2E75B6, #1a4a7a);
+    --accent: #2E75B6;
+    --zebra: #fafbfc;
+    --hover-bg: #e9f5ff;
+    --th-bg: #f8f9fa;
+    --th-color: #495057;
+    --total-bg: #D9E2F3;
+    --dim-bg: #e8f0fe;
+    --dim-color: #1a4a7a;
+    --tooltip-bg: #ffffff;
+    --tooltip-border: #e9ecef;
+    --tooltip-text: #1a1a2e;
+    --backdrop: rgba(255,255,255,0.85);
+  }
+  [data-theme="dark"] {
+    --bg: #1a1a2e;
+    --surface: #16213e;
+    --surface-2: #1f2a4a;
+    --surface-3: #1a2440;
+    --text: #e0e0e0;
+    --text-secondary: #a0a0a0;
+    --primary: #5B9BD5;
+    --primary-dark: #4A8BC2;
+    --primary-light: #1a2a4a;
+    --border: #2a3a5a;
+    --shadow: 0 4px 20px rgba(0,0,0,0.3);
+    --shadow-hover: 0 8px 30px rgba(0,0,0,0.4);
+    --header-grad: linear-gradient(135deg, #16213e, #0f1626);
+    --zebra: #1f2a4a;
+    --hover-bg: #1a2a4a;
+    --th-bg: #1f2a4a;
+    --th-color: #c0c8d8;
+    --total-bg: #243456;
+    --dim-bg: #1a2a4a;
+    --dim-color: #8ab8f0;
+    --tooltip-bg: #16213e;
+    --tooltip-border: #2a3a5a;
+    --tooltip-text: #e0e0e0;
+    --backdrop: rgba(22,33,62,0.85);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.7; overflow-x: hidden; transition: background 0.3s, color 0.3s; }
+  .header { background: var(--header-grad); color: #fff; padding: 22px 16px; text-align: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.15); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .header h1 { font-size: 22px; margin-bottom: 4px; font-weight: 700; letter-spacing: 0.5px; }
+  .header p { font-size: 13px; opacity: 0.85; font-weight: 400; }
+  .nav-bar { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 12px 16px; background: var(--backdrop); border-bottom: 1px solid var(--border); flex-wrap: wrap; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); position: sticky; top: 0; z-index: 99; }
+  .nav-btn { padding: 7px 18px; background: var(--surface-3); border: 1px solid var(--border); border-radius: 999px; font-size: 13px; color: var(--text-secondary); cursor: pointer; transition: all 0.25s; font-weight: 500; }
+  .nav-btn:hover { background: var(--primary); color: #fff; border-color: var(--primary); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+  .nav-btn.theme-toggle { background: var(--primary-light); color: var(--primary); border-color: var(--primary); }
+  .nav-search { padding: 7px 14px; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; color: var(--text); background: var(--surface); min-width: 240px; outline: none; transition: all 0.2s; }
+  .nav-search:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
+  .main-layout { display: flex; width: 100%; }
+  .sidebar { width: 250px; min-width: 250px; padding: 20px 16px; background: var(--surface); position: fixed; left: 0; top: 110px; bottom: 0; overflow-y: auto; z-index: 10; box-shadow: 2px 0 12px rgba(0,0,0,0.06); border-right: 1px solid var(--border); }
+  .sidebar h3 { font-size: 14px; color: var(--primary); margin-bottom: 14px; padding-left: 10px; border-left: 3px solid var(--primary); font-weight: 600; }
+  .sidebar ul { list-style: none; padding-left: 0; }
+  .sidebar li { margin-bottom: 4px; }
+  .sidebar a { text-decoration: none; color: var(--text-secondary); font-size: 13px; transition: all 0.2s; display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: var(--radius-sm); line-height: 1.4; border-left: 3px solid transparent; }
+  .sidebar a:hover { color: var(--primary); background: var(--primary-light); padding-left: 13px; }
+  .toc-num { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 4px; background: var(--primary-light); color: var(--primary); border-radius: 4px; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+  .toc-group { margin-bottom: 2px; }
+  .toc-group-hd { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; color: var(--text); user-select: none; transition: all 0.2s; }
+  .toc-group-hd:hover { color: var(--primary); background: var(--primary-light); }
+  .toc-arrow { font-size: 10px; color: var(--text-secondary); transition: transform 0.2s; margin-left: auto; }
+  .toc-group.open .toc-arrow { transform: rotate(90deg); }
+  .toc-sub { display: none; list-style: none; padding-left: 18px; }
+  .toc-group.open .toc-sub { display: block; }
+  .toc-hd { display: flex; align-items: center; gap: 6px; margin-bottom: 14px; }
+  .toc-hd h3 { margin-bottom: 0; flex: 1; }
+  .toc-toggle-btn { padding: 4px 10px; background: var(--surface-3); border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; }
+  .toc-toggle-btn:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .sidebar a.active { color: var(--primary); background: var(--primary-light); font-weight: 600; border-left-color: var(--primary); }
+  .sidebar a.search-hit { color: #C8102E; font-weight: 600; }
+  .summary-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 16px; }
+  .summary-card { background: var(--accent); color: #fff; padding: 14px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 10px; position: relative; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.12); transition: transform 0.2s; }
+  .summary-card:hover { transform: translateY(-2px); }
+  .summary-card::after { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 50%; background: linear-gradient(180deg, rgba(255,255,255,0.18), transparent); pointer-events: none; }
+  [data-theme="dark"] .summary-card { background: color-mix(in srgb, var(--accent) 38%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); }
+  .summary-card .card-icon { font-size: 24px; z-index: 1; }
+  .summary-card .card-body { flex: 1; min-width: 0; z-index: 1; }
+  .summary-card .card-label { font-size: 11px; opacity: 0.85; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .summary-card .card-value { font-size: 18px; font-weight: bold; }
+  .summary-card .card-trend { font-size: 10px; opacity: 0.75; margin-top: 2px; }
+  .metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; margin-bottom: 24px; }
+  .metric-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; text-align: center; box-shadow: var(--shadow); transition: all 0.25s; }
+  .metric-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-hover); border-color: var(--primary); }
+  .metric-card .metric-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
+  .metric-card .metric-value { font-size: 24px; font-weight: bold; color: var(--primary); }
+  .content-area { max-width: 1280px; width: 100%; padding: 24px; }
+  .content-wrapper { margin-left: 250px; flex: 1; display: flex; justify-content: center; min-width: 0; }
+  .section { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 28px; margin-bottom: 24px; border-left: 4px solid var(--accent); transition: box-shadow 0.3s, transform 0.3s; }
+  .section:hover { box-shadow: var(--shadow-hover); }
+  .section h2 { font-size: 20px; color: var(--text); margin-bottom: 4px; font-weight: 600; }
+  .section .subtitle { font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; font-weight: 400; }
+  .summary-bar { background: var(--surface-3); padding: 12px 16px; border-radius: var(--radius-sm); margin-bottom: 18px; font-size: 13px; color: var(--text-secondary); }
+  .summary-bar span { font-weight: 600; color: var(--primary); }
+  .chart-container { margin-bottom: 24px; }
+  .chart-buttons { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .chart-btn { padding: 7px 16px; background: var(--surface-3); border: 1px solid var(--border); border-radius: 999px; font-size: 12px; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; font-weight: 500; }
+  .chart-btn:hover { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
+  .chart-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+  .chart-toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
+  .chart-tool-btn { padding: 5px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11px; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; }
+  .chart-tool-btn:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .chart-container.fullscreen { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: var(--surface); z-index: 9999; padding: 24px; overflow: auto; }
+  .chart-container.fullscreen .chart-canvas { height: calc(100vh - 140px) !important; }
+  .col-selector { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 8px 12px; margin-bottom: 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; }
+  .col-sel-label { font-weight: 600; color: var(--text-secondary); margin-right: 2px; }
+  .col-cb-item { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--text); user-select: none; }
+  .col-cb-item input { margin: 0; accent-color: var(--primary); }
+  .col-cb-item:hover { color: var(--primary); }
+  .col-sel-toggle { padding: 4px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11px; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; }
+  .col-sel-toggle:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .geo-controls { display: none; flex-wrap: wrap; gap: 12px; align-items: flex-start; padding: 12px 14px; margin-bottom: 12px; background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; }
+  .geo-ctrl-item { display: flex; align-items: center; gap: 6px; }
+  .geo-ctrl-item label { color: var(--text-secondary); font-weight: 600; white-space: nowrap; }
+  .geo-ctrl-item select { padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; max-width: 160px; background: var(--surface); color: var(--text); }
+  .geo-filter-vals { display: flex; flex-wrap: wrap; gap: 6px 12px; max-width: 520px; }
+  .geo-fv-item { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; color: var(--text); }
+  .geo-fv-item input { margin: 0; accent-color: var(--primary); }
+  .chart-canvas { height: 400px; }
+  .table-container { border-top: 1px solid var(--border); padding-top: 18px; }
+  .table-header { font-size: 15px; font-weight: 600; color: var(--primary); margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+  .table-row-count { font-size: 12px; font-weight: normal; color: var(--text-secondary); }
+  .table-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .table-search { padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; min-width: 220px; outline: none; background: var(--surface); color: var(--text); transition: all 0.2s; }
+  .table-search:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
+  .table-tool-btn { padding: 6px 14px; background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; }
+  .table-tool-btn:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .table-wrap { overflow: auto; max-height: 380px; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: var(--th-bg); color: var(--th-color); font-weight: 700; padding: 11px 14px; text-align: center; border-bottom: 2px solid var(--border); position: sticky; top: 0; z-index: 2; cursor: pointer; user-select: none; white-space: nowrap; }
+  th:hover { background: var(--primary-light); color: var(--primary); }
+  th.dim-th { background: var(--dim-bg); color: var(--dim-color); }
+  .sort-arrow { font-size: 10px; color: var(--primary); margin-left: 4px; }
+  tbody tr.hidden { display: none; }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--border); color: var(--text); text-align: center; }
+  td.num-cell { font-variant-numeric: tabular-nums; }
+  td.dim-cell { background: var(--dim-bg); color: var(--dim-color); font-weight: 600; text-align: center; white-space: nowrap; }
+  tbody tr:nth-child(even) { background: var(--zebra); }
+  tbody tr:hover { background: var(--hover-bg); }
+  tbody tr.total-row { background: var(--total-bg); font-weight: bold; }
+  .slide-card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 14px; overflow: hidden; }
+  .slide-num { background: var(--primary); color: #fff; font-size: 12px; padding: 7px 14px; font-weight: 600; }
+  .slide-card img { width: 100%; display: block; cursor: pointer; }
+  .slide-card img.zoomed { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: contain; background: rgba(0,0,0,0.92); z-index: 1000; }
+  .footer { text-align: center; padding: 28px; color: var(--text-secondary); font-size: 12px; }
+  .back-to-top { position: fixed; right: 24px; bottom: 24px; width: 46px; height: 46px; border-radius: 50%; background: var(--primary); color: #fff; border: none; font-size: 22px; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.25); opacity: 0; visibility: hidden; transition: all 0.3s; z-index: 90; }
+  .back-to-top.show { opacity: 1; visibility: visible; }
+  .back-to-top:hover { background: var(--primary-dark); transform: translateY(-2px); }
+  .section.search-hit { outline: 2px solid #C8102E; outline-offset: 2px; }
+  @media (max-width: 768px) {
+    .main-layout { flex-direction: column; }
+    .sidebar { position: static; width: 100%; min-width: 100%; height: auto; box-shadow: none; border-bottom: 1px solid var(--border); top: auto; }
+    .content-wrapper { margin-left: 0; }
+    .content-area { max-width: 100%; padding: 16px; }
+    .summary-cards { grid-template-columns: repeat(2, 1fr); }
+    .chart-canvas { height: 300px; }
+    .section { padding: 20px; }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>透视分析报告</h1>
+  <p>自动生成</p>
+</div>
+<div class="nav-bar">
+  <button class="nav-btn" onclick="scrollToTop()">🏠 回到顶部</button>
+  <button class="nav-btn" onclick="window.print()">🖨 打印报告</button>
+  <button class="nav-btn theme-toggle" id="themeToggleBtn" onclick="toggleTheme()">🌙 暗色模式</button>
+  <input type="text" id="globalSearchInput" class="nav-search" placeholder="🔍 全局搜索区块标题..." oninput="globalSearch(this.value)">
+</div>
+<div class="main-layout">
+  <div class="sidebar">
+    <div class="toc-hd">
+      <h3>报告目录</h3>
+      <button class="toc-toggle-btn" onclick="expandAllToc()">展开全部</button>
+      <button class="toc-toggle-btn" onclick="collapseAllToc()">收起全部</button>
+    </div>
+    <ul><li class="toc-group"><div class="toc-group-hd" onclick="toggleTocGroup(this)"><span class="toc-num">1</span>站点级中间表<span class="toc-arrow">▸</span></div><ul class="toc-sub"><li><a href="#section_0">站点级</a></li></ul></li><li class="toc-group"><div class="toc-group-hd" onclick="toggleTocGroup(this)"><span class="toc-num">2</span>场景类型站点数(导出列版)<span class="toc-arrow">▸</span></div><ul class="toc-sub"><li><a href="#section_1">任务3</a></li></ul></li></ul>
+    <h3>数据摘要</h3>
+    <div class="summary-cards"><div class="summary-card" style="--accent: #C8102E"><span class="card-icon">📌</span><div class="card-body"><div class="card-label">下行PRB利用率_均值</div><div class="card-value">2,586.75</div><div class="card-trend">合计</div></div></div><div class="summary-card" style="--accent: #182B49"><span class="card-icon">📌</span><div class="card-body"><div class="card-label">上行PRB利用率_均值</div><div class="card-value">2,374.75</div><div class="card-trend">合计</div></div></div><div class="summary-card" style="--accent: #5B9BD5"><span class="card-icon">#</span><div class="card-body"><div class="card-label">站点ID_计数</div><div class="card-value">50</div><div class="card-trend">合计</div></div></div></div>
+  </div>
+  <div class="content-wrapper">
+    <div class="content-area">
+      
+<div id="section_0" class="section" style="--accent: #C8102E">
+  <h2>站点级</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 2,586.75 | 平均: 51.73 | 最大: 84.30 | 最小: 20.55 | 数量: 50 | 合计: 2,374.75 | 平均: 47.49 | 最大: 72.23 | 最小: 20.05 | 数量: 50</div>
+  <div class="chart-container" id="chart_ctr_section_0">
+    <div class="chart-buttons"><button class="chart-btn " onclick="switchChart('section_0', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_0', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_0', 'area')">面积图</button><button class="chart-btn " onclick="switchChart('section_0', 'pie')">饼图</button><button class="chart-btn " onclick="switchChart('section_0', 'radar')">雷达图</button><button class="chart-btn " onclick="switchChart('section_0', 'scatter')">散点图</button><button class="chart-btn active" onclick="switchChart('section_0', 'table')">表格</button></div>
+    <div class="col-selector" id="col_sel_section_0"><span class="col-sel-label">列选择:</span><button class="col-sel-toggle" type="button" onclick="onColSelectAll('section_0', true)">全选</button><button class="col-sel-toggle" type="button" onclick="onColSelectAll('section_0', false)">全不选</button><label class="col-cb-item"><input type="checkbox" checked onchange="onColChange('section_0')" data-series="0">5G用户数_求和</label><label class="col-cb-item"><input type="checkbox" checked onchange="onColChange('section_0')" data-series="1">下行PRB利用率_均值</label><label class="col-cb-item"><input type="checkbox" checked onchange="onColChange('section_0')" data-series="2">上行PRB利用率_均值</label></div>
+    
+    <div class="chart-toolbar"><button class="chart-tool-btn" onclick="toggleChartFullscreen('section_0')">全屏</button><button class="chart-tool-btn" onclick="exportChartPNG('section_0')">导出PNG</button><button class="chart-tool-btn" onclick="toggleStack('section_0')">堆叠/并排</button></div>
+    <div id="chart_section_0" class="chart-canvas" style="display:none"></div>
+  </div>
+  <div class="table-container"><div class="table-header"><span>数据详情</span><span class="table-row-count">共 50 行</span></div><div class="table-toolbar"><input type="text" class="table-search" placeholder="搜索表格内容..." oninput="filterTable('section_0', this.value)"><button class="table-tool-btn" onclick="exportTableCSV('section_0')">导出CSV</button></div><div class="table-wrap"><table id="table_section_0"><thead><tr><th onclick="sortTable('section_0', 0)" data-sort="" data-col="0" class="dim-th">站点ID<span class="sort-arrow"></span></th><th onclick="sortTable('section_0', 1)" data-sort="" data-col="1" class="dim-th">频段<span class="sort-arrow"></span></th><th onclick="sortTable('section_0', 2)" data-sort="" data-col="2" class="dim-th">场景<span class="sort-arrow"></span></th><th onclick="sortTable('section_0', 3)" data-sort="" data-col="3" class="dim-th">城市<span class="sort-arrow"></span></th><th onclick="sortTable('section_0', 4)" data-sort="" data-col="4" class="dim-th">区域<span class="sort-arrow"></span></th><th onclick="sortTable('section_0', 5)" data-sort="" data-col="5">5G用户数_求和<span class="sort-arrow"></span></th><th onclick="sortTable('section_0', 6)" data-sort="" data-col="6">下行PRB利用率_均值<span class="sort-arrow"></span></th><th onclick="sortTable('section_0', 7)" data-sort="" data-col="7">上行PRB利用率_均值<span class="sort-arrow"></span></th></tr></thead><tbody><tr class=""><td class="dim-cell">S001</td><td class="dim-cell">700M</td><td class="dim-cell">密集城区</td><td class="dim-cell">杭州</td><td class="dim-cell">华东</td><td class="num-cell">7435</td><td class="num-cell">31.3200</td><td class="num-cell">42.2000</td></tr><tr class=""><td class="dim-cell">S002</td><td class="dim-cell">3.5G</td><td class="dim-cell">一般城区</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">2392</td><td class="num-cell">26.7000</td><td class="num-cell">66.3500</td></tr><tr class=""><td class="dim-cell">S003</td><td class="dim-cell">3.5G</td><td class="dim-cell">一般城区</td><td class="dim-cell">杭州</td><td class="dim-cell">华东</td><td class="num-cell">4635</td><td class="num-cell">20.5500</td><td class="num-cell">43.4000</td></tr><tr class=""><td class="dim-cell">S004</td><td class="dim-cell">800M</td><td class="dim-cell">密集城区</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">2915</td><td class="num-cell">64</td><td class="num-cell">47.3000</td></tr><tr class=""><td class="dim-cell">S005</td><td class="dim-cell">3.5G</td><td class="dim-cell">密集城区</td><td class="dim-cell">杭州</td><td class="dim-cell">华东</td><td class="num-cell">5078</td><td class="num-cell">38.5800</td><td class="num-cell">46.7200</td></tr><tr class=""><td class="dim-cell">S006</td><td class="dim-cell">1.8G</td><td class="dim-cell">密集城区</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">4134</td><td class="num-cell">48.7500</td><td class="num-cell">71.0500</td></tr><tr class=""><td class="dim-cell">S007</td><td class="dim-cell">2.1G</td><td class="dim-cell">密集城区</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">2784</td><td class="num-cell">64.9700</td><td class="num-cell">58.7500</td></tr><tr class=""><td class="dim-cell">S008</td><td class="dim-cell">1.8G</td><td class="dim-cell">密集城区</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">6029</td><td class="num-cell">61.6800</td><td class="num-cell">41.7000</td></tr><tr class=""><td class="dim-cell">S009</td><td class="dim-cell">700M</td><td class="dim-cell">一般城区</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">2427</td><td class="num-cell">54.6500</td><td class="num-cell">64.1000</td></tr><tr class=""><td class="dim-cell">S010</td><td class="dim-cell">3.5G</td><td class="dim-cell">一般城区</td><td class="dim-cell">杭州</td><td class="dim-cell">华东</td><td class="num-cell">2561</td><td class="num-cell">49.7500</td><td class="num-cell">54.7500</td></tr><tr class=""><td class="dim-cell">S011</td><td class="dim-cell">2.6G</td><td class="dim-cell">一般城区</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">2398</td><td class="num-cell">39.4000</td><td class="num-cell">47.0700</td></tr><tr class=""><td class="dim-cell">S012</td><td class="dim-cell">800M</td><td class="dim-cell">一般城区</td><td class="dim-cell">杭州</td><td class="dim-cell">华东</td><td class="num-cell">7655</td><td class="num-cell">65.3500</td><td class="num-cell">34.9000</td></tr><tr class=""><td class="dim-cell">S013</td><td class="dim-cell">1.8G</td><td class="dim-cell">密集城区</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">4442</td><td class="num-cell">33.8000</td><td class="num-cell">54.5800</td></tr><tr class=""><td class="dim-cell">S014</td><td class="dim-cell">700M</td><td class="dim-cell">密集城区</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">4408</td><td class="num-cell">46.4700</td><td class="num-cell">67.9300</td></tr><tr class=""><td class="dim-cell">S015</td><td class="dim-cell">1.8G</td><td class="dim-cell">密集城区</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">7830</td><td class="num-cell">34.2500</td><td class="num-cell">46.0800</td></tr><tr class=""><td class="dim-cell">S016</td><td class="dim-cell">800M</td><td class="dim-cell">郊区农村</td><td class="dim-cell">杭州</td><td class="dim-cell">华东</td><td class="num-cell">5116</td><td class="num-cell">69.8300</td><td class="num-cell">58.1300</td></tr><tr class=""><td class="dim-cell">S017</td><td class="dim-cell">800M</td><td class="dim-cell">郊区农村</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">5577</td><td class="num-cell">67.2800</td><td class="num-cell">48.9200</td></tr><tr class=""><td class="dim-cell">S018</td><td class="dim-cell">3.5G</td><td class="dim-cell">郊区农村</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">3424</td><td class="num-cell">56</td><td class="num-cell">66.8000</td></tr><tr class=""><td class="dim-cell">S019</td><td class="dim-cell">3.5G</td><td class="dim-cell">一般城区</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">2023</td><td class="num-cell">48.2000</td><td class="num-cell">29.5500</td></tr><tr class=""><td class="dim-cell">S020</td><td class="dim-cell">700M</td><td class="dim-cell">郊区农村</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">869</td><td class="num-cell">47.8500</td><td class="num-cell">43.1500</td></tr><tr class=""><td class="dim-cell">S021</td><td class="dim-cell">800M</td><td class="dim-cell">郊区农村</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">3042</td><td class="num-cell">47.6000</td><td class="num-cell">45.8000</td></tr><tr class=""><td class="dim-cell">S022</td><td class="dim-cell">3.5G</td><td class="dim-cell">郊区农村</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">2795</td><td class="num-cell">45.2700</td><td class="num-cell">49.3700</td></tr><tr class=""><td class="dim-cell">S023</td><td class="dim-cell">1.8G</td><td class="dim-cell">密集城区</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">3843</td><td class="num-cell">64.5700</td><td class="num-cell">40.0300</td></tr><tr class=""><td class="dim-cell">S024</td><td class="dim-cell">2.6G</td><td class="dim-cell">郊区农村</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">6556</td><td class="num-cell">44.6300</td><td class="num-cell">39.1000</td></tr><tr class=""><td class="dim-cell">S025</td><td class="dim-cell">1.8G</td><td class="dim-cell">郊区农村</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">8281</td><td class="num-cell">58.3800</td><td class="num-cell">45.0300</td></tr><tr class=""><td class="dim-cell">S026</td><td class="dim-cell">2.6G</td><td class="dim-cell">郊区农村</td><td class="dim-cell">杭州</td><td class="dim-cell">华东</td><td class="num-cell">3861</td><td class="num-cell">59.3300</td><td class="num-cell">37.6300</td></tr><tr class=""><td class="dim-cell">S027</td><td class="dim-cell">700M</td><td class="dim-cell">密集城区</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">5060</td><td class="num-cell">54.1500</td><td class="num-cell">36.9000</td></tr><tr class=""><td class="dim-cell">S028</td><td class="dim-cell">800M</td><td class="dim-cell">密集城区</td><td class="dim-cell">杭州</td><td class="dim-cell">华东</td><td class="num-cell">3501</td><td class="num-cell">47.9300</td><td class="num-cell">72.2300</td></tr><tr class=""><td class="dim-cell">S029</td><td class="dim-cell">2.1G</td><td class="dim-cell">郊区农村</td><td class="dim-cell">杭州</td><td class="dim-cell">华东</td><td class="num-cell">4705</td><td class="num-cell">42.9000</td><td class="num-cell">68.2000</td></tr><tr class=""><td class="dim-cell">S030</td><td class="dim-cell">3.5G</td><td class="dim-cell">一般城区</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">2336</td><td class="num-cell">63</td><td class="num-cell">44.6500</td></tr><tr class=""><td class="dim-cell">S031</td><td class="dim-cell">1.8G</td><td class="dim-cell">一般城区</td><td class="dim-cell">杭州</td><td class="dim-cell">华东</td><td class="num-cell">1997</td><td class="num-cell">25.5300</td><td class="num-cell">38.2300</td></tr><tr class=""><td class="dim-cell">S032</td><td class="dim-cell">2.1G</td><td class="dim-cell">一般城区</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">7757</td><td class="num-cell">67.2800</td><td class="num-cell">53.8000</td></tr><tr class=""><td class="dim-cell">S033</td><td class="dim-cell">2.6G</td><td class="dim-cell">郊区农村</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">4515</td><td class="num-cell">42.9500</td><td class="num-cell">20.0500</td></tr><tr class=""><td class="dim-cell">S034</td><td class="dim-cell">2.1G</td><td class="dim-cell">一般城区</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">3265</td><td class="num-cell">43.9500</td><td class="num-cell">58</td></tr><tr class=""><td class="dim-cell">S035</td><td class="dim-cell">3.5G</td><td class="dim-cell">密集城区</td><td class="dim-cell">杭州</td><td class="dim-cell">华东</td><td class="num-cell">1304</td><td class="num-cell">55.3500</td><td class="num-cell">40.4500</td></tr><tr class=""><td class="dim-cell">S036</td><td class="dim-cell">3.5G</td><td class="dim-cell">一般城区</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">5679</td><td class="num-cell">56.4000</td><td class="num-cell">32.7000</td></tr><tr class=""><td class="dim-cell">S037</td><td class="dim-cell">3.5G</td><td class="dim-cell">一般城区</td><td class="dim-cell">杭州</td><td class="dim-cell">华东</td><td class="num-cell">2800</td><td class="num-cell">63.3000</td><td class="num-cell">34.1000</td></tr><tr class=""><td class="dim-cell">S038</td><td class="dim-cell">700M</td><td class="dim-cell">一般城区</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">5392</td><td class="num-cell">72.8000</td><td class="num-cell">33.0300</td></tr><tr class=""><td class="dim-cell">S039</td><td class="dim-cell">2.1G</td><td class="dim-cell">郊区农村</td><td class="dim-cell">杭州</td><td class="dim-cell">华东</td><td class="num-cell">3749</td><td class="num-cell">35.5500</td><td class="num-cell">55.2000</td></tr><tr class=""><td class="dim-cell">S040</td><td class="dim-cell">2.6G</td><td class="dim-cell">郊区农村</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">4015</td><td class="num-cell">51.3000</td><td class="num-cell">32.5700</td></tr><tr class=""><td class="dim-cell">S041</td><td class="dim-cell">2.1G</td><td class="dim-cell">郊区农村</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">5173</td><td class="num-cell">49.2000</td><td class="num-cell">51.1500</td></tr><tr class=""><td class="dim-cell">S042</td><td class="dim-cell">1.8G</td><td class="dim-cell">密集城区</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">2769</td><td class="num-cell">48.7700</td><td class="num-cell">42.2300</td></tr><tr class=""><td class="dim-cell">S043</td><td class="dim-cell">3.5G</td><td class="dim-cell">郊区农村</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">806</td><td class="num-cell">84.3000</td><td class="num-cell">49.4500</td></tr><tr class=""><td class="dim-cell">S044</td><td class="dim-cell">2.1G</td><td class="dim-cell">一般城区</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">3959</td><td class="num-cell">60.6700</td><td class="num-cell">57.9700</td></tr><tr class=""><td class="dim-cell">S045</td><td class="dim-cell">700M</td><td class="dim-cell">郊区农村</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">4454</td><td class="num-cell">55.8000</td><td class="num-cell">38.5000</td></tr><tr class=""><td class="dim-cell">S046</td><td class="dim-cell">2.6G</td><td class="dim-cell">郊区农村</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">3421</td><td class="num-cell">50.9300</td><td class="num-cell">36.5300</td></tr><tr class=""><td class="dim-cell">S047</td><td class="dim-cell">700M</td><td class="dim-cell">密集城区</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">4488</td><td class="num-cell">60.9000</td><td class="num-cell">54.4700</td></tr><tr class=""><td class="dim-cell">S048</td><td class="dim-cell">700M</td><td class="dim-cell">密集城区</td><td class="dim-cell">深圳</td><td class="dim-cell">华南</td><td class="num-cell">3146</td><td class="num-cell">60.7000</td><td class="num-cell">40.5500</td></tr><tr class=""><td class="dim-cell">S049</td><td class="dim-cell">2.6G</td><td class="dim-cell">郊区农村</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">2757</td><td class="num-cell">45</td><td class="num-cell">53.9000</td></tr><tr class=""><td class="dim-cell">S050</td><td class="dim-cell">2.6G</td><td class="dim-cell">郊区农村</td><td class="dim-cell">广州</td><td class="dim-cell">华南</td><td class="num-cell">4318</td><td class="num-cell">58.9300</td><td class="num-cell">39.5000</td></tr></tbody></table></div></div>
+</div>
+<div id="section_1" class="section" style="--accent: #182B49">
+  <h2>任务3</h2>
+  <p class="subtitle"></p>
+  <div class="summary-bar"><span>数据摘要:</span> 合计: 50 | 平均: 16.67 | 最大: 19 | 最小: 15 | 数量: 3</div>
+  <div class="chart-container" id="chart_ctr_section_1">
+    <div class="chart-buttons"><button class="chart-btn " onclick="switchChart('section_1', 'bar')">柱状图</button><button class="chart-btn " onclick="switchChart('section_1', 'line')">折线图</button><button class="chart-btn " onclick="switchChart('section_1', 'area')">面积图</button><button class="chart-btn " onclick="switchChart('section_1', 'pie')">饼图</button><button class="chart-btn active" onclick="switchChart('section_1', 'table')">表格</button></div>
+    
+    
+    <div class="chart-toolbar"><button class="chart-tool-btn" onclick="toggleChartFullscreen('section_1')">全屏</button><button class="chart-tool-btn" onclick="exportChartPNG('section_1')">导出PNG</button><button class="chart-tool-btn" onclick="toggleStack('section_1')">堆叠/并排</button></div>
+    <div id="chart_section_1" class="chart-canvas" style="display:none"></div>
+  </div>
+  <div class="table-container"><div class="table-header"><span>数据详情</span><span class="table-row-count">共 3 行</span></div><div class="table-toolbar"><input type="text" class="table-search" placeholder="搜索表格内容..." oninput="filterTable('section_1', this.value)"><button class="table-tool-btn" onclick="exportTableCSV('section_1')">导出CSV</button></div><div class="table-wrap"><table id="table_section_1"><thead><tr><th onclick="sortTable('section_1', 0)" data-sort="" data-col="0" class="dim-th">场景类型<span class="sort-arrow"></span></th><th onclick="sortTable('section_1', 1)" data-sort="" data-col="1">站点ID_计数<span class="sort-arrow"></span></th></tr></thead><tbody><tr class=""><td class="dim-cell">中密度</td><td class="num-cell">15</td></tr><tr class=""><td class="dim-cell">低密度</td><td class="num-cell">19</td></tr><tr class=""><td class="dim-cell">高密度</td><td class="num-cell">16</td></tr></tbody></table></div></div>
+</div>
+      <div class="footer">由 Excel 统一分析工具自动生成 | 2026-07-17 12:56:39</div>
+    </div>
+  </div>
+</div>
+<button id="backToTopBtn" class="back-to-top" onclick="scrollToTop()" title="返回顶部">↑</button>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<script>
+  // 地图数据加载状态：mapName -> 'pending' | 'loading' | 'ready' | 'failed'
+  var _mapStatus = {};
+  function _loadMapByName(mapName, cb) {
+    if (mapName !== 'china' && mapName !== 'world') mapName = 'china';
+    var st = _mapStatus[mapName];
+    if (st === 'ready') { cb(); return; }
+    if (st === 'pending' || st === undefined) {
+      _mapStatus[mapName] = 'loading';
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/echarts@4.9.0/map/js/' + mapName + '.js';
+      s.onload = function() {
+        // echarts 4.x 的 china.js / world.js 会注册到 echarts.registerMap
+        _mapStatus[mapName] = 'ready';
+        cb();
+      };
+      s.onerror = function() {
+        // 回退：用 fetch 加载 GeoJSON
+        var geoUrl = mapName === 'china'
+          ? 'https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json'
+          : 'https://cdn.jsdelivr.net/npm/echarts@4.9.0/map/json/world.json';
+        fetch(geoUrl)
+          .then(function(r) { return r.json(); })
+          .then(function(data) { echarts.registerMap(mapName, data); _mapStatus[mapName]='ready'; cb(); })
+          .catch(function() { _mapStatus[mapName]='failed'; cb(); });
+      };
+      document.head.appendChild(s);
+    } else {
+      // loading 中：轮询
+      var t = setInterval(function() {
+        if (_mapStatus[mapName] === 'ready' || _mapStatus[mapName] === 'failed') {
+          clearInterval(t); cb();
+        }
+      }, 100);
+    }
+  }
+</script>
+<script>
+  var chartInstances = {};
+  var chartOptions = {};
+  var geoData = {};  // 地图 section 的完整数据，供动态构建
+  var chartData = {};  // 普通 section 的图表数据，供动态构建+列选择
+    chartOptions['section_0_bar'] = {"title": {"text": "\u7ad9\u70b9\u7ea7", "left": "center", "textStyle": {"fontSize": 14}}, "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}, "backgroundColor": "#ffffff", "borderColor": "#e9ecef", "borderWidth": 1, "textStyle": {"color": "#1a1a2e"}, "extraCssText": "box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 8px;"}, "legend": {"data": ["5G\u7528\u6237\u6570_\u6c42\u548c", "\u4e0b\u884cPRB\u5229\u7528\u7387_\u5747\u503c", "\u4e0a\u884cPRB\u5229\u7528\u7387_\u5747\u503c"], "bottom": 0}, "grid": {"left": "3%", "right": "4%", "bottom": "24%", "top": "15%", "containLabel": true}, "xAxis": {"type": "category", "data": ["S001-700M-\u5bc6\u96c6\u57ce\u533a-\u676d\u5dde", "S002-3.5G-\u4e00\u822c\u57ce\u533a-\u5e7f\u5dde", "S003-3.5G-\u4e00\u822c\u57ce\u533a-\u676d\u5dde", "S004-800M-\u5bc6\u96c6\u57ce\u533a-\u5e7f\u5dde", "S005-3.5G-\u5bc6\u96c6\u57ce\u533a-\u676d\u5dde", "S006-1.8G-\u5bc6\u96c6\u57ce\u533a-\u6df1\u5733", "S007-2.1G-\u5bc6\u96c6\u57ce\u533a-\u6df1\u5733", "S008-1.8G-\u5bc6\u96c6\u57ce\u533a-\u5e7f\u5dde", "S009-700M-\u4e00\u822c\u57ce\u533a-\u5e7f\u5dde", "S010-3.5G-\u4e00\u822c\u57ce\u533a-\u676d\u5dde", "S011-2.6G-\u4e00\u822c\u57ce\u533a-\u6df1\u5733", "S012-800M-\u4e00\u822c\u57ce\u533a-\u676d\u5dde", "S013-1.8G-\u5bc6\u96c6\u57ce\u533a-\u6df1\u5733", "S014-700M-\u5bc6\u96c6\u57ce\u533a-\u5e7f\u5dde", "S015-1.8G-\u5bc6\u96c6\u57ce\u533a-\u6df1\u5733", "S016-800M-\u90ca\u533a\u519c\u6751-\u676d\u5dde", "S017-800M-\u90ca\u533a\u519c\u6751-\u5e7f\u5dde", "S018-3.5G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S019-3.5G-\u4e00\u822c\u57ce\u533a-\u5e7f\u5dde", "S020-700M-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S021-800M-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S022-3.5G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S023-1.8G-\u5bc6\u96c6\u57ce\u533a-\u5e7f\u5dde", "S024-2.6G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S025-1.8G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S026-2.6G-\u90ca\u533a\u519c\u6751-\u676d\u5dde", "S027-700M-\u5bc6\u96c6\u57ce\u533a-\u6df1\u5733", "S028-800M-\u5bc6\u96c6\u57ce\u533a-\u676d\u5dde", "S029-2.1G-\u90ca\u533a\u519c\u6751-\u676d\u5dde", "S030-3.5G-\u4e00\u822c\u57ce\u533a-\u5e7f\u5dde", "S031-1.8G-\u4e00\u822c\u57ce\u533a-\u676d\u5dde", "S032-2.1G-\u4e00\u822c\u57ce\u533a-\u6df1\u5733", "S033-2.6G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S034-2.1G-\u4e00\u822c\u57ce\u533a-\u5e7f\u5dde", "S035-3.5G-\u5bc6\u96c6\u57ce\u533a-\u676d\u5dde", "S036-3.5G-\u4e00\u822c\u57ce\u533a-\u5e7f\u5dde", "S037-3.5G-\u4e00\u822c\u57ce\u533a-\u676d\u5dde", "S038-700M-\u4e00\u822c\u57ce\u533a-\u5e7f\u5dde", "S039-2.1G-\u90ca\u533a\u519c\u6751-\u676d\u5dde", "S040-2.6G-\u90ca\u533a\u519c\u6751-\u5e7f\u5dde", "S041-2.1G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S042-1.8G-\u5bc6\u96c6\u57ce\u533a-\u6df1\u5733", "S043-3.5G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S044-2.1G-\u4e00\u822c\u57ce\u533a-\u6df1\u5733", "S045-700M-\u90ca\u533a\u519c\u6751-\u5e7f\u5dde", "S046-2.6G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S047-700M-\u5bc6\u96c6\u57ce\u533a-\u5e7f\u5dde", "S048-700M-\u5bc6\u96c6\u57ce\u533a-\u6df1\u5733", "S049-2.6G-\u90ca\u533a\u519c\u6751-\u5e7f\u5dde", "S050-2.6G-\u90ca\u533a\u519c\u6751-\u5e7f\u5dde"], "axisLabel": {"interval": 0}}, "yAxis": {"type": "value"}, "series": [{"name": "5G\u7528\u6237\u6570_\u6c42\u548c", "type": "bar", "data": [7435.0, 2392.0, 4635.0, 2915.0, 5078.0, 4134.0, 2784.0, 6029.0, 2427.0, 2561.0, 2398.0, 7655.0, 4442.0, 4408.0, 7830.0, 5116.0, 5577.0, 3424.0, 2023.0, 869.0, 3042.0, 2795.0, 3843.0, 6556.0, 8281.0, 3861.0, 5060.0, 3501.0, 4705.0, 2336.0, 1997.0, 7757.0, 4515.0, 3265.0, 1304.0, 5679.0, 2800.0, 5392.0, 3749.0, 4015.0, 5173.0, 2769.0, 806.0, 3959.0, 4454.0, 3421.0, 4488.0, 3146.0, 2757.0, 4318.0], "barWidth": "50%", "itemStyle": {"color": {"type": "linear", "x": 0, "y": 0, "x2": 0, "y2": 1, "colorStops": [{"offset": 0, "color": "#C8102E"}, {"offset": 1, "color": "#C8102E55"}]}, "borderRadius": [6, 6, 0, 0]}, "label": {"show": true, "position": "top", "fontSize": 11, "color": "#555"}}, {"name": "\u4e0b\u884cPRB\u5229\u7528\u7387_\u5747\u503c", "type": "bar", "data": [31.32, 26.7, 20.55, 64.0, 38.58, 48.75, 64.97, 61.68, 54.65, 49.75, 39.4, 65.35, 33.8, 46.47, 34.25, 69.83, 67.28, 56.0, 48.2, 47.85, 47.6, 45.27, 64.57, 44.63, 58.38, 59.33, 54.15, 47.93, 42.9, 63.0, 25.53, 67.28, 42.95, 43.95, 55.35, 56.4, 63.3, 72.8, 35.55, 51.3, 49.2, 48.77, 84.3, 60.67, 55.8, 50.93, 60.9, 60.7, 45.0, 58.93], "barWidth": "50%", "itemStyle": {"color": {"type": "linear", "x": 0, "y": 0, "x2": 0, "y2": 1, "colorStops": [{"offset": 0, "color": "#182B49"}, {"offset": 1, "color": "#182B4955"}]}, "borderRadius": [6, 6, 0, 0]}, "label": {"show": true, "position": "top", "fontSize": 11, "color": "#555"}}, {"name": "\u4e0a\u884cPRB\u5229\u7528\u7387_\u5747\u503c", "type": "bar", "data": [42.2, 66.35, 43.4, 47.3, 46.72, 71.05, 58.75, 41.7, 64.1, 54.75, 47.07, 34.9, 54.58, 67.93, 46.08, 58.13, 48.92, 66.8, 29.55, 43.15, 45.8, 49.37, 40.03, 39.1, 45.03, 37.63, 36.9, 72.23, 68.2, 44.65, 38.23, 53.8, 20.05, 58.0, 40.45, 32.7, 34.1, 33.03, 55.2, 32.57, 51.15, 42.23, 49.45, 57.97, 38.5, 36.53, 54.47, 40.55, 53.9, 39.5], "barWidth": "50%", "itemStyle": {"color": {"type": "linear", "x": 0, "y": 0, "x2": 0, "y2": 1, "colorStops": [{"offset": 0, "color": "#5B9BD5"}, {"offset": 1, "color": "#5B9BD555"}]}, "borderRadius": [6, 6, 0, 0]}, "label": {"show": true, "position": "top", "fontSize": 11, "color": "#555"}}], "animationDuration": 1000, "animationEasing": "cubicOut"};
+  chartOptions['section_0_line'] = {"title": {"text": "\u7ad9\u70b9\u7ea7", "left": "center", "textStyle": {"fontSize": 14}}, "tooltip": {"trigger": "axis", "backgroundColor": "#ffffff", "borderColor": "#e9ecef", "borderWidth": 1, "textStyle": {"color": "#1a1a2e"}, "extraCssText": "box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 8px;"}, "legend": {"data": ["5G\u7528\u6237\u6570_\u6c42\u548c", "\u4e0b\u884cPRB\u5229\u7528\u7387_\u5747\u503c", "\u4e0a\u884cPRB\u5229\u7528\u7387_\u5747\u503c"], "bottom": 0}, "grid": {"left": "3%", "right": "4%", "bottom": "24%", "top": "15%", "containLabel": true}, "xAxis": {"type": "category", "data": ["S001-700M-\u5bc6\u96c6\u57ce\u533a-\u676d\u5dde", "S002-3.5G-\u4e00\u822c\u57ce\u533a-\u5e7f\u5dde", "S003-3.5G-\u4e00\u822c\u57ce\u533a-\u676d\u5dde", "S004-800M-\u5bc6\u96c6\u57ce\u533a-\u5e7f\u5dde", "S005-3.5G-\u5bc6\u96c6\u57ce\u533a-\u676d\u5dde", "S006-1.8G-\u5bc6\u96c6\u57ce\u533a-\u6df1\u5733", "S007-2.1G-\u5bc6\u96c6\u57ce\u533a-\u6df1\u5733", "S008-1.8G-\u5bc6\u96c6\u57ce\u533a-\u5e7f\u5dde", "S009-700M-\u4e00\u822c\u57ce\u533a-\u5e7f\u5dde", "S010-3.5G-\u4e00\u822c\u57ce\u533a-\u676d\u5dde", "S011-2.6G-\u4e00\u822c\u57ce\u533a-\u6df1\u5733", "S012-800M-\u4e00\u822c\u57ce\u533a-\u676d\u5dde", "S013-1.8G-\u5bc6\u96c6\u57ce\u533a-\u6df1\u5733", "S014-700M-\u5bc6\u96c6\u57ce\u533a-\u5e7f\u5dde", "S015-1.8G-\u5bc6\u96c6\u57ce\u533a-\u6df1\u5733", "S016-800M-\u90ca\u533a\u519c\u6751-\u676d\u5dde", "S017-800M-\u90ca\u533a\u519c\u6751-\u5e7f\u5dde", "S018-3.5G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S019-3.5G-\u4e00\u822c\u57ce\u533a-\u5e7f\u5dde", "S020-700M-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S021-800M-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S022-3.5G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S023-1.8G-\u5bc6\u96c6\u57ce\u533a-\u5e7f\u5dde", "S024-2.6G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S025-1.8G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S026-2.6G-\u90ca\u533a\u519c\u6751-\u676d\u5dde", "S027-700M-\u5bc6\u96c6\u57ce\u533a-\u6df1\u5733", "S028-800M-\u5bc6\u96c6\u57ce\u533a-\u676d\u5dde", "S029-2.1G-\u90ca\u533a\u519c\u6751-\u676d\u5dde", "S030-3.5G-\u4e00\u822c\u57ce\u533a-\u5e7f\u5dde", "S031-1.8G-\u4e00\u822c\u57ce\u533a-\u676d\u5dde", "S032-2.1G-\u4e00\u822c\u57ce\u533a-\u6df1\u5733", "S033-2.6G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S034-2.1G-\u4e00\u822c\u57ce\u533a-\u5e7f\u5dde", "S035-3.5G-\u5bc6\u96c6\u57ce\u533a-\u676d\u5dde", "S036-3.5G-\u4e00\u822c\u57ce\u533a-\u5e7f\u5dde", "S037-3.5G-\u4e00\u822c\u57ce\u533a-\u676d\u5dde", "S038-700M-\u4e00\u822c\u57ce\u533a-\u5e7f\u5dde", "S039-2.1G-\u90ca\u533a\u519c\u6751-\u676d\u5dde", "S040-2.6G-\u90ca\u533a\u519c\u6751-\u5e7f\u5dde", "S041-2.1G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S042-1.8G-\u5bc6\u96c6\u57ce\u533a-\u6df1\u5733", "S043-3.5G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S044-2.1G-\u4e00\u822c\u57ce\u533a-\u6df1\u5733", "S045-700M-\u90ca\u533a\u519c\u6751-\u5e7f\u5dde", "S046-2.6G-\u90ca\u533a\u519c\u6751-\u6df1\u5733", "S047-700M-\u5bc6\u96c6\u57ce\u533a-\u5e7f\u5dde", "S048-700M-\u5bc6\u96c6\u57ce\u533a-\u6df1\u5733", "S049-2.6G-\u90ca\u533a\u519c\u6751-\u5e7f\u5dde", "S050-2.6G-\u90ca\u533a\u519c\u6751-\u5e7f\u5dde"], "axisLabel": {"interval": 0}}, "yAxis": {"type": "value"}, "series": [{"name": "5G\u7528\u6237\u6570_\u6c42\u548c", "type": "line", "data": [7435.0, 2392.0, 4635.0, 2915.0, 5078.0, 4134.0, 2784.0, 6029.0, 2427.0, 2561.0, 2398.0, 7655.0, 4442.0, 4408.0, 7830.0, 5116.0, 5577.0, 3424.0, 2023.0, 869.0, 3042.0, 2795.0, 3843.0, 6556.0, 8281.0, 3861.0, 5060.0, 3501.0, 4705.0, 2336.0, 1997.0, 7757.0, 4515.0, 3265.0, 1304.0, 5679.0, 2800.0, 5392.0, 3749.0, 4015.0, 5173.0, 2769.0, 806.0, 3959.0, 4454.0, 3421.0, 4488.0, 3146.0, 2757.0, 4318.0], "smooth": true, "symbol": "circle", "symbolSize": 8, "lineStyle": {"width": 3, "color": "#C8102E"}, "itemStyle": {"color": "#C8102E", "borderColor": "#fff", "borderWidth": 2}, "label": {"show": true, "position": "top", "fontSize": 11, "color": "#C8102E"}}, {"name": "\u4e0b\u884cPRB\u5229\u7528\u7387_\u5747\u503c", "type": "line", "data": [31.32, 26.7, 20.55, 64.0, 38.58, 48.75, 64.97, 61.68, 54.65, 49.75, 39.4, 65.35, 33.8, 46.47, 34.25, 69.83, 67.28, 56.0, 48.2, 47.85, 47.6, 45.27, 64.57, 44.63, 58.38, 59.33, 54.15, 47.93, 42.9, 63.0, 25.53, 67.28, 42.95, 43.95, 55.35, 56.4, 63.3, 72.8, 35.55, 51.3, 49.2, 48.77, 84.3, 60.67, 55.8, 50.93, 60.9, 60.7, 45.0, 58.93], "smooth": true, "symbol": "circle", "symbolSize": 8, "lineStyle": {"width": 3, "color": "#182B49"}, "itemStyle": {"color": "#182B49", "borderColor": "#fff", "borderWidth": 2}, "label": {"show": true, "position": "top", "fontSize": 11, "color": "#182B49"}}, {"name": "\u4e0a\u884cPRB\u5229\u7528\u7387_\u5747\u503c", "type": "line", "data": [42.2, 66.35, 43.4, 47.3, 46.72, 71.05, 58.75, 41.7, 64.1, 54.75, 47.07, 34.9, 54.58, 67.93, 46.08, 58.13, 48.92, 66.8, 29.55, 43.15, 45.8, 49.37, 40.03, 39.1, 45.03, 37.63, 36.9, 72.23, 68.2, 44.65, 38.23, 53.8, 20.05, 58.0, 40.45, 32.7, 34.1, 33.03, 55.2, 32.57, 51.15, 42.23, 49.45, 57.97, 38.5, 36.53, 54.47, 40.55, 53.9, 39.5], "smooth": true, "symbol": "circle", "symbolSize": 8, "lineStyle": {"width": 3, "color": "#5B9BD5"}, "itemStyle": {"color": "#5B9BD5", "borderColor": "#fff", "borderWidth": 2}, "label": {"show": true, "position": "top", "fontSize": 11, "color": "#5B9BD5"}}], "animationDuration": 1000, "animationEasing": "cubicOut"};
+  chartOptions['section_0_pie'] = {"title": {"text": "\u7ad9\u70b9\u7ea7", "left": "center", "textStyle": {"fontSize": 14}}, "tooltip": {"trigger": "item", "formatter": "{b}: {c} ({d}%)", "backgroundColor": "#ffffff", "borderColor": "#e9ecef", "borderWidth": 1, "textStyle": {"color": "#1a1a2e"}, "extraCssText": "box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 8px;"}, "legend": {"orient": "vertical", "left": "left"}, "graphic": {"type": "text", "left": "center", "top": "center", "style": {"text": "\u603b\u8ba1\n20.39\u4e07", "textAlign": "center", "textVerticalAlign": "middle", "fontSize": 13, "fill": "#6c757d"}}, "series": [{"name": "\u7ad9\u70b9\u7ea7", "type": "pie", "radius": ["45%", "72%"], "center": ["50%", "50%"], "avoidLabelOverlap": true, "itemStyle": {"borderRadius": 6, "borderColor": "#fff", "borderWidth": 2}, "label": {"show": true}, "data": [{"name": "\u534e\u4e1c", "value": 7435.0}, {"name": "\u534e\u5357", "value": 2392.0}, {"name": "\u534e\u4e1c", "value": 4635.0}, {"name": "\u534e\u5357", "value": 2915.0}, {"name": "\u534e\u4e1c", "value": 5078.0}, {"name": "\u534e\u5357", "value": 4134.0}, {"name": "\u534e\u5357", "value": 2784.0}, {"name": "\u534e\u5357", "value": 6029.0}, {"name": "\u534e\u5357", "value": 2427.0}, {"name": "\u534e\u4e1c", "value": 2561.0}, {"name": "\u534e\u5357", "value": 2398.0}, {"name": "\u534e\u4e1c", "value": 7655.0}, {"name": "\u534e\u5357", "value": 4442.0}, {"name": "\u534e\u5357", "value": 4408.0}, {"name": "\u534e\u5357", "value": 7830.0}, {"name": "\u534e\u4e1c", "value": 5116.0}, {"name": "\u534e\u5357", "value": 5577.0}, {"name": "\u534e\u5357", "value": 3424.0}, {"name": "\u534e\u5357", "value": 2023.0}, {"name": "\u534e\u5357", "value": 869.0}, {"name": "\u534e\u5357", "value": 3042.0}, {"name": "\u534e\u5357", "value": 2795.0}, {"name": "\u534e\u5357", "value": 3843.0}, {"name": "\u534e\u5357", "value": 6556.0}, {"name": "\u534e\u5357", "value": 8281.0}, {"name": "\u534e\u4e1c", "value": 3861.0}, {"name": "\u534e\u5357", "value": 5060.0}, {"name": "\u534e\u4e1c", "value": 3501.0}, {"name": "\u534e\u4e1c", "value": 4705.0}, {"name": "\u534e\u5357", "value": 2336.0}, {"name": "\u534e\u4e1c", "value": 1997.0}, {"name": "\u534e\u5357", "value": 7757.0}, {"name": "\u534e\u5357", "value": 4515.0}, {"name": "\u534e\u5357", "value": 3265.0}, {"name": "\u534e\u4e1c", "value": 1304.0}, {"name": "\u534e\u5357", "value": 5679.0}, {"name": "\u534e\u4e1c", "value": 2800.0}, {"name": "\u534e\u5357", "value": 5392.0}, {"name": "\u534e\u4e1c", "value": 3749.0}, {"name": "\u534e\u5357", "value": 4015.0}, {"name": "\u534e\u5357", "value": 5173.0}, {"name": "\u534e\u5357", "value": 2769.0}, {"name": "\u534e\u5357", "value": 806.0}, {"name": "\u534e\u5357", "value": 3959.0}, {"name": "\u534e\u5357", "value": 4454.0}, {"name": "\u534e\u5357", "value": 3421.0}, {"name": "\u534e\u5357", "value": 4488.0}, {"name": "\u534e\u5357", "value": 3146.0}, {"name": "\u534e\u5357", "value": 2757.0}, {"name": "\u534e\u5357", "value": 4318.0}], "color": ["#C8102E", "#182B49", "#5B9BD5", "#ED7D31", "#70AD47", "#A5A5A5", "#FFC000", "#4472C4"]}], "animationDuration": 1000, "animationEasing": "cubicOut"};
+  chartOptions['section_1_bar'] = {"title": {"text": "\u4efb\u52a13", "left": "center", "textStyle": {"fontSize": 14}}, "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}, "backgroundColor": "#ffffff", "borderColor": "#e9ecef", "borderWidth": 1, "textStyle": {"color": "#1a1a2e"}, "extraCssText": "box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 8px;"}, "legend": {"data": ["\u7ad9\u70b9ID_\u8ba1\u6570"], "bottom": 0}, "grid": {"left": "3%", "right": "4%", "bottom": "15%", "top": "15%", "containLabel": true}, "xAxis": {"type": "category", "data": ["\u4e2d\u5bc6\u5ea6", "\u4f4e\u5bc6\u5ea6", "\u9ad8\u5bc6\u5ea6"], "axisLabel": {"rotate": 30}}, "yAxis": {"type": "value"}, "series": [{"name": "\u7ad9\u70b9ID_\u8ba1\u6570", "type": "bar", "data": [15.0, 19.0, 16.0], "barWidth": "50%", "itemStyle": {"color": {"type": "linear", "x": 0, "y": 0, "x2": 0, "y2": 1, "colorStops": [{"offset": 0, "color": "#C8102E"}, {"offset": 1, "color": "#C8102E55"}]}, "borderRadius": [6, 6, 0, 0]}, "label": {"show": true, "position": "top", "fontSize": 11, "color": "#555"}}], "animationDuration": 1000, "animationEasing": "cubicOut"};
+  chartOptions['section_1_line'] = {"title": {"text": "\u4efb\u52a13", "left": "center", "textStyle": {"fontSize": 14}}, "tooltip": {"trigger": "axis", "backgroundColor": "#ffffff", "borderColor": "#e9ecef", "borderWidth": 1, "textStyle": {"color": "#1a1a2e"}, "extraCssText": "box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 8px;"}, "legend": {"data": ["\u7ad9\u70b9ID_\u8ba1\u6570"], "bottom": 0}, "grid": {"left": "3%", "right": "4%", "bottom": "15%", "top": "15%", "containLabel": true}, "xAxis": {"type": "category", "data": ["\u4e2d\u5bc6\u5ea6", "\u4f4e\u5bc6\u5ea6", "\u9ad8\u5bc6\u5ea6"], "axisLabel": {"rotate": 30}}, "yAxis": {"type": "value"}, "series": [{"name": "\u7ad9\u70b9ID_\u8ba1\u6570", "type": "line", "data": [15.0, 19.0, 16.0], "smooth": true, "symbol": "circle", "symbolSize": 8, "lineStyle": {"width": 3, "color": "#C8102E"}, "itemStyle": {"color": "#C8102E", "borderColor": "#fff", "borderWidth": 2}, "label": {"show": true, "position": "top", "fontSize": 11, "color": "#C8102E"}}], "animationDuration": 1000, "animationEasing": "cubicOut"};
+  chartOptions['section_1_pie'] = {"title": {"text": "\u4efb\u52a13", "left": "center", "textStyle": {"fontSize": 14}}, "tooltip": {"trigger": "item", "formatter": "{b}: {c} ({d}%)", "backgroundColor": "#ffffff", "borderColor": "#e9ecef", "borderWidth": 1, "textStyle": {"color": "#1a1a2e"}, "extraCssText": "box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 8px;"}, "legend": {"orient": "vertical", "left": "left"}, "graphic": {"type": "text", "left": "center", "top": "center", "style": {"text": "\u603b\u8ba1\n50", "textAlign": "center", "textVerticalAlign": "middle", "fontSize": 13, "fill": "#6c757d"}}, "series": [{"name": "\u4efb\u52a13", "type": "pie", "radius": ["45%", "72%"], "center": ["50%", "50%"], "avoidLabelOverlap": true, "itemStyle": {"borderRadius": 6, "borderColor": "#fff", "borderWidth": 2}, "label": {"show": true}, "data": [{"name": "\u4e2d\u5bc6\u5ea6", "value": 15.0}, {"name": "\u4f4e\u5bc6\u5ea6", "value": 19.0}, {"name": "\u9ad8\u5bc6\u5ea6", "value": 16.0}], "color": ["#C8102E", "#182B49", "#5B9BD5", "#ED7D31", "#70AD47", "#A5A5A5", "#FFC000", "#4472C4"]}], "animationDuration": 1000, "animationEasing": "cubicOut"};
+
+  
+  chartData['section_0'] = {"title": "\u7ad9\u70b9\u7ea7", "categories": ["华东", "华南", "华东", "华南", "华东", "华南", "华南", "华南", "华南", "华东", "华南", "华东", "华南", "华南", "华南", "华东", "华南", "华南", "华南", "华南", "华南", "华南", "华南", "华南", "华南", "华东", "华南", "华东", "华东", "华南", "华东", "华南", "华南", "华南", "华东", "华南", "华东", "华南", "华东", "华南", "华南", "华南", "华南", "华南", "华南", "华南", "华南", "华南", "华南", "华南"], "categoryGroups": [{"name": "S001-700M-密集城区-杭州", "count": 1}, {"name": "S002-3.5G-一般城区-广州", "count": 1}, {"name": "S003-3.5G-一般城区-杭州", "count": 1}, {"name": "S004-800M-密集城区-广州", "count": 1}, {"name": "S005-3.5G-密集城区-杭州", "count": 1}, {"name": "S006-1.8G-密集城区-深圳", "count": 1}, {"name": "S007-2.1G-密集城区-深圳", "count": 1}, {"name": "S008-1.8G-密集城区-广州", "count": 1}, {"name": "S009-700M-一般城区-广州", "count": 1}, {"name": "S010-3.5G-一般城区-杭州", "count": 1}, {"name": "S011-2.6G-一般城区-深圳", "count": 1}, {"name": "S012-800M-一般城区-杭州", "count": 1}, {"name": "S013-1.8G-密集城区-深圳", "count": 1}, {"name": "S014-700M-密集城区-广州", "count": 1}, {"name": "S015-1.8G-密集城区-深圳", "count": 1}, {"name": "S016-800M-郊区农村-杭州", "count": 1}, {"name": "S017-800M-郊区农村-广州", "count": 1}, {"name": "S018-3.5G-郊区农村-深圳", "count": 1}, {"name": "S019-3.5G-一般城区-广州", "count": 1}, {"name": "S020-700M-郊区农村-深圳", "count": 1}, {"name": "S021-800M-郊区农村-深圳", "count": 1}, {"name": "S022-3.5G-郊区农村-深圳", "count": 1}, {"name": "S023-1.8G-密集城区-广州", "count": 1}, {"name": "S024-2.6G-郊区农村-深圳", "count": 1}, {"name": "S025-1.8G-郊区农村-深圳", "count": 1}, {"name": "S026-2.6G-郊区农村-杭州", "count": 1}, {"name": "S027-700M-密集城区-深圳", "count": 1}, {"name": "S028-800M-密集城区-杭州", "count": 1}, {"name": "S029-2.1G-郊区农村-杭州", "count": 1}, {"name": "S030-3.5G-一般城区-广州", "count": 1}, {"name": "S031-1.8G-一般城区-杭州", "count": 1}, {"name": "S032-2.1G-一般城区-深圳", "count": 1}, {"name": "S033-2.6G-郊区农村-深圳", "count": 1}, {"name": "S034-2.1G-一般城区-广州", "count": 1}, {"name": "S035-3.5G-密集城区-杭州", "count": 1}, {"name": "S036-3.5G-一般城区-广州", "count": 1}, {"name": "S037-3.5G-一般城区-杭州", "count": 1}, {"name": "S038-700M-一般城区-广州", "count": 1}, {"name": "S039-2.1G-郊区农村-杭州", "count": 1}, {"name": "S040-2.6G-郊区农村-广州", "count": 1}, {"name": "S041-2.1G-郊区农村-深圳", "count": 1}, {"name": "S042-1.8G-密集城区-深圳", "count": 1}, {"name": "S043-3.5G-郊区农村-深圳", "count": 1}, {"name": "S044-2.1G-一般城区-深圳", "count": 1}, {"name": "S045-700M-郊区农村-广州", "count": 1}, {"name": "S046-2.6G-郊区农村-深圳", "count": 1}, {"name": "S047-700M-密集城区-广州", "count": 1}, {"name": "S048-700M-密集城区-深圳", "count": 1}, {"name": "S049-2.6G-郊区农村-广州", "count": 1}, {"name": "S050-2.6G-郊区农村-广州", "count": 1}], "series": [{"name": "5G用户数_求和", "data": [7435.0, 2392.0, 4635.0, 2915.0, 5078.0, 4134.0, 2784.0, 6029.0, 2427.0, 2561.0, 2398.0, 7655.0, 4442.0, 4408.0, 7830.0, 5116.0, 5577.0, 3424.0, 2023.0, 869.0, 3042.0, 2795.0, 3843.0, 6556.0, 8281.0, 3861.0, 5060.0, 3501.0, 4705.0, 2336.0, 1997.0, 7757.0, 4515.0, 3265.0, 1304.0, 5679.0, 2800.0, 5392.0, 3749.0, 4015.0, 5173.0, 2769.0, 806.0, 3959.0, 4454.0, 3421.0, 4488.0, 3146.0, 2757.0, 4318.0], "selected": true}, {"name": "下行PRB利用率_均值", "data": [31.32, 26.7, 20.55, 64.0, 38.58, 48.75, 64.97, 61.68, 54.65, 49.75, 39.4, 65.35, 33.8, 46.47, 34.25, 69.83, 67.28, 56.0, 48.2, 47.85, 47.6, 45.27, 64.57, 44.63, 58.38, 59.33, 54.15, 47.93, 42.9, 63.0, 25.53, 67.28, 42.95, 43.95, 55.35, 56.4, 63.3, 72.8, 35.55, 51.3, 49.2, 48.77, 84.3, 60.67, 55.8, 50.93, 60.9, 60.7, 45.0, 58.93], "selected": true}, {"name": "上行PRB利用率_均值", "data": [42.2, 66.35, 43.4, 47.3, 46.72, 71.05, 58.75, 41.7, 64.1, 54.75, 47.07, 34.9, 54.58, 67.93, 46.08, 58.13, 48.92, 66.8, 29.55, 43.15, 45.8, 49.37, 40.03, 39.1, 45.03, 37.63, 36.9, 72.23, 68.2, 44.65, 38.23, 53.8, 20.05, 58.0, 40.45, 32.7, 34.1, 33.03, 55.2, 32.57, 51.15, 42.23, 49.45, 57.97, 38.5, 36.53, 54.47, 40.55, 53.9, 39.5], "selected": true}], "colLabels": ["5G用户数_求和", "下行PRB利用率_均值", "上行PRB利用率_均值"]};
+chartData['section_1'] = {"title": "\u4efb\u52a13", "categories": ["中密度", "低密度", "高密度"], "categoryGroups": [], "series": [{"name": "站点ID_计数", "data": [15.0, 19.0, 16.0], "selected": true}], "colLabels": ["站点ID_计数"]};
+  
+  function initCharts() {
+    // 默认所有 section 展示表格（chart-canvas 已通过 inline style display:none 隐藏）
+    // 图表在用户点击图表按钮时才按需渲染，避免打开时初始化大量 ECharts 实例
+    // 此处无需主动渲染任何图表
+  }
+
+  function renderChart(sectionId, chartType) {
+    var container = document.getElementById('chart_' + sectionId);
+    if (!container) return;
+
+    // 表格容器（切换到图表时隐藏表格，切换到表格时显示表格）
+    var tableWrap = document.querySelector('#' + sectionId + ' .table-container');
+
+    // 显示/隐藏地图控件面板
+    var geoCtrl = document.getElementById('geo_ctrl_' + sectionId);
+    if (geoCtrl) {
+      geoCtrl.style.display = (chartType === 'map' || chartType === 'heatmap') ? 'flex' : 'none';
+    }
+
+    // 显示/隐藏列选择面板
+    var colSel = document.getElementById('col_sel_' + sectionId);
+    if (colSel) {
+      colSel.style.display = (chartType !== 'table' && chartType !== 'map' && chartType !== 'heatmap') ? 'flex' : 'none';
+    }
+
+    if (chartType === 'table') {
+      // 表格模式：隐藏图表 canvas，显示表格
+      container.style.display = 'none';
+      if (tableWrap) tableWrap.style.display = '';
+      return;
+    }
+
+    // 图表模式：显示图表 canvas，隐藏表格
+    container.style.display = 'block';
+    if (tableWrap) tableWrap.style.display = 'none';
+
+    if (chartInstances[sectionId]) {
+      chartInstances[sectionId].dispose();
+    }
+
+    var doRender = function() {
+      var chart = echarts.init(container);
+      // 地图类型且有 geoData → 动态构建（支持指标列切换+筛选）
+      var options;
+      if ((chartType === 'map' || chartType === 'heatmap') && geoData[sectionId]) {
+        options = buildGeoOptionFromData(sectionId, chartType);
+      } else if (chartData[sectionId]) {
+        options = buildChartOption(sectionId, chartType);
+      } else {
+        options = chartOptions[sectionId + '_' + chartType];
+      }
+      if (options) {
+        chart.setOption(options, {lazyUpdate: true});
+        chartInstances[sectionId] = chart;
+      }
+    };
+
+    // 地图类型：先构建 options 获取 map 名，再加载对应地图数据后渲染
+    if (chartType === 'map' || chartType === 'heatmap') {
+      // 先确定 map 名（从动态构建的 option 中读取，或从预生成 option 读取）
+      var preOpt = geoData[sectionId] ? buildGeoOptionFromData(sectionId, chartType)
+                                      : chartOptions[sectionId + '_' + chartType];
+      var mn = (preOpt && preOpt.geo && preOpt.geo.map) || 'china';
+      _loadMapByName(mn, doRender);
+    } else {
+      doRender();
+    }
+  }
+
+  // 根据当前控件状态动态构建地图 ECharts option
+  function buildGeoOptionFromData(sectionId, chartType) {
+    var d = geoData[sectionId];
+    if (!d) return null;
+
+    // 读取控件状态
+    var metricSel = document.getElementById('geo_metric_' + sectionId);
+    var metricIdx = metricSel ? parseInt(metricSel.value) : (d.metricIndices[0] || -1);
+
+    var filterColSel = document.getElementById('geo_filter_col_' + sectionId);
+    var filterColIdx = filterColSel && filterColSel.value ? parseInt(filterColSel.value) : -1;
+
+    // 收集选中的筛选值
+    var selectedFilterVals = {};
+    if (filterColIdx >= 0) {
+      var checkboxes = document.querySelectorAll('input[name="geo_fv_' + sectionId + '"]:checked');
+      for (var i = 0; i < checkboxes.length; i++) {
+        selectedFilterVals[checkboxes[i].value] = true;
+      }
+    }
+
+    // 过滤+收集数据点
+    var points = [];
+    var metricVals = [];
+    var metricRawVals = [];  // 原始字符串值，用于离散色判断
+    for (var r = 0; r < d.rows.length; r++) {
+      var row = d.rows[r];
+      var lat = parseFloat(row[d.latIdx]);
+      var lon = parseFloat(row[d.lonIdx]);
+      if (isNaN(lat) || isNaN(lon)) continue;
+      if (lat === 0 && lon === 0) continue;
+      // 筛选
+      if (filterColIdx >= 0) {
+        var fv = String(row[filterColIdx] || '');
+        if (Object.keys(selectedFilterVals).length > 0 && !selectedFilterVals[fv]) continue;
+      }
+      var name = d.nameIdx !== null && d.nameIdx < row.length ? String(row[d.nameIdx]) : '';
+      var values = [lon, lat];
+      for (var mi = 0; mi < d.metricIndices.length; mi++) {
+        var v = parseFloat(row[d.metricIndices[mi]]) || 0;
+        values.push(v);
+      }
+      points.push({name: name, value: values});
+      var rawVal = metricIdx >= 0 ? String(row[metricIdx] || '') : '';
+      var numVal = parseFloat(rawVal);
+      metricVals.push(isNaN(numVal) ? 0 : numVal);
+      metricRawVals.push(rawVal);
+    }
+
+    if (points.length === 0) {
+      return {title: {text: '无符合条件的数据', left: 'center'}};
+    }
+
+    // 经纬度范围
+    var lats = points.map(function(p) { return p.value[1]; });
+    var lons = points.map(function(p) { return p.value[0]; });
+    var centerLon = (Math.min.apply(null, lons) + Math.max.apply(null, lons)) / 2;
+    var centerLat = (Math.min.apply(null, lats) + Math.max.apply(null, lats)) / 2;
+    var span = Math.max(Math.max.apply(null, lons) - Math.min.apply(null, lons),
+                        Math.max.apply(null, lats) - Math.min.apply(null, lats), 0.1);
+    var zoom = Math.max(1, Math.min(15, 8 - Math.log10(span + 1)));
+
+    // 根据经纬度范围判断使用中国地图还是世界地图
+    // 中国境内：经度 73-135，纬度 18-53
+    var allInChina = lons.every(function(lo) { return lo >= 73 && lo <= 135; })
+                  && lats.every(function(la) { return la >= 18 && la <= 53; });
+    var mapName = allInChina ? 'china' : 'world';
+
+    // 指标名
+    var metricName = metricIdx >= 0 ? d.headers[metricIdx] : '指标';
+    // 指标在 value 数组中的位置
+    var metricPos = d.metricIndices.indexOf(metricIdx);
+    if (metricPos < 0) metricPos = 0;
+    var metricValuePos = metricPos + 2;  // +2 因为前两位是 lon, lat
+
+    // 固定小点大小（不随指标值变化）
+    var dotSize = 8;
+
+    // tooltip formatter 稍后以真实函数注入（避免 eval）
+    var metricHeaders = d.metricIndices.map(function(mi) { return d.headers[mi]; });
+
+    var seriesType = chartType === 'map' ? 'scatter' : 'effectScatter';
+    var _labelColor = isDarkTheme() ? '#e0e0e0' : '#182B49';
+    var _areaColor = isDarkTheme() ? '#1f2a4a' : '#F2F0EB';
+    var _areaBorder = isDarkTheme() ? '#3a4a6a' : '#999';
+    var _emphArea = isDarkTheme() ? '#2a3a5a' : '#DCE6F0';
+
+    // 判断当前指标列是否为数值类型（用于决定染色方式：渐变 vs 离散）
+    var isNumericMetric = metricIdx >= 0 && metricRawVals.length > 0
+      && metricRawVals.every(function(v) { return v !== '' && !isNaN(parseFloat(v)); });
+
+    // 染色方案构建
+    var visualMapCfg = null;
+    var pointsWithColor = points;
+    var colorPalette = ['#C8102E', '#182B49', '#5B9BD5', '#ED7D31', '#70AD47', '#A5A5A5', '#FFC000', '#4472C4'];
+
+    if (metricIdx >= 0) {
+      if (isNumericMetric) {
+        // 数值型指标：使用 visualMap 连续渐变染色
+        var mMin = Math.min.apply(null, metricVals);
+        var mMax = Math.max.apply(null, metricVals);
+        visualMapCfg = {
+          type: 'continuous', min: mMin, max: mMax,
+          calculable: true, realtime: false,
+          inRange: { color: ['#5B9BD5', '#ED7D31', '#C8102E'] },
+          text: [String(mMax), String(mMin)], textStyle: { color: _labelColor, fontSize: 10 },
+          left: 20, bottom: 40
+        };
+      } else {
+        // 离散型指标：每个类别分配一个颜色，写入 itemStyle.color
+        var categories = [];
+        var colorMap = {};
+        for (var i = 0; i < metricRawVals.length; i++) {
+          var cat = metricRawVals[i];
+          if (!(cat in colorMap)) {
+            colorMap[cat] = colorPalette[categories.length % colorPalette.length];
+            categories.push(cat);
+          }
+        }
+        pointsWithColor = [];
+        for (var i = 0; i < points.length; i++) {
+          var p = points[i];
+          p.itemStyle = { color: colorMap[metricRawVals[i]] };
+          pointsWithColor.push(p);
+        }
+        // 离散图例
+        visualMapCfg = {
+          type: 'piecewise', categories: categories,
+          textStyle: { color: _labelColor, fontSize: 10 },
+          left: 20, bottom: 40,
+          inRange: { color: colorPalette }
+        };
+      }
+    } else {
+      // 无指标列：统一颜色
+      var _defaultColor = chartType === 'map' ? '#C8102E' : '#ED7D31';
+    }
+
+    var extra = chartType === 'heatmap' ?
+      {showEffectOn: 'render', rippleEffect: {brushType: 'stroke'}} : {};
+
+    var _seriesItemStyle = isNumericMetric
+      ? {opacity: 0.85, borderColor: _labelColor, borderWidth: 0.5}
+      : (metricIdx >= 0 ? {opacity: 0.85, borderColor: _labelColor, borderWidth: 0.5}
+                        : {color: _defaultColor, opacity: 0.85, borderColor: _labelColor, borderWidth: 0.5});
+
+    var opt = {
+      title: {text: metricName + ' 分布', left: 'center', textStyle: {fontSize: 14, color: getChartTextColor()}},
+      tooltip: {trigger: 'item'},
+      geo: {
+        map: mapName, roam: true, zoom: zoom,
+        center: [centerLon, centerLat],
+        itemStyle: {areaColor: _areaColor, borderColor: _areaBorder},
+        emphasis: {itemStyle: {areaColor: _emphArea}, label: {show: false}}
+      },
+      series: [{
+        name: metricName, type: seriesType, coordinateSystem: 'geo',
+        data: pointsWithColor, symbolSize: dotSize, itemStyle: _seriesItemStyle,
+        // 默认隐藏标签，hover 时显示
+        label: {show: false, formatter: '{b}', position: 'right', fontSize: 11, color: _labelColor,
+                 backgroundColor: 'rgba(255,255,255,0.85)', padding: [2, 4], borderRadius: 3},
+        emphasis: {label: {show: true}}
+      }]
+    };
+    // 合并 extra 到 series[0]（heatmap 涟漪效果）
+    for (var k in extra) { opt.series[0][k] = extra[k]; }
+    // 数值型或离散型指标添加 visualMap
+    if (visualMapCfg) opt.visualMap = visualMapCfg;
+    // 直接注入 tooltip formatter 为真实函数（不使用 eval）
+    opt.tooltip.formatter = function(p) {
+      var s = p.name + '<br/>';
+      var lon = p.value[0], lat = p.value[1];
+      s += '经度:' + lon.toFixed(4) + ', 纬度:' + lat.toFixed(4) + '<br/>';
+      for (var i = 0; i < metricHeaders.length; i++) {
+        s += metricHeaders[i] + ':' + p.value[i + 2] + '<br/>';
+      }
+      return s;
+    };
+    return opt;
+  }
+
+  // 指标列切换
+  function onGeoMetricChange(sectionId) {
+    var activeBtn = document.querySelector('#' + sectionId + ' .chart-btn.active');
+    var chartType = activeBtn ? (activeBtn.getAttribute('onclick').match(/'([^']+)'$/) || [])[1] : 'map';
+    renderChart(sectionId, chartType);
+  }
+
+  // 筛选列切换 → 填充筛选值复选框
+  function onGeoFilterColChange(sectionId) {
+    var sel = document.getElementById('geo_filter_col_' + sectionId);
+    var valsWrap = document.getElementById('geo_filter_vals_wrap_' + sectionId);
+    var valsBox = document.getElementById('geo_filter_vals_' + sectionId);
+    if (!sel || !valsBox) return;
+    if (!sel.value) {
+      valsWrap.style.display = 'none';
+      onGeoMetricChange(sectionId);
+      return;
+    }
+    var d = geoData[sectionId];
+    var vals = d.filterValues[sel.value] || [];
+    var html = '';
+    // 全选按钮
+    html += '<label class="geo-fv-item"><input type="checkbox" name="geo_fv_' + sectionId + '" value="__all__" checked onchange="onGeoFilterAllChange(\'' + sectionId + '\')"> 全选</label>';
+    for (var i = 0; i < vals.length; i++) {
+      html += '<label class="geo-fv-item"><input type="checkbox" name="geo_fv_' + sectionId + '" value="' + vals[i].replace(/"/g, '&quot;') + '" checked onchange="onGeoFilterValChange(\'' + sectionId + '\')"> ' + vals[i] + '</label>';
+    }
+    valsBox.innerHTML = html;
+    valsWrap.style.display = 'block';
+    onGeoMetricChange(sectionId);
+  }
+
+  // 单个筛选值变化
+  function onGeoFilterValChange(sectionId) {
+    onGeoMetricChange(sectionId);
+  }
+
+  // 数值格式化（JS 端，与 Python _format_num 对应）：千分位/万/亿/百分比
+  function formatNumber(val, isPct) {
+    if (val === null || val === undefined || val === '') return '';
+    var num = Number(val);
+    if (isNaN(num)) return String(val);
+    if (isPct && num >= 0 && num <= 1) return (num * 100).toFixed(2) + '%';
+    var abs = Math.abs(num);
+    if (abs >= 100000000) return (num / 100000000).toFixed(2) + '亿';
+    if (abs >= 10000) return (num / 10000).toFixed(2) + '万';
+    var s = num.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    if (s.indexOf('.00') === s.length - 3) s = s.slice(0, -3);
+    return s;
+  }
+  function isPctName(name) { return /占比|百分比|pct/i.test(name || ''); }
+
+  // 轴 tooltip formatter（统一格式化数值，百分比系列显示百分比）
+  function axisTipFormatter(params) {
+    var s = (params[0].axisValueLabel || params[0].name) + '<br/>';
+    for (var i = 0; i < params.length; i++) {
+      var p = params[i];
+      s += p.marker + p.seriesName + ': ' + formatNumber(p.value, isPctName(p.seriesName)) + '<br/>';
+    }
+    return s;
+  }
+  var yAxisLabelFormatter = function(v) { return formatNumber(v, false); };
+
+  // 主题辅助：根据当前主题返回图表配色
+  function isDarkTheme() { return document.documentElement.getAttribute('data-theme') === 'dark'; }
+  function getChartTextColor() { return isDarkTheme() ? '#e0e0e0' : '#1a1a2e'; }
+  function getChartAxisColor() { return isDarkTheme() ? '#a0a0a0' : '#6c757d'; }
+  function getChartSplitColor() { return isDarkTheme() ? '#2a3a5a' : '#e9ecef'; }
+  // ECharts 线性渐变（柱状图填充：顶部不透明→底部半透明）
+  function barGradient(color) {
+    return {type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [
+      {offset: 0, color: color},
+      {offset: 1, color: color + '55'}
+    ]};
+  }
+  // ECharts 面积渐变（折线/面积图填充）
+  function areaGradient(color) {
+    return {type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [
+      {offset: 0, color: color + '99'},
+      {offset: 1, color: color + '0D'}
+    ]};
+  }
+
+  // 根据当前列选择状态动态构建普通图表 ECharts option
+  function buildChartOption(sectionId, chartType) {
+    var d = chartData[sectionId];
+    if (!d) return chartOptions[sectionId + '_' + chartType];
+
+    // 读取列选择状态
+    var selected = {};
+    var checkboxes = document.querySelectorAll('#col_sel_' + sectionId + ' input[type="checkbox"]');
+    for (var i = 0; i < checkboxes.length; i++) {
+      selected[parseInt(checkboxes[i].getAttribute('data-series'))] = checkboxes[i].checked;
+    }
+
+    // 筛选已选系列
+    var activeSeries = [];
+    for (var i = 0; i < d.series.length; i++) {
+      if (selected[i] !== false) {
+        activeSeries.push(d.series[i]);
+      }
+    }
+    if (activeSeries.length === 0) {
+      activeSeries = [d.series[0]];
+    }
+
+    var palette = ['#C8102E', '#182B49', '#5B9BD5', '#ED7D31', '#70AD47', '#A5A5A5', '#FFC000', '#4472C4'];
+    var legendData = activeSeries.map(function(s){return s.name;});
+
+    // 主题相关公共配置
+    var tipBg = isDarkTheme() ? '#16213e' : '#ffffff';
+    var tipBorder = isDarkTheme() ? '#2a3a5a' : '#e9ecef';
+    var tipText = isDarkTheme() ? '#e0e0e0' : '#1a1a2e';
+    var tipCss = 'box-shadow: 0 2px 10px rgba(0,0,0,0.15); border-radius: 8px;';
+    var axisColor = getChartAxisColor();
+    var splitColor = getChartSplitColor();
+    var titleColor = getChartTextColor();
+    var symbolBorder = isDarkTheme() ? '#16213e' : '#ffffff';
+    var pieBorder = isDarkTheme() ? '#16213e' : '#ffffff';
+    var isMultiLevel = !!(d.categoryGroups && d.categoryGroups.length > 0);
+    var baseGrid = {left: '3%', right: '4%', bottom: isMultiLevel ? '22%' : '15%', top: '15%', containLabel: true};
+    function catAxis() {
+      if (isMultiLevel) {
+        // 原生多级分类轴：双 xAxis 数组（ECharts 原生支持）
+        // 第一级：父分组（组首显示名称，长刻度线形成分组带，视觉上居中分组）
+        // 第二级：子分类（每个都显示，短刻度线对齐标签）
+        var groups = d.categoryGroups;
+        var childCats = d.categories;
+        var parentData = [];
+        for (var g = 0; g < groups.length; g++) {
+          for (var j = 0; j < groups[g].count; j++) {
+            parentData.push(j === 0 ? groups[g].name : '');
+          }
+        }
+        return [
+          {
+            // 第一级（靠近图表）：子分类，每个都显示，对齐数据点
+            type: 'category',
+            data: childCats,
+            axisLabel: { interval: 0, color: axisColor },
+            axisTick: { alignWithLabel: true },
+            axisLine: { lineStyle: { color: axisColor } },
+            splitLine: { show: false }
+          },
+          {
+            // 第二级（下方）：父分组，组首显示名称，长刻度线形成分组带
+            type: 'category',
+            data: parentData,
+            axisLabel: { interval: 0, color: axisColor, margin: 14, fontSize: 12, fontWeight: 'bold' },
+            axisTick: {
+              alignWithLabel: false,
+              length: 28,
+              interval: function(index) { return parentData[index] !== ''; }
+            },
+            axisLine: { lineStyle: { color: axisColor } }
+          }
+        ];
+      }
+      return { type: 'category', data: d.categories, axisLabel: { rotate: 30, color: axisColor }, axisLine: { lineStyle: { color: axisColor } }, splitLine: { lineStyle: { color: splitColor } } };
+    }
+    function valAxis() { return {type: 'value', axisLabel: {formatter: yAxisLabelFormatter, color: axisColor}, axisLine: {lineStyle: {color: axisColor}}, splitLine: {lineStyle: {color: splitColor}}}; }
+
+    if (chartType === 'pie') {
+      var s = activeSeries[0];
+      var pieData = [];
+      for (var i = 0; i < d.categories.length; i++) {
+        pieData.push({name: d.categories[i], value: (s.data[i] || 0)});
+      }
+      var total = 0;
+      for (var i = 0; i < pieData.length; i++) total += pieData[i].value;
+      return {
+        title: {text: d.title, left: 'center', textStyle: {fontSize: 14, color: titleColor}},
+        tooltip: {trigger: 'item', formatter: function(p){ return p.name + ': ' + formatNumber(p.value, isPctName(p.seriesName)) + ' (' + p.percent.toFixed(1) + '%)'; }, backgroundColor: tipBg, borderColor: tipBorder, borderWidth: 1, textStyle: {color: tipText}, extraCssText: tipCss},
+        legend: {orient: 'vertical', left: 'left', textStyle: {color: axisColor}},
+        graphic: {type: 'text', left: 'center', top: 'center', style: {text: '总计\n' + formatNumber(total, isPctName(d.title)), textAlign: 'center', textVerticalAlign: 'middle', fontSize: 13, fill: titleColor}},
+        series: [{
+          type: 'pie', radius: ['45%', '72%'], center: ['50%', '50%'],
+          avoidLabelOverlap: true, label: {show: true, color: axisColor},
+          itemStyle: {borderRadius: 6, borderColor: pieBorder, borderWidth: 2},
+          data: pieData,
+        }],
+        animationDuration: 1000, animationEasing: 'cubicOut',
+      };
+    }
+
+    if (chartType === 'line') {
+      var series = [];
+      for (var i = 0; i < activeSeries.length; i++) {
+        var c = palette[i % palette.length];
+        series.push({
+          name: activeSeries[i].name, type: 'line', data: activeSeries[i].data,
+          smooth: true, symbol: 'circle', symbolSize: 8,
+          lineStyle: {width: 3, color: c}, itemStyle: {color: c, borderColor: symbolBorder, borderWidth: 2},
+          label: {show: true, position: 'top', fontSize: 11, color: c, formatter: function(p){ return formatNumber(p.value, isPctName(p.seriesName)); }},
+        });
+      }
+      return {
+        title: {text: d.title, left: 'center', textStyle: {fontSize: 14, color: titleColor}},
+        tooltip: {trigger: 'axis', formatter: axisTipFormatter, backgroundColor: tipBg, borderColor: tipBorder, borderWidth: 1, textStyle: {color: tipText}, extraCssText: tipCss},
+        legend: {data: legendData, bottom: 0, textStyle: {color: axisColor}},
+        grid: baseGrid,
+        xAxis: catAxis(),
+        yAxis: valAxis(),
+        series: series,
+        animationDuration: 1000, animationEasing: 'cubicOut',
+      };
+    }
+
+    // 面积图：折线 + 大面积渐变填充
+    if (chartType === 'area') {
+      var series = [];
+      for (var i = 0; i < activeSeries.length; i++) {
+        var c = palette[i % palette.length];
+        series.push({
+          name: activeSeries[i].name, type: 'line', data: activeSeries[i].data,
+          smooth: true, symbol: 'circle', symbolSize: 8,
+          lineStyle: {width: 3, color: c}, itemStyle: {color: c, borderColor: symbolBorder, borderWidth: 2},
+          areaStyle: {color: areaGradient(c), opacity: 0.5},
+          label: {show: true, position: 'top', fontSize: 11, color: c, formatter: function(p){ return formatNumber(p.value, isPctName(p.seriesName)); }},
+        });
+      }
+      return {
+        title: {text: d.title, left: 'center', textStyle: {fontSize: 14, color: titleColor}},
+        tooltip: {trigger: 'axis', formatter: axisTipFormatter, backgroundColor: tipBg, borderColor: tipBorder, borderWidth: 1, textStyle: {color: tipText}, extraCssText: tipCss},
+        legend: {data: legendData, bottom: 0, textStyle: {color: axisColor}},
+        grid: baseGrid,
+        xAxis: catAxis(),
+        yAxis: valAxis(),
+        series: series,
+        animationDuration: 1000, animationEasing: 'cubicOut',
+      };
+    }
+
+    // 雷达图：每个分类作为一个维度
+    if (chartType === 'radar') {
+      var indicators = [];
+      for (var c = 0; c < d.categories.length; c++) {
+        var mx = 0;
+        for (var i = 0; i < activeSeries.length; i++) {
+          var v = activeSeries[i].data[c] || 0;
+          if (v > mx) mx = v;
+        }
+        indicators.push({name: d.categories[c], max: Math.ceil(mx * 1.1) || 1});
+      }
+      var radarData = [];
+      for (var i = 0; i < activeSeries.length; i++) {
+        radarData.push({name: activeSeries[i].name, value: activeSeries[i].data, itemStyle: {color: palette[i % palette.length]}, areaStyle: {opacity: 0.2}});
+      }
+      return {
+        title: {text: d.title, left: 'center', textStyle: {fontSize: 14, color: titleColor}},
+        tooltip: {trigger: 'item', backgroundColor: tipBg, borderColor: tipBorder, borderWidth: 1, textStyle: {color: tipText}, extraCssText: tipCss},
+        legend: {data: legendData, bottom: 0, textStyle: {color: axisColor}},
+        radar: {indicator: indicators, radius: '65%', axisName: {color: axisColor}, splitLine: {lineStyle: {color: splitColor}}, splitArea: {areaStyle: {color: [tipBg, 'transparent']}}},
+        series: [{type: 'radar', data: radarData}],
+        animationDuration: 1000, animationEasing: 'cubicOut',
+      };
+    }
+
+    // 散点图：前两个数值列作为 x/y
+    if (chartType === 'scatter') {
+      var xS = activeSeries[0];
+      var yS = activeSeries[1] || activeSeries[0];
+      var scatterData = [];
+      for (var i = 0; i < xS.data.length; i++) {
+        scatterData.push([xS.data[i] || 0, yS.data[i] || 0, d.categories[i] || ('项' + (i+1))]);
+      }
+      var xName = xS.name, yName = yS.name;
+      return {
+        title: {text: d.title, left: 'center', textStyle: {fontSize: 14, color: titleColor}},
+        tooltip: {trigger: 'item', formatter: function(p){ return p.value[2] + '<br/>' + xName + ': ' + formatNumber(p.value[0], isPctName(xName)) + '<br/>' + yName + ': ' + formatNumber(p.value[1], isPctName(yName)); }, backgroundColor: tipBg, borderColor: tipBorder, borderWidth: 1, textStyle: {color: tipText}, extraCssText: tipCss},
+        legend: {data: [xName + ' vs ' + yName], bottom: 0, textStyle: {color: axisColor}},
+        grid: baseGrid,
+        xAxis: {type: 'value', name: xName, nameLocation: 'middle', nameGap: 30, nameTextStyle: {color: axisColor}, axisLabel: {color: axisColor}, axisLine: {lineStyle: {color: axisColor}}, splitLine: {lineStyle: {color: splitColor}}},
+        yAxis: {type: 'value', name: yName, nameLocation: 'middle', nameGap: 40, nameTextStyle: {color: axisColor}, axisLabel: {formatter: yAxisLabelFormatter, color: axisColor}, axisLine: {lineStyle: {color: axisColor}}, splitLine: {lineStyle: {color: splitColor}}},
+        series: [{type: 'scatter', data: scatterData, symbolSize: 10, itemStyle: {color: palette[0]}}],
+        animationDuration: 1000, animationEasing: 'cubicOut',
+      };
+    }
+
+    // bar (default) —— 支持 stack 切换，柱状图用线性渐变填充
+    var stackKey = (window._stackState && window._stackState[sectionId]) ? 'stack_' + sectionId : null;
+    var series = [];
+    for (var i = 0; i < activeSeries.length; i++) {
+      var c = palette[i % palette.length];
+      var item = {
+        name: activeSeries[i].name, type: 'bar', data: activeSeries[i].data,
+        itemStyle: {color: barGradient(c), borderRadius: [6, 6, 0, 0]},
+        label: {show: true, position: 'top', fontSize: 11, color: '#555', formatter: function(p){ return formatNumber(p.value, isPctName(p.seriesName)); }},
+      };
+      if (stackKey) item.stack = stackKey;
+      series.push(item);
+    }
+    return {
+      title: {text: d.title, left: 'center', textStyle: {fontSize: 14, color: titleColor}},
+      tooltip: {trigger: 'axis', axisPointer: {type: 'shadow'}, formatter: axisTipFormatter, backgroundColor: tipBg, borderColor: tipBorder, borderWidth: 1, textStyle: {color: tipText}, extraCssText: tipCss},
+      legend: {data: legendData, bottom: 0, textStyle: {color: axisColor}},
+      grid: baseGrid,
+      xAxis: catAxis(),
+      yAxis: valAxis(),
+      series: series,
+      animationDuration: 1000, animationEasing: 'cubicOut',
+    };
+  }
+
+  // 列选择复选框变更时重新渲染图表
+  function onColChange(sectionId) {
+    var btns = document.querySelectorAll('#' + sectionId + ' .chart-btn');
+    var currentType = 'bar';
+    for (var i = 0; i < btns.length; i++) {
+      if (btns[i].classList.contains('active')) {
+        var m = btns[i].getAttribute('onclick').match(/'([^']+)'/g);
+        if (m && m.length >= 2) {
+          currentType = m[1].replace(/'/g, '');
+        }
+      }
+    }
+    renderChart(sectionId, currentType);
+  }
+
+  // 全选/取消全选
+  function onGeoFilterAllChange(sectionId) {
+    var allBox = document.querySelector('input[name="geo_fv_' + sectionId + '"][value="__all__"]');
+    var boxes = document.querySelectorAll('input[name="geo_fv_' + sectionId + '"]:not([value="__all__"])');
+    for (var i = 0; i < boxes.length; i++) {
+      boxes[i].checked = allBox.checked;
+    }
+    onGeoMetricChange(sectionId);
+  }
+
+  function switchChart(sectionId, chartType) {
+    var btns = document.querySelectorAll('#' + sectionId + ' .chart-btn');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.remove('active');
+    }
+    event.target.classList.add('active');
+    renderChart(sectionId, chartType);
+  }
+  
+  function toggleZoom(img) {
+    img.classList.toggle('zoomed');
+    document.body.style.overflow = img.classList.contains('zoomed') ? 'hidden' : '';
+  }
+  
+  function scrollToTop() {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  
+  // 列选择全选/全不选（任务6）
+  function onColSelectAll(sectionId, checked) {
+    var checkboxes = document.querySelectorAll('#col_sel_' + sectionId + ' input[type="checkbox"][data-series]');
+    for (var i = 0; i < checkboxes.length; i++) {
+      checkboxes[i].checked = checked;
+    }
+    onColChange(sectionId);
+  }
+
+  // 表格排序：点击表头切换升/降/原序（任务7）
+  var _tableOrigOrder = {};
+  function sortTable(sectionId, colIdx) {
+    var table = document.getElementById('table_' + sectionId);
+    if (!table) return;
+    var tbody = table.tBodies[0];
+    if (!tbody) return;
+    var th = table.querySelector('th[data-col="' + colIdx + '"]');
+    if (!th) return;
+    if (!_tableOrigOrder[sectionId]) {
+      _tableOrigOrder[sectionId] = Array.prototype.slice.call(tbody.rows);
+    }
+    var order = th.getAttribute('data-sort') || '';
+    var newOrder = order === 'asc' ? 'desc' : (order === 'desc' ? '' : 'asc');
+    var allTh = table.querySelectorAll('th');
+    for (var i = 0; i < allTh.length; i++) {
+      allTh[i].setAttribute('data-sort', '');
+      var ar = allTh[i].querySelector('.sort-arrow');
+      if (ar) ar.textContent = '';
+    }
+    th.setAttribute('data-sort', newOrder);
+    var arrowEl = th.querySelector('.sort-arrow');
+    if (arrowEl) arrowEl.textContent = newOrder === 'asc' ? '▲' : (newOrder === 'desc' ? '▼' : '');
+    if (newOrder === '') {
+      var orig = _tableOrigOrder[sectionId];
+      for (var i = 0; i < orig.length; i++) tbody.appendChild(orig[i]);
+      return;
+    }
+    var rows = Array.prototype.slice.call(tbody.rows);
+    rows.sort(function(a, b) {
+      var av = a.cells[colIdx] ? a.cells[colIdx].textContent.trim() : '';
+      var bv = b.cells[colIdx] ? b.cells[colIdx].textContent.trim() : '';
+      var an = parseFloat(av.replace(/,/g, '')), bn = parseFloat(bv.replace(/,/g, ''));
+      if (!isNaN(an) && !isNaN(bn)) return newOrder === 'asc' ? an - bn : bn - an;
+      return newOrder === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+    for (var i = 0; i < rows.length; i++) tbody.appendChild(rows[i]);
+  }
+
+  // 表格搜索：实时过滤行（任务7）
+  function filterTable(sectionId, keyword) {
+    var table = document.getElementById('table_' + sectionId);
+    if (!table || !table.tBodies[0]) return;
+    var kw = (keyword || '').toLowerCase().trim();
+    var rows = table.tBodies[0].rows;
+    for (var i = 0; i < rows.length; i++) {
+      if (!kw) { rows[i].classList.remove('hidden'); }
+      else { rows[i].classList.toggle('hidden', rows[i].textContent.toLowerCase().indexOf(kw) === -1); }
+    }
+  }
+
+  // 导出表格为 CSV（任务7）
+  function exportTableCSV(sectionId) {
+    var table = document.getElementById('table_' + sectionId);
+    if (!table) return;
+    function csvCell(v) {
+      v = (v === null || v === undefined) ? '' : String(v);
+      if (v.indexOf(',') >= 0 || v.indexOf('"') >= 0 || v.indexOf('\n') >= 0) v = '"' + v.replace(/"/g, '""') + '"';
+      return v;
+    }
+    var rows = [];
+    var headCells = table.querySelectorAll('thead th');
+    var headRow = [];
+    for (var i = 0; i < headCells.length; i++) headRow.push(csvCell(headCells[i].textContent.replace(/[▲▼]/g, '').trim()));
+    rows.push(headRow.join(','));
+    var bodyRows = table.querySelectorAll('tbody tr');
+    for (var i = 0; i < bodyRows.length; i++) {
+      if (bodyRows[i].classList.contains('hidden')) continue;
+      var cells = bodyRows[i].cells;
+      var rowData = [];
+      for (var j = 0; j < cells.length; j++) rowData.push(csvCell(cells[j].textContent));
+      rows.push(rowData.join(','));
+    }
+    var csv = '\ufeff' + rows.join('\n');
+    var blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = sectionId + '.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // 图表全屏切换（任务8）
+  function toggleChartFullscreen(sectionId) {
+    var ctr = document.getElementById('chart_ctr_' + sectionId);
+    if (!ctr) return;
+    ctr.classList.toggle('fullscreen');
+    if (chartInstances[sectionId]) setTimeout(function(){ chartInstances[sectionId].resize(); }, 100);
+  }
+
+  // 导出图表为 PNG（任务8）：背景色随主题
+  function exportChartPNG(sectionId) {
+    if (!chartInstances[sectionId]) return;
+    var bg = isDarkTheme() ? '#16213e' : '#ffffff';
+    var url = chartInstances[sectionId].getDataURL({type: 'png', pixelRatio: 2, backgroundColor: bg});
+    var a = document.createElement('a');
+    a.href = url; a.download = sectionId + '.png';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+
+  // 堆叠/并排切换（仅柱状图，任务8）
+  function toggleStack(sectionId) {
+    if (!window._stackState) window._stackState = {};
+    window._stackState[sectionId] = !window._stackState[sectionId];
+    onColChange(sectionId);
+  }
+
+  // 目录展开/收起全部（任务4）
+  function expandAllToc() {
+    var groups = document.querySelectorAll('.toc-group');
+    for (var i = 0; i < groups.length; i++) groups[i].classList.add('open');
+    saveTocState();
+  }
+  function collapseAllToc() {
+    var groups = document.querySelectorAll('.toc-group');
+    for (var i = 0; i < groups.length; i++) groups[i].classList.remove('open');
+    saveTocState();
+  }
+
+  // 单个目录组切换 + 持久化（任务9）
+  function toggleTocGroup(el) {
+    el.parentElement.classList.toggle('open');
+    saveTocState();
+  }
+  function saveTocState() {
+    try {
+      var groups = document.querySelectorAll('.toc-group');
+      var state = [];
+      for (var i = 0; i < groups.length; i++) state.push(groups[i].classList.contains('open'));
+      localStorage.setItem('toc_open_state', JSON.stringify(state));
+    } catch(e) {}
+  }
+  function restoreTocState() {
+    try {
+      var saved = localStorage.getItem('toc_open_state');
+      if (!saved) return;
+      var state = JSON.parse(saved);
+      var groups = document.querySelectorAll('.toc-group');
+      for (var i = 0; i < groups.length && i < state.length; i++) {
+        if (state[i]) groups[i].classList.add('open');
+        else groups[i].classList.remove('open');
+      }
+    } catch(e) {}
+  }
+
+  // 全局搜索：高亮匹配的 section 标题并展开对应目录（任务9）
+  function globalSearch(keyword) {
+    var kw = (keyword || '').toLowerCase().trim();
+    var sections = document.querySelectorAll('.section');
+    var links = document.querySelectorAll('.sidebar a');
+    for (var i = 0; i < sections.length; i++) sections[i].classList.remove('search-hit');
+    for (var i = 0; i < links.length; i++) links[i].classList.remove('search-hit');
+    if (!kw) return;
+    for (var i = 0; i < sections.length; i++) {
+      var titleEl = sections[i].querySelector('h2');
+      if (titleEl && titleEl.textContent.toLowerCase().indexOf(kw) >= 0) {
+        sections[i].classList.add('search-hit');
+        var sid = sections[i].id;
+        for (var j = 0; j < links.length; j++) {
+          if ((links[j].getAttribute('href') || '') === '#' + sid) {
+            links[j].classList.add('search-hit');
+            var grp = links[j].closest('.toc-group');
+            if (grp) grp.classList.add('open');
+          }
+        }
+      }
+    }
+  }
+
+  window.addEventListener('resize', function() {
+    Object.keys(chartInstances).forEach(function(key) {
+      chartInstances[key].resize();
+    });
+  });
+
+  // ESC 退出全屏图表
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' || e.keyCode === 27) {
+      var fs = document.querySelector('.chart-container.fullscreen');
+      if (fs) fs.classList.remove('fullscreen');
+    }
+  });
+
+  // 滚动监听：返回顶部按钮显示 + 目录高亮（任务9）
+  var _backToTopBtn = document.getElementById('backToTopBtn');
+  window.addEventListener('scroll', function() {
+    if (_backToTopBtn) _backToTopBtn.classList.toggle('show', window.pageYOffset > 300);
+  });
+
+  function initScrollSpy() {
+    var sections = document.querySelectorAll('.section[id]');
+    if (!('IntersectionObserver' in window)) return;
+    var io = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          var sid = entry.target.id;
+          var links = document.querySelectorAll('.sidebar a');
+          for (var i = 0; i < links.length; i++) {
+            links[i].classList.toggle('active', (links[i].getAttribute('href') || '') === '#' + sid);
+          }
+        }
+      });
+    }, {rootMargin: '-80px 0px -70% 0px'});
+    for (var i = 0; i < sections.length; i++) io.observe(sections[i]);
+  }
+
+  // 暗色模式：获取当前激活的图表类型
+  function getCurrentChartType(sectionId) {
+    var btns = document.querySelectorAll('#' + sectionId + ' .chart-btn');
+    for (var i = 0; i < btns.length; i++) {
+      if (btns[i].classList.contains('active')) {
+        var m = btns[i].getAttribute('onclick').match(/'([^']+)'$/);
+        if (m) return m[1];
+      }
+    }
+    return 'bar';
+  }
+
+  // 暗色模式：切换主题 + 持久化 + 重新渲染所有图表
+  function toggleTheme() {
+    var cur = document.documentElement.getAttribute('data-theme') || 'light';
+    var next = cur === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('report_theme', next); } catch(e) {}
+    var btn = document.getElementById('themeToggleBtn');
+    if (btn) btn.textContent = next === 'dark' ? '☀️ 亮色模式' : '🌙 暗色模式';
+    // 重新渲染所有已存在的图表以适配主题配色
+    Object.keys(chartInstances).forEach(function(sid) {
+      renderChart(sid, getCurrentChartType(sid));
+    });
+  }
+
+  // 暗色模式：初始化主题（localStorage 优先，否则检测系统偏好）
+  function initTheme() {
+    var theme = 'light';
+    try { theme = localStorage.getItem('report_theme') || ''; } catch(e) {}
+    if (!theme) {
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        theme = 'dark';
+      } else {
+        theme = 'light';
+      }
+    }
+    document.documentElement.setAttribute('data-theme', theme);
+    var btn = document.getElementById('themeToggleBtn');
+    if (btn) btn.textContent = theme === 'dark' ? '☀️ 亮色模式' : '🌙 暗色模式';
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    initTheme();
+    restoreTocState();
+    initCharts();
+    initScrollSpy();
+  });
+</script>
+</body>
+</html>
