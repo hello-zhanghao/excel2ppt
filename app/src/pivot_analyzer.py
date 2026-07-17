@@ -1345,7 +1345,12 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
             # 无行维度：保留全部行
             detail_df = df.reset_index(drop=True)
         block_name = task.get("区块名", "") or task.get("结果Sheet", f"结果{序号}")
-        return {block_name: detail_df}, None
+        result = {block_name: detail_df}
+        # 明细模式也输出 JOIN 中间表（如果任务含 JOIN），供人工检查
+        if join_happened and join_df_original is not None and not join_df_original.empty:
+            结果Sheet = task.get("结果Sheet", f"结果{序号}")
+            result[f"_JOIN中间表_{结果Sheet}"] = join_df_original
+        return result, None
 
     for col in 值字段:
         af_for_col = _get_agg_for_col(col, 聚合函数, 值字段)

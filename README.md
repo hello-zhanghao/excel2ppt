@@ -244,6 +244,24 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.1 (2026-07-17)
+
+**🔧 明细模式结果写入中间表 Excel（`_JOIN中间表.xlsx`），用 `[明细]` 前缀区分**
+
+**问题**：v2.53.1 明细模式结果只存内存，运行结束后无法人工检查。
+
+**修复**：
+- [main.py](file:///f:/【1】AI探索/【3】excel2ppt/app/main.py)：明细模式结果存入 `join_intermediate`，key 为 `[明细]任务{seq}_{sheet_name}`，写入 `_JOIN中间表.xlsx`（sheet 名 `_明细_任务{seq}_{sheet_name}`）。日志提示"已保存至中间表"
+- [pivot_analyzer.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py)：明细模式提前 return 前也存入 `_JOIN中间表_`（修复之前因 early return 跳过 JOIN 中间表写入的问题）
+- 日志措辞优化：`1 个 JOIN + 1 个明细` 替代 `2 个 JOIN 任务`
+
+**中间表 Excel 示例**：
+```
+Sheets: ['任务2_join明细', '_明细_任务2_join明细']
+```
+- `任务2_join明细`：JOIN 后未经聚合的原始数据（人工核对 JOIN 是否正确）
+- `_明细_任务2_join明细`：明细模式结果（经过滤/映射后、跳过聚合的完整列）
+
 ### v2.54.0 (2026-07-17)
 
 **📝 映射列别名清理：统一为 行映射 / 列映射 / 值映射**
