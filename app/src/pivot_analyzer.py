@@ -186,6 +186,85 @@ def _join_unique(series, sep: str = _JOIN_DEFAULT_SEP) -> str:
     return sep.join(sorted(seen_set))
 
 
+def _resolve_export_cols_from_sheet(cols_str, config_path):
+    """解析 ``@Sheet名@列标识`` 语法，从配置文件另一个 sheet 读取列清单。
+
+    场景：导出列很多时，在配置 Excel 里加一个 sheet（如"列清单"），
+    A 列逐行写列名，导出列单元格填 ``@列清单@A`` 即可引用，避免手写一长串。
+
+    语法：
+      - ``@Sheet名@A``       → 取该 sheet 的 A 列所有非空值（跳过表头）
+      - ``@Sheet名@列标题``   → 取该 sheet 中第一行匹配"列标题"的列
+      - ``@文件名@Sheet名@列标识`` → 从外部 Excel 文件取（相对配置文件目录）
+
+    列清单去重去空、保留首次出现顺序。
+
+    :return: 解析成功返回逗号分隔的列名串；非 @ 语法或解析失败原样返回。
+    """
+    if not cols_str or not str(cols_str).lstrip().startswith("@"):
+        return cols_str
+    s = str(cols_str).strip().lstrip("@")
+    parts = s.split("@")
+    # 三段：@文件@Sheet@列标识；两段：@Sheet@列标识（配置文件自身）
+    if len(parts) == 3:
+        file_name, sheet_name_ref, col_ref = parts
+        file_path = os.path.join(os.path.dirname(config_path), file_name.strip())
+    elif len(parts) == 2:
+        file_path = config_path
+        sheet_name_ref, col_ref = parts
+    else:
+        return cols_str
+
+    sheet_name_ref = sheet_name_ref.strip()
+    col_ref = col_ref.strip()
+    if not sheet_name_ref or not col_ref:
+        return cols_str
+
+    try:
+        from openpyxl.utils import get_column_letter, column_index_from_string
+        wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+        if sheet_name_ref not in wb.sheetnames:
+            wb.close()
+            return cols_str  # 找不到 sheet，原样返回让下游报错
+        ws = wb[sheet_name_ref]
+        rows = list(ws.iter_rows(values_only=True))
+        wb.close()
+        if not rows:
+            return cols_str
+
+        header = rows[0]
+        col_idx = None
+        # 1. 列字母（A/B/C...）
+        try:
+            col_idx = column_index_from_string(col_ref.upper()) - 1
+            if col_idx < 0 or col_idx >= len(header):
+                col_idx = None
+        except ValueError:
+            pass
+        # 2. 列标题（第一行匹配）
+        if col_idx is None:
+            for i, h in enumerate(header):
+                if h is not None and str(h).strip() == col_ref:
+                    col_idx = i
+                    break
+        if col_idx is None:
+            return cols_str
+
+        # 收集该列所有非空值（跳过表头），去重保序
+        cols = []
+        seen = set()
+        for row in rows[1:]:
+            v = row[col_idx] if col_idx < len(row) else None
+            if v is not None and str(v).strip():
+                cell = str(v).strip()
+                if cell not in seen:
+                    seen.add(cell)
+                    cols.append(cell)
+        return ",".join(cols) if cols else cols_str
+    except Exception:
+        return cols_str
+
+
 def read_pivot_config(config_path, sheet_name=None):
     wb = openpyxl.load_workbook(config_path, data_only=True)
 
@@ -243,6 +322,9 @@ def read_pivot_config(config_path, sheet_name=None):
         task["是否计算"] = str(item.get("是否计算", "是")).strip() if item.get("是否计算") else "是"
         task["过滤条件"] = str(item.get("过滤条件", "")).strip() if item.get("过滤条件") else ""
         task["导出列"] = str(item.get("导出列", "")).strip() if item.get("导出列") else ""
+        # 导出列支持 @Sheet名@列标识 语法：从配置文件另一个 sheet 读取列清单
+        if task["导出列"]:
+            task["导出列"] = _resolve_export_cols_from_sheet(task["导出列"], config_path)
 
         # 明细模式（聚合方式=明细/raw/passthrough 等）允许行维度和值字段都为空（保留全部行）
         _agg_check = (task["聚合方式"] or "sum").strip().lower()
