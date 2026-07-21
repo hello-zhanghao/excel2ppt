@@ -464,7 +464,9 @@ def read_pivot_config(config_path, sheet_name=None):
             task["导出列"] = _resolve_export_cols_from_sheet(task["导出列"], config_path)
 
         # v2.54.13+ 移除明细模式：行维度和值字段都为空时跳过任务（无聚合内容）
-        if not task["行维度"] and not task["值字段"]:
+        # v2.54.14+ 例外：JOIN 场景允许行维度+值字段都为空（JOIN 原始输出模式）
+        _is_join_source_read = _parse_join_spec(str(task["数据源"])) is not None
+        if not task["行维度"] and not task["值字段"] and not _is_join_source_read:
             continue
 
         tasks.append(task)
@@ -1122,8 +1124,9 @@ def validate_pivot_config(tasks, config_dir):
             continue
         
         # 1. 检查必填项
-        # v2.54.13+ 移除明细模式：值字段必填
-        if not 值字段_str:
+        # v2.54.14+ JOIN 原始输出模式：JOIN 场景允许值字段为空（主结果 sheet = JOIN 原始数据）
+        _is_join_source_validate = _parse_join_spec(str(data_source)) is not None
+        if not 值字段_str and not _is_join_source_validate:
             results.append({
                 "task_seq": seq,
                 "level": "error",
@@ -1574,8 +1577,11 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
     聚合方式_str = task.get("聚合方式", "sum")
     sheet_name = task.get("sheet", "Sheet1")
 
-    # v2.54.13+ 移除明细模式：值字段必填，不再支持 JOIN 空值字段自动降级
-    if not 值字段_str:
+    # v2.54.14+ JOIN 原始输出模式：数据源含 JOIN 且值字段为空时，主结果 sheet = JOIN 原始数据
+    # 适用场景：JOIN 仅作中间结果供下游任务通过 {结果Sheet名.区块名} 引用，不需要聚合
+    # 主结果 sheet 应用导出列裁剪 + 自动保留 ON 键列，不生成 _JOIN中间表_（避免重复）
+    _is_join_source = _parse_join_spec(str(data_source)) is not None
+    if not 值字段_str and not _is_join_source:
         return None, f"[任务{序号}] 未指定值字段"
 
     行维度_str = 行维度_str or ""
@@ -1725,6 +1731,19 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
             hint_parts.append("前序任务可能通过「值映射」重命名了列，请检查前序任务的值映射配置，用映射后的列名引用")
         hint = "。提示：" + "；".join(hint_parts) if hint_parts else ""
         return None, f"[任务{序号}] 列不存在: {missing_cols}。可用列: {avail_str}{hint}"
+
+    # v2.54.14+ JOIN 原始输出模式：JOIN + 值字段为空时，只生成 _JOIN中间表_，不生成主结果 sheet
+    # 适用场景：JOIN 仅作中间结果供下游任务通过 {结果Sheet名.区块名} 引用，不需要聚合
+    # main.py 识别 _JOIN中间表_ 后：不写主结果 sheet，但把 JOIN 数据存入 block_results 供下游引用
+    if _is_join_source and not 值字段_str:
+        if join_happened and join_df_original is not None and not join_df_original.empty:
+            结果Sheet = task.get("结果Sheet", f"结果{序号}")
+            join_df_cropped = _apply_export_cols_to_join(join_df_original, task, 行维度, 序号, join_on_keys)
+            print(f"    [JOIN原始输出] 任务{序号}: 值字段为空，只生成 _JOIN中间表_{结果Sheet}（{join_df_cropped.shape[0]}行 x {join_df_cropped.shape[1]}列），不生成主结果 sheet")
+            # 只返回 _JOIN中间表_，main.py 会识别并：1) 存入 block_results 供下游引用 2) 不写主结果 sheet
+            return {f"_JOIN中间表_{结果Sheet}": join_df_cropped}, None
+        else:
+            return None, f"[任务{序号}] JOIN 数据加载失败或为空，无法输出原始数据"
 
     # v2.54.13+ 移除明细模式分支：所有任务都走聚合路径（含 JOIN 场景）
     for col in 值字段:

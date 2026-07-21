@@ -244,6 +244,48 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.14 (2026-07-21)
+
+**✨ JOIN 原始输出模式：JOIN 仅作中间结果供下游引用**
+
+**场景**：用户希望 JOIN 行配置只生成中间结果供后续任务通过 `{结果Sheet名.区块名}` 引用，不需要聚合，也不需要主结果 sheet。v2.54.13 移除明细模式后此场景无法实现。
+
+**新行为**：数据源含 JOIN 且值字段为空时，自动进入"JOIN 原始输出模式"：
+- **只生成 `_JOIN中间表_`**（写入独立的 `{输出stem}_JOIN中间表.xlsx` 文件）
+- **不生成主结果 sheet**（不污染主结果 Excel）
+- **同时存入 `block_results`**，后续任务可通过 `{区块名}` 或 `{结果Sheet名.区块名}` 引用此 JOIN 原始数据
+- 导出列裁剪 + 自动保留 ON 键列仍生效（裁剪后的数据同时写入中间表文件和 block_results）
+
+**改动文件**：[`app/src/pivot_analyzer.py`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py) + [`app/main.py`](file:///f:/【1】AI探索/【3】excel2ppt/app/main.py)，共 5 处：
+
+1. [`pivot_analyzer.py` `read_pivot_config` L466-470](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L466-L470)：JOIN 场景行维度+值字段都为空时不跳过任务（其他场景仍跳过）
+
+2. [`pivot_analyzer.py` `validate_pivot_config` L1124-1133](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L1124-L1133)：JOIN 场景允许值字段为空（其他场景仍报"值字段不能为空"）
+
+3. [`pivot_analyzer.py` `run_analysis` L1577-1582](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L1577-L1582)：值字段校验放宽——JOIN 场景 + 值字段为空时不报错，非 JOIN 仍报"未指定值字段"
+
+4. [`pivot_analyzer.py` `run_analysis` L1735-1746](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L1735-L1746)：新增 JOIN 原始输出早返回分支——JOIN + 值字段为空时，只返回 `{_JOIN中间表_{结果Sheet}: join_df_cropped}`（应用 `_apply_export_cols_to_join` 裁剪），不进入聚合路径，打印 `[JOIN原始输出] 任务X: 值字段为空，只生成 _JOIN中间表_{结果Sheet}（X行 x Y列），不生成主结果 sheet`
+
+5. [`main.py` `_run_pivot_mode` L621-643](file:///f:/【1】AI探索/【3】excel2ppt/app/main.py#L621-L643)：识别 JOIN 原始输出模式（剥离 `_JOIN中间表_` 后 result 为空 dict）→ `results.append(None)`（不写主结果 sheet），但把 JOIN 数据存入 `block_results` 供下游 `{区块名}` 引用，打印 `[JOIN原始输出] [任务X] {区块名} -> 仅存入 block_results 供下游引用（不写主结果 sheet）`
+
+**典型配置**：
+
+| 序号 | 数据源 | 值字段 | 聚合方式 | 结果Sheet | 导出列 |
+|------|--------|--------|----------|-----------|--------|
+| 1 | `A@S1 JOIN B@S1 ON id=id` | （空） | （空） | 中间结果 | id,name,name_b,value_a |
+| 2 | `{中间结果}` | value_a | sum | 最终结果 | |
+
+任务1 值字段留空 → 只在 `_JOIN中间表.xlsx` 写入 `任务1_中间结果` sheet，主结果 Excel 不含此 sheet，但 `block_results["中间结果"]` 存入 JOIN 原始数据。任务2 通过 `{中间结果}` 引用，做进一步聚合。
+
+**测试覆盖**：
+- 场景1：JOIN + 空值字段 → 只生成 `_JOIN中间表_`，无主结果 sheet ✓
+- 场景2：JOIN + 空值字段 + 导出列 → 中间表按导出列裁剪 + 自动保留 ON 键 `id` ✓
+- 场景3：JOIN + 值字段（正常聚合）→ 仍生成 主结果 + `_JOIN中间表_` 两张 sheet ✓
+- 场景4：非 JOIN + 空值字段 → 仍报错"未指定值字段" ✓
+- **端到端**：任务1 JOIN 原始输出 → 任务2 通过 `{区块名}` 引用做聚合 → 主结果 Excel 只含任务2 sheet，`_JOIN中间表.xlsx` 含任务1 数据 ✓
+
+防护用例全量回归 ✓（PPT 23页、Excel 32 sheet、模板填充 12页、HTML 报告均通过）。
+
 ### v2.54.13 (2026-07-21)
 
 **🔥 移除明细模式（refactor）**
