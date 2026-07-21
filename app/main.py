@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.54.11"
+__VERSION__ = "2.54.13"
 __UPDATE_DATE__ = "2026-07-21"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -618,29 +618,16 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
                         join_intermediate[f"任务{seq}_{orig_sheet}"] = join_df
                         print(f"    [JOIN] [任务{seq}] 中间表已收集: {orig_sheet} -> {join_df.shape[0]}行 x {join_df.shape[1]}列")
 
-                # 明细模式：结果仅作中间数据供后续任务引用，不写入主结果 Excel
-                # 但写入 _JOIN中间表.xlsx 供人工检查（用 [明细] 前缀区分 JOIN 中间表）
-                # 适用场景：原表 JOIN 前序拼接结果等"中间步骤"，不应污染最终输出
-                _agg_check = str(task.get("聚合方式", "sum")).strip().lower()
-                _is_detail_mode = _agg_check in ("明细", "raw", "passthrough", "detail", "原样", "不聚合")
-
+                # v2.54.13+ 移除明细模式：所有任务结果都写入主结果 Excel
                 if isinstance(result, dict):
                     for key, df in result.items():
                         if hasattr(df, "shape"):
-                            tag = "[明细]" if _is_detail_mode else "[OK]"
-                            detail_note = ""
-                            if _is_detail_mode:
-                                # 写入中间表 Excel 供检查
-                                detail_key = f"[明细]任务{seq}_{sheet_name}"
-                                join_intermediate[detail_key] = df
-                                detail_note = "（仅中间数据，不写入主Excel，已保存至中间表）"
-                            print(f"    {tag} [任务{seq}] {sheet_name} -> {df.shape[0]}行 x {df.shape[1]}列{detail_note}")
+                            print(f"    [OK] [任务{seq}] {sheet_name} -> {df.shape[0]}行 x {df.shape[1]}列")
                         else:
                             print(f"    [OK] [任务{seq}] {sheet_name} (标量)")
                 else:
                     print(f"    [OK] [任务{seq}] {sheet_name}")
-                # 明细模式：不 append 到 results（不写入主 Excel），但 block_results 仍存入供后续引用
-                results.append(None if _is_detail_mode else result)
+                results.append(result)
                 # 收集无行维度任务产生的标量，供后续任务公式引用
                 task_scalars = collect_task_scalars(result)
                 if task_scalars:
@@ -703,19 +690,13 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
     valid_tasks = [t for t, r in zip(tasks, results) if r is not None]
     write_results(valid_tasks, valid_results, errors, output_path)
 
-    # 中间表单独写入 Excel（含 JOIN 中间表 + 明细模式中间结果），方便检查
+    # 中间表单独写入 Excel（JOIN 中间表），方便检查
     # 文件名：{输出文件stem}_JOIN中间表.xlsx
     if join_intermediate:
         join_output_path = _write_join_intermediate(output_path, join_intermediate)
         if join_output_path:
-            join_count = sum(1 for k in join_intermediate if not str(k).startswith("[明细]"))
-            detail_count = sum(1 for k in join_intermediate if str(k).startswith("[明细]"))
-            parts = []
-            if join_count:
-                parts.append(f"{join_count} 个 JOIN")
-            if detail_count:
-                parts.append(f"{detail_count} 个明细")
-            print(f"   中间表已保存至: {join_output_path}（{' + '.join(parts)}）")
+            # v2.54.13+ 移除明细模式：中间表只含 JOIN 中间表，不再有 [明细] 前缀
+            print(f"   中间表已保存至: {join_output_path}（{len(join_intermediate)} 个 JOIN）")
 
     print(f"\n[OK] 完成！分析结果已保存至: {output_path}")
     print(f"   共 {len(tasks)} 个任务: {len(valid_tasks)} 个成功" + (f", {skipped} 个跳过" if skipped else "") + (f", {len(errors)} 个失败" if errors else ""))

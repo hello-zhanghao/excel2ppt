@@ -244,6 +244,58 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.13 (2026-07-21)
+
+**🔥 移除明细模式（refactor）**
+
+**背景**：明细模式（聚合方式填 `明细`/`raw`/`passthrough`/`detail`/`原样`/`不聚合`）原本用于"跳过聚合直接输出 JOIN 后的全部列"，但实际使用中：
+- 主结果 sheet 与 `_JOIN中间表_` 内容重复（都是 JOIN 原始数据）
+- 用户反馈"两张 sheet 重复了，目前没啥用"
+- v2.54.12 试图通过"明细+JOIN 跳过主结果 sheet"修复重复问题，但用户决定直接移除整个明细模式
+
+**移除范围**：
+
+1. [`pivot_analyzer.py` `read_pivot_config`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L466-L468)：移除"明细模式允许行维度+值字段都为空"豁免，行维度和值字段都为空时跳过任务
+
+2. [`pivot_analyzer.py` `validate_pivot_config`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L1124-L1163)：移除"明细模式允许值字段为空"豁免，移除"明细模式跳过聚合方式校验"特殊逻辑，所有任务统一走聚合方式合法性检查
+
+3. [`pivot_analyzer.py` `run_analysis` L1577-1579](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L1577-L1579)：移除 v2.54.12 的"JOIN+空值字段自动降级为明细模式"，恢复原始值字段必填校验
+
+4. [`pivot_analyzer.py` `run_analysis` L1729](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L1729)：移除整个明细模式分支（~25 行），所有任务统一走聚合路径（含 JOIN 场景）
+
+5. [`main.py` `_run_pivot_mode` L621-630](file:///f:/【1】AI探索/【3】excel2ppt/app/main.py#L621-L630)：移除明细模式识别、`[明细]` 前缀中间表收集、`results.append(None if _is_detail_mode ...)` 特殊处理
+
+6. [`main.py` L698](file:///f:/【1】AI探索/【3】excel2ppt/app/main.py#L698)：JOIN 中间表 Excel 写入时移除"明细计数"逻辑，简化为 `{len(join_intermediate)} 个 JOIN`
+
+**行为变化**：
+- 聚合方式填 `明细`/`raw`/`passthrough` 等 → 现在按非法聚合方式报错（`不支持的聚合方式`）
+- 数据源写 JOIN + 值字段为空 → 现在报错 `未指定值字段`（不再自动降级）
+- 行维度和值字段都为空的任务 → 现在被跳过（不进入任务列表）
+- JOIN 场景正常聚合（值字段+聚合方式）→ 行为不变，仍生成 主结果 + `_JOIN中间表_` 两张 sheet
+
+**测试覆盖**：防护用例全量回归 ✓（PPT 23页、Excel 32 sheet、模板填充 12页、HTML 报告均通过）。防护用例未使用明细模式作为聚合方式，无测试用例需清理。
+
+### v2.54.12 (2026-07-21)
+
+**🐛 JOIN 场景值字段为空自动降级 + 明细模式去重输出**
+
+**问题1**：数据源写 JOIN 但值字段为空时，[`run_analysis`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L1569) 在 [L1587-1588](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L1587-L1588) 值字段校验阶段直接报错"未指定值字段"早返回，根本没机会执行 JOIN，更不会生成 JOIN 中间表。用户期望"只想查看 JOIN 后的原始数据"时不应强制写值字段或"明细"。
+
+**修复1**（[L1587-1595](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L1587-L1595)）：值字段校验增加 JOIN 豁免——数据源含 JOIN 且值字段为空时，自动把聚合方式降级为 `"明细"`，打印 `[JOIN+空值字段] 任务X: 数据源含 JOIN 且未指定值字段，自动降级为明细模式` 日志，继续走明细模式分支。非 JOIN 场景仍保持原报错行为。
+
+**问题2**：明细模式 + JOIN 场景下，主结果 sheet（明细数据，按行维度去重 + 导出列裁剪）与 `_JOIN中间表_`（JOIN 原始数据 + 导出列裁剪 + 自动保留 ON 键）内容几乎完全重复，用户反馈"两张 sheet 重复了，应该怎么只生成 join 的中间表"。
+
+**修复2**（[L1742-1749](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L1742-L1749)）：明细模式 + JOIN 场景下，跳过主结果 sheet 生成，直接返回 `{_JOIN中间表_{结果Sheet}: join_df_cropped}` 单 sheet 结果。`_JOIN中间表_` 已应用导出列裁剪 + 自动保留 ON 键列，功能更完整，无信息损失。打印 `[明细+JOIN] 任务X: 跳过重复的主结果 sheet，仅输出 _JOIN中间表_{结果Sheet}` 日志。
+
+**改动文件**：仅 [`app/src/pivot_analyzer.py`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py)，两处共 ~15 行。
+
+**测试覆盖**：
+- 场景1：JOIN + 空值字段 + 空聚合方式 → 自动降级，只生成 `_JOIN中间表_` ✓
+- 场景2：JOIN + 显式"明细" + 空值字段 → 只生成 `_JOIN中间表_`，无重复主结果 sheet ✓
+- 场景3：JOIN + 值字段 + 聚合方式（正常聚合）→ 仍生成 主结果 + `_JOIN中间表_` 两张 sheet ✓
+- 场景4：非 JOIN + 空值字段 → 仍报"未指定值字段" ✓
+- 防护用例全量回归 ✓（PPT 23页、Excel 32 sheet、模板填充 12页、HTML 报告均通过）
+
 ### v2.54.11 (2026-07-21)
 
 **🐛 修复 pandas merge suffixes 冲突导致多表 JOIN 报错**

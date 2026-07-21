@@ -463,10 +463,8 @@ def read_pivot_config(config_path, sheet_name=None):
         if task["导出列"]:
             task["导出列"] = _resolve_export_cols_from_sheet(task["导出列"], config_path)
 
-        # 明细模式（聚合方式=明细/raw/passthrough 等）允许行维度和值字段都为空（保留全部行）
-        _agg_check = (task["聚合方式"] or "sum").strip().lower()
-        _is_detail = _agg_check in ("明细", "raw", "passthrough", "detail", "原样", "不聚合")
-        if not task["行维度"] and not task["值字段"] and not _is_detail:
+        # v2.54.13+ 移除明细模式：行维度和值字段都为空时跳过任务（无聚合内容）
+        if not task["行维度"] and not task["值字段"]:
             continue
 
         tasks.append(task)
@@ -1124,10 +1122,8 @@ def validate_pivot_config(tasks, config_dir):
             continue
         
         # 1. 检查必填项
-        # 明细模式（聚合方式=明细/raw/passthrough 等）允许值字段为空
-        _agg_lower_check = (聚合方式_str or "sum").strip().lower()
-        is_detail_mode = _agg_lower_check in ("明细", "raw", "passthrough", "detail", "原样", "不聚合")
-        if not 值字段_str and not is_detail_mode:
+        # v2.54.13+ 移除明细模式：值字段必填
+        if not 值字段_str:
             results.append({
                 "task_seq": seq,
                 "level": "error",
@@ -1140,33 +1136,31 @@ def validate_pivot_config(tasks, config_dir):
         _check_forbidden_chars(行维度_str, "行维度", seq)
         _check_forbidden_chars(列维度_str, "列维度", seq)
 
-        if not 行维度_str and not 列维度_str and not is_detail_mode:
+        if not 行维度_str and not 列维度_str:
             results.append({
                 "task_seq": seq,
                 "level": "warning",
                 "message": "行维度和列维度都为空，将生成单行汇总",
                 "column": "行维度/列维度"
             })
-        
+
         # 2. 检查聚合方式（用 _split_agg_funcs 拆分，保护 | 后参数内的逗号）
-        # 明细模式跳过聚合方式校验：聚合方式为 明细/raw/passthrough 等时不参与合法聚合函数检查
-        if not is_detail_mode:
-            agg_funcs = _split_agg_funcs(聚合方式_str)
-            invalid_aggs = []
-            for a in agg_funcs:
-                a_no_fmt, _ = _parse_agg_format(a)  # 先剥离 |数字格式
-                a_key, _ = _parse_join_sep(a_no_fmt)
-                mapped = AGG_MAP.get(a_key, a_key)
-                valid_aggs = {"sum", "mean", "count", "max", "min", "nunique", "pct", "count_pct", "join"}
-                if mapped not in valid_aggs:
-                    invalid_aggs.append(a)
-            if invalid_aggs:
-                results.append({
-                    "task_seq": seq,
-                    "level": "error",
-                    "message": f"不支持的聚合方式: {invalid_aggs}",
-                    "column": "聚合方式"
-                })
+        agg_funcs = _split_agg_funcs(聚合方式_str)
+        invalid_aggs = []
+        for a in agg_funcs:
+            a_no_fmt, _ = _parse_agg_format(a)  # 先剥离 |数字格式
+            a_key, _ = _parse_join_sep(a_no_fmt)
+            mapped = AGG_MAP.get(a_key, a_key)
+            valid_aggs = {"sum", "mean", "count", "max", "min", "nunique", "pct", "count_pct", "join"}
+            if mapped not in valid_aggs:
+                invalid_aggs.append(a)
+        if invalid_aggs:
+            results.append({
+                "task_seq": seq,
+                "level": "error",
+                "message": f"不支持的聚合方式: {invalid_aggs}",
+                "column": "聚合方式"
+            })
         
         # 3. 检查数据源文件是否存在
         if not data_source:
@@ -1580,11 +1574,8 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
     聚合方式_str = task.get("聚合方式", "sum")
     sheet_name = task.get("sheet", "Sheet1")
 
-    # 明细模式豁免：聚合方式为 明细/raw/passthrough/detail/原样/不聚合 时允许值字段为空
-    # 适用场景：原表 JOIN 前序拼接结果，跳过聚合直接输出全部列（原表+拼接列并排）
-    _agg_lower_check = (聚合方式_str or "sum").strip().lower()
-    _is_detail_mode = _agg_lower_check in ("明细", "raw", "passthrough", "detail", "原样", "不聚合")
-    if not 值字段_str and not _is_detail_mode:
+    # v2.54.13+ 移除明细模式：值字段必填，不再支持 JOIN 空值字段自动降级
+    if not 值字段_str:
         return None, f"[任务{序号}] 未指定值字段"
 
     行维度_str = 行维度_str or ""
@@ -1735,29 +1726,7 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         hint = "。提示：" + "；".join(hint_parts) if hint_parts else ""
         return None, f"[任务{序号}] 列不存在: {missing_cols}。可用列: {avail_str}{hint}"
 
-    # 明细模式：聚合方式填 "明细"/"raw"/"passthrough" 时，跳过聚合直接输出 JOIN 后的全部列
-    # 适用场景：原表 JOIN 前序拼接结果，需要保留原表所有行 + 拼接列并排
-    # 行维度用于按维度去重（同组保留第一行），留空则保留全部行
-    聚合方式_lower = 聚合方式_str.strip().lower()
-    if 聚合方式_lower in ("明细", "raw", "passthrough", "detail", "原样", "不聚合"):
-        if 行维度:
-            # 按行维度去重，保留每组第一行的全部列
-            detail_df = df.drop_duplicates(subset=行维度, keep="first").reset_index(drop=True)
-        else:
-            # 无行维度：保留全部行
-            detail_df = df.reset_index(drop=True)
-        # v2.54.6+ 导出列裁剪（明细模式）：按最终列名匹配，找不到原列名时尝试去聚合后缀匹配
-        detail_df = _apply_export_cols(detail_df, task, 行维度, 序号)
-        block_name = task.get("区块名", "") or task.get("结果Sheet", f"结果{序号}")
-        result = {block_name: detail_df}
-        # 明细模式也输出 JOIN 中间表（如果任务含 JOIN），供人工检查
-        if join_happened and join_df_original is not None and not join_df_original.empty:
-            结果Sheet = task.get("结果Sheet", f"结果{序号}")
-            # v2.54.9+ JOIN 中间表也应用导出列裁剪，自动保留 ON 键列方便核对
-            join_df_cropped = _apply_export_cols_to_join(join_df_original, task, 行维度, 序号, join_on_keys)
-            result[f"_JOIN中间表_{结果Sheet}"] = join_df_cropped
-        return result, None
-
+    # v2.54.13+ 移除明细模式分支：所有任务都走聚合路径（含 JOIN 场景）
     for col in 值字段:
         af_for_col = _get_agg_for_col(col, 聚合函数, 值字段)
         af_key, _ = _parse_join_sep(af_for_col)
