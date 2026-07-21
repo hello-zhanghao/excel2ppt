@@ -244,6 +244,32 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.17 (2026-07-21)
+
+**🐛 修复不同 sheet 名相同区块名被横向合并导致 JOIN 行数异常**
+
+**问题**：用户反馈 JOIN 后产生多余行（左1+右1→2行，1行某列为空），排查发现根因是 `block_results` 同时存了 `(区块名, 结果Sheet名)` tuple key 和 `区块名` 单独 key。当两个任务 sheet 名不同但区块名相同时，`区块名` 单独 key 会通过 `_merge_same_block_results` 基于公共行维度列做 outer merge，导致下游用 `{区块名}` 引用时拿到两个 sheet 混合后的数据，JOIN 时行数异常。
+
+**修复**（[`main.py` L625-691](file:///f:/【1】AI探索/【3】excel2ppt/app/main.py#L625-L691) + [`pivot_analyzer.py` `_resolve_block_reference`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L486-L582)）：
+- `block_results` 只存 `(区块名, 结果Sheet名)` tuple key，移除 `区块名` 和 `结果Sheet名` 单独 key
+- 同 sheet 同 block 的多行配置仍合并到 tuple key（保留合法级联透视场景）
+- 不同 sheet 的同名区块不再合并，避免数据混合
+- `_resolve_block_reference` 引用语义：
+  - `{结果Sheet名.区块名}` → 精确匹配 tuple key（推荐）
+  - `{区块名}` → 仅在该区块名在所有 tuple key 中唯一时返回；多个匹配时打印警告并返回 None
+  - `{pivot:区块名}` → 同 `{区块名}`
+  - `{pivot}` / `{透视结果}` / `{prev}` / `{上一个}` → 取最后插入的 DataFrame（不变）
+
+**对比示例**（两个任务 sheet 名 SheetA/SheetB，区块名都是"共同区块"）：
+
+| 引用语法 | 修复前 | 修复后 |
+|---|---|---|
+| `{SheetA.共同区块}` | 返回混合数据 | 返回 SheetA 数据（精确） |
+| `{SheetB.共同区块}` | 返回混合数据 | 返回 SheetB 数据（精确） |
+| `{共同区块}` | 返回混合数据（bug） | 警告 + 返回 None，提示用 `{结果Sheet名.区块名}` |
+
+**验证**：单元测试（精确匹配、唯一区块名、不唯一区块名、未命中）全部通过；防护用例 12 页验证项全部通过；级联透视用例 04（6 任务含 JOIN）全部成功。
+
 ### v2.54.16 (2026-07-21)
 
 **✨ 新增 VLOOKUP 关键字：右表按 ON 键去重取首行，避免笛卡尔积**

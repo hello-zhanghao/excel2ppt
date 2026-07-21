@@ -486,15 +486,18 @@ def _resolve_data_path(data_source, config_dir):
 def _resolve_block_reference(data_source, block_results):
     """解析前序透视结果区块引用。
 
+    v2.54.17+ 重要变更：block_results 只存 ``(区块名, 结果Sheet名)`` tuple key，
+    不再存 ``区块名`` 或 ``结果Sheet名`` 单独 key。原因：不同 sheet 名的相同区块名
+    会通过单独 key 横向合并，导致下游 JOIN 引用 ``{区块名}`` 时拿到混合数据，
+    行数异常。现在强制用 ``{结果Sheet名.区块名}`` 精确匹配。
+
     支持语法（按精确度从高到低）：
-      - ``{结果Sheet名.区块名}`` → 精确匹配：同时匹配结果Sheet名和区块名（推荐，区块名不唯一时使用）
+      - ``{结果Sheet名.区块名}`` → 精确匹配 tuple key（推荐，区块名不唯一时必须用此语法）
       - ``{pivot}`` / ``{透视结果}`` / ``{prev}`` / ``{上一个}`` → 取 block_results 中最后插入的 DataFrame
-      - ``{区块名}`` → 取 block_results[区块名]（区块名唯一时使用）
-      - ``{pivot:区块名}`` → 同上，显式指代透视结果中的某区块
+      - ``{区块名}`` → 仅在该区块名在所有 tuple key 中唯一时返回；多个匹配时打印警告并返回 None
+      - ``{pivot:区块名}`` → 同 ``{区块名}``，显式指代透视结果中的某区块
 
     注意：结果Sheet名优先级高于区块名，组合语法格式为 ``{结果Sheet名.区块名}``（先Sheet名后区块名）。
-    当多行配置有相同区块名时，最后一行会覆盖前面的，导致后续引用找不到列。
-    此时必须用 ``{结果Sheet名.区块名}`` 精确指定。
 
     :return: 命中则返回 DataFrame.copy()；未命中或 block_results 为空则返回 None
     """
@@ -508,8 +511,16 @@ def _resolve_block_reference(data_source, block_results):
     m = re.match(r"^\{pivot[:：](.+)\}$", ds, re.IGNORECASE)
     if m:
         block_name = m.group(1).strip()
-        if block_name in block_results:
-            return block_results[block_name].copy()
+        # v2.54.17+ 在 tuple key 中查找 block_name 部分，唯一则返回，多个则警告
+        matches = [(k, df) for k, df in block_results.items()
+                   if isinstance(k, tuple) and len(k) == 2 and str(k[0]) == block_name]
+        if len(matches) == 1:
+            return matches[0][1].copy()
+        if len(matches) > 1:
+            sheets = [str(k[1]) for k, _ in matches]
+            print(f"    [区块引用警告] {{pivot:{block_name}}} 匹配到 {len(matches)} 个 tuple key（sheets: {sheets}），"
+                  f"区块名不唯一。请改用 {{结果Sheet名.区块名}} 精确指定。")
+            return None
         return None
 
     # 单层 {…} 引用
@@ -527,48 +538,46 @@ def _resolve_block_reference(data_source, block_results):
             last_df = df
         return last_df.copy() if last_df is not None else None
 
-    # {结果Sheet名.区块名} 组合精确匹配（区块名不唯一时使用）
+    # {结果Sheet名.区块名} 组合精确匹配（推荐语法）
     # 格式：先结果Sheet名，后区块名，用 "." 分隔
     # 注意：结果Sheet名和区块名本身不应包含 "."，若包含会导致解析歧义
-    #
-    # v2.51.1 修复：组合语法返回合并后结果（block_results[block_name]），而非单个任务原始结果。
-    # 原因：v2.51.0 同名区块改为横向合并后，{区块名} 返回合并后结果（包含所有同名任务列），
-    # 但 {结果Sheet名.区块名} 仍返回组合 key 的原始结果（只有该任务自己的列），导致
-    # 用户用组合语法引用时"可用列只有最后一个任务"。现在两种语法行为一致，都返回合并后结果。
-    # 组合 key 仅用于验证该 sheet+block 任务存在。
     if "." in inner:
         parts = inner.split(".", 1)
         sheet_name_part = parts[0].strip()
         block_name_part = parts[1].strip()
-        # 在 block_results 中查找组合 key (区块名, 结果Sheet名)，确认该任务存在
-        # 注意 block_results 的 tuple key 顺序是 (区块名, 结果Sheet名)
-        task_exists = False
-        for k in block_results.keys():
+        # 在 block_results 中查找 tuple key (区块名, 结果Sheet名)
+        for k, df in block_results.items():
             if isinstance(k, tuple) and len(k) == 2:
                 k_block, k_sheet = k
                 if str(k_sheet) == sheet_name_part and str(k_block) == block_name_part:
-                    task_exists = True
-                    break
-        if task_exists:
-            # 返回合并后结果（与 {区块名} 行为一致）
-            if block_name_part in block_results:
-                return block_results[block_name_part].copy()
-            # block_name 未合并（只出现过一次），回退到组合 key 原始结果
-            for k, df in block_results.items():
-                if isinstance(k, tuple) and len(k) == 2:
-                    k_block, k_sheet = k
-                    if str(k_sheet) == sheet_name_part and str(k_block) == block_name_part:
-                        return df.copy()
+                    return df.copy()
         # 组合 key 未命中
+        available = [(str(k[1]), str(k[0])) for k in block_results.keys()
+                     if isinstance(k, tuple) and len(k) == 2]
+        print(f"    [区块引用警告] {{结果Sheet名.区块名}} 引用 '{inner}' 未命中。"
+              f"可用 tuple key (sheet, block): {available[:10]}")
         return None
 
-    # 指定区块名（单层引用）
-    if inner in block_results:
-        return block_results[inner].copy()
-    # 区块名大小写不敏感兜底
-    for k, df in block_results.items():
-        if not isinstance(k, tuple) and k.lower() == inner_lower:
-            return df.copy()
+    # 单独 {区块名} 引用：v2.54.17+ 仅在该区块名在所有 tuple key 中唯一时返回
+    matches = [(k, df) for k, df in block_results.items()
+               if isinstance(k, tuple) and len(k) == 2 and str(k[0]) == inner]
+    if len(matches) == 1:
+        return matches[0][1].copy()
+    if len(matches) > 1:
+        sheets = [str(k[1]) for k, _ in matches]
+        print(f"    [区块引用警告] {{区块名}} '{inner}' 匹配到 {len(matches)} 个 tuple key（sheets: {sheets}），"
+              f"区块名不唯一。必须改用 {{结果Sheet名.区块名}} 精确指定，避免数据混合。")
+        return None
+    # 大小写不敏感兜底
+    matches_ci = [(k, df) for k, df in block_results.items()
+                  if isinstance(k, tuple) and len(k) == 2 and str(k[0]).lower() == inner_lower]
+    if len(matches_ci) == 1:
+        return matches_ci[0][1].copy()
+    if len(matches_ci) > 1:
+        sheets = [str(k[1]) for k, _ in matches_ci]
+        print(f"    [区块引用警告] {{区块名}} '{inner}' (大小写不敏感) 匹配到 {len(matches_ci)} 个 tuple key（sheets: {sheets}），"
+              f"区块名不唯一。必须改用 {{结果Sheet名.区块名}} 精确指定，避免数据混合。")
+        return None
 
     return None
 

@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.54.16"
+__VERSION__ = "2.54.17"
 __UPDATE_DATE__ = "2026-07-21"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -584,7 +584,7 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
     errors = []
     skipped = 0
     scalar_context: dict = {}
-    block_results: dict = {}  # {区块名: DataFrame}，供后续任务的值映射占位符引用
+    block_results: dict = {}  # {(区块名, 结果Sheet名): DataFrame}，v2.54.17+ 只用 tuple key 避免歧义
     join_intermediate: dict = {}  # {sheet名: DataFrame}，JOIN 中间表单独收集，写入独立 Excel 供检查
 
     for task in tasks:
@@ -623,20 +623,24 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
                 # 此时不写主结果 sheet（results.append(None)），但把 JOIN 数据存入 block_results 供下游引用
                 _just_stripped_join = isinstance(result, dict) and len(result) == 0
                 if _just_stripped_join:
-                    # JOIN 原始输出模式：不写主结果 sheet，但存 block_results 供下游 {区块名} 引用
+                    # JOIN 原始输出模式：不写主结果 sheet，但存 block_results 供下游 {结果Sheet名.区块名} 引用
+                    # v2.54.17+ 修复：只存 (block_name, sheet_name) tuple key，不再存 block_name 单独 key
+                    #   原因：不同 sheet 名的相同区块名会通过 block_name 单独 key 横向合并，导致下游 JOIN 引用
+                    #         {区块名} 时拿到混合数据，行数异常。强制用 {结果Sheet名.区块名} 精确匹配。
                     block_name = task.get("区块名", "") or sheet_name
                     # 从 join_intermediate 取回本任务的 JOIN 数据
                     join_key_for_block = f"任务{seq}_{sheet_name}"
                     join_df_for_block = join_intermediate.get(join_key_for_block)
                     if join_df_for_block is not None:
-                        block_results[(block_name, sheet_name)] = join_df_for_block
-                        if block_name in block_results:
-                            prev_df = block_results[block_name]
+                        tuple_key = (block_name, sheet_name)
+                        if tuple_key in block_results:
+                            # 同 sheet 同 block 的多行配置才合并（合法场景：同 sheet 内多行配置相同区块名）
+                            prev_df = block_results[tuple_key]
                             merged_df = _merge_same_block_results(prev_df, join_df_for_block, block_name, seq)
-                            block_results[block_name] = merged_df
+                            block_results[tuple_key] = merged_df
                         else:
-                            block_results[block_name] = join_df_for_block
-                        print(f"    [JOIN原始输出] [任务{seq}] {block_name} -> 仅存入 block_results 供下游引用（不写主结果 sheet），{join_df_for_block.shape[0]}行 x {join_df_for_block.shape[1]}列")
+                            block_results[tuple_key] = join_df_for_block
+                        print(f"    [JOIN原始输出] [任务{seq}] {block_name}@{sheet_name} -> 仅存入 block_results 供下游引用（不写主结果 sheet），{join_df_for_block.shape[0]}行 x {join_df_for_block.shape[1]}列")
                     results.append(None)
                 else:
                     # v2.54.13+ 移除明细模式：所有任务结果都写入主结果 Excel
@@ -674,19 +678,17 @@ def _run_pivot_mode(config_path, output_path=None, validate_only=False, data_dir
                                     merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()]
                                 else:
                                     merged_df = dfs_in_result[0][1]
-                            # 同名区块处理：不再覆盖，而是按行维度对齐横向合并
-                            # 修复级联透视"找不到字段"根因：多行配置相同区块名，最后一行覆盖前面的，
-                            # 导致后续 {区块名} 引用只能拿到最后一个任务的列，前面任务的列丢失
-                            # 组合 key 始终指向本任务自己的原始结果（未合并），用于 {结果Sheet名.区块名} 精确引用
-                            block_results[(block_name, sheet_name)] = merged_df
-                            if block_name in block_results:
-                                prev_df = block_results[block_name]
+                            # 同名区块处理：同 sheet 同 block 才横向合并，不同 sheet 的同名区块不再合并
+                            # v2.54.17+ 修复：移除 block_name 单独 key 和 sheet_name 单独 key 的存储
+                            #   原因：不同 sheet 名的相同区块名会通过 block_name 单独 key 横向合并，
+                            #         导致下游 JOIN 引用 {区块名} 时拿到混合数据，行数异常。
+                            #         强制用 {结果Sheet名.区块名} 精确匹配，避免歧义。
+                            #   合并场景保留：同 sheet 内多行配置相同区块名（合法级联透视场景）
+                            tuple_key = (block_name, sheet_name)
+                            if tuple_key in block_results:
+                                prev_df = block_results[tuple_key]
                                 merged_df = _merge_same_block_results(prev_df, merged_df, block_name, seq)
-                            block_results[block_name] = merged_df
-                        # 同时用结果Sheet名作为别名存入，使后续任务既可用 {区块名}
-                        # 也可用 {结果Sheet名} 引用本任务输出（区块名与结果Sheet不同时两者都生效）
-                        if sheet_name and sheet_name != block_name:
-                            block_results[sheet_name] = merged_df
+                            block_results[tuple_key] = merged_df
         except Exception as e:
             print(f"    [FAIL] [任务{seq}] 异常: {e}")
             errors.append({"序号": seq, "错误": str(e)})
