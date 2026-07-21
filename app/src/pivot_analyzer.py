@@ -260,6 +260,8 @@ def _resolve_export_cols_from_sheet(cols_str, config_path):
 
     列清单去重去空、保留首次出现顺序。
 
+    v2.54.8+ 解析失败时打印明确警告（原静默返回导致用户困惑"导出列写了没用"）。
+
     :return: 解析成功返回逗号分隔的列名串；非引用语法或解析失败原样返回。
     """
     if not cols_str or "." not in str(cols_str):
@@ -290,21 +292,26 @@ def _resolve_export_cols_from_sheet(cols_str, config_path):
             col_ref = ".".join(parts[2:]).strip()
             ext_file = os.path.join(os.path.dirname(config_path), file_name)
             if not os.path.exists(ext_file):
+                # v2.54.8+ 外部文件不存在时给明确警告（原静默返回）
+                print(f"    [导出列警告] 引用语法 '{cols_str}' 解析失败：外部文件不存在: {file_name}")
                 return cols_str
             try:
                 wb_check = openpyxl.load_workbook(ext_file, data_only=True, read_only=True)
                 if sheet_name_ref not in wb_check.sheetnames:
                     wb_check.close()
+                    print(f"    [导出列警告] 引用语法 '{cols_str}' 解析失败：文件 '{file_name}' 中不存在 sheet '{sheet_name_ref}'。可用 sheet: {wb_check.sheetnames}")
                     return cols_str
                 wb_check.close()
                 file_path = ext_file
-            except Exception:
+            except Exception as e:
+                print(f"    [导出列警告] 引用语法 '{cols_str}' 解析失败：读取文件 '{file_name}' 出错: {e}")
                 return cols_str
         else:
-            # 两段且第一段不是 sheet 名，按普通列名原样返回
+            # 两段且第一段不是 sheet 名，按普通列名原样返回（列名可能含点）
             return cols_str
 
     if not sheet_name_ref or not col_ref:
+        print(f"    [导出列警告] 引用语法 '{cols_str}' 解析失败：sheet 名或列标识为空")
         return cols_str
 
     try:
@@ -312,11 +319,13 @@ def _resolve_export_cols_from_sheet(cols_str, config_path):
         wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
         if sheet_name_ref not in wb.sheetnames:
             wb.close()
+            print(f"    [导出列警告] 引用语法 '{cols_str}' 解析失败：sheet '{sheet_name_ref}' 不存在")
             return cols_str
         ws = wb[sheet_name_ref]
         rows = list(ws.iter_rows(values_only=True))
         wb.close()
         if not rows:
+            print(f"    [导出列警告] 引用语法 '{cols_str}' 解析失败：sheet '{sheet_name_ref}' 为空")
             return cols_str
 
         header = rows[0]
@@ -335,6 +344,9 @@ def _resolve_export_cols_from_sheet(cols_str, config_path):
                     col_idx = i
                     break
         if col_idx is None:
+            # v2.54.8+ 列标识找不到时给明确警告 + 列出可用列标题
+            avail_headers = [str(h).strip() for h in header if h is not None and str(h).strip()]
+            print(f"    [导出列警告] 引用语法 '{cols_str}' 解析失败：sheet '{sheet_name_ref}' 中找不到列 '{col_ref}'。可用列标题: {avail_headers[:10]}")
             return cols_str
 
         # 收集该列所有非空值（跳过表头），去重保序
@@ -347,8 +359,14 @@ def _resolve_export_cols_from_sheet(cols_str, config_path):
                 if cell not in seen:
                     seen.add(cell)
                     cols.append(cell)
-        return ",".join(cols) if cols else cols_str
-    except Exception:
+        if cols:
+            print(f"    [导出列] 引用语法 '{cols_str}' 解析成功：从 sheet '{sheet_name_ref}' 列 '{col_ref}' 读取到 {len(cols)} 个列名")
+            return ",".join(cols)
+        else:
+            print(f"    [导出列警告] 引用语法 '{cols_str}' 解析失败：sheet '{sheet_name_ref}' 列 '{col_ref}' 无数据")
+            return cols_str
+    except Exception as e:
+        print(f"    [导出列警告] 引用语法 '{cols_str}' 解析失败：{e}")
         return cols_str
 
 
