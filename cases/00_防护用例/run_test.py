@@ -485,12 +485,13 @@ def verify_excel_output(excel_path):
         pct_vals = [r[1] for r in data if r[0] and r[1] is not None]
         all_valid = all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in pct_vals)
         checks.append(("占比值0~1小数", all_valid, str(pct_vals)))
-        # 验证 Excel 单元格 number_format 是百分比格式
+        # v2.54.19+ 占比列不再强制百分比格式，未配置格式时走推导格式（小数形式）
+        # 用户想百分比显示需在聚合方式配置 pct|.1% 等
         ws_pct = wb["地区占比"]
         # 第3行第2列是第一个占比数据单元格（第1行区块标题，第2行表头）
         pct_cell = ws_pct.cell(row=3, column=2)
-        fmt_ok = "%" in str(pct_cell.number_format)
-        checks.append(("占比列number_format含%", fmt_ok, f"format={pct_cell.number_format}"))
+        fmt_ok = "%" not in str(pct_cell.number_format)
+        checks.append(("占比列未配置格式时不强制百分比", fmt_ok, f"format={pct_cell.number_format}"))
         # 验证存储值是 0.376 而非 37.6（确认未被 ×100）
         store_ok = pct_cell.value is not None and 0 < float(pct_cell.value) <= 1
         checks.append(("占比存储值未×100", store_ok, f"存储值={pct_cell.value}"))

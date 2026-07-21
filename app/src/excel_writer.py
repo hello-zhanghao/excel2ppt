@@ -396,12 +396,11 @@ def _write_df_block_at(ws, df, start_row, start_col, pct_columns=None, row_dims=
         ws.cell(row=start_row, column=start_col + ci, value=str(h))
     _style_header_row_at(ws, start_row, start_col, len(headers), row_dims)
     # v2.54.18+ 预推导每列默认格式（依据原始数据小数位）
+    # v2.54.19+ 百分比列不再固定 PCT_NUMBER_FORMAT，统一走"配置格式 > 推导格式"
     inferred_fmts = {}
     for col_name in headers:
         col_name_str = str(col_name) if col_name is not None else ""
         if col_name_str in number_formats:
-            continue
-        if _is_pct_col(col_name, pct_columns):
             continue
         inferred_fmts[col_name_str] = _infer_column_number_format(df[col_name])
     # 数据行
@@ -411,13 +410,10 @@ def _write_df_block_at(ws, df, start_row, start_col, pct_columns=None, row_dims=
         for ci, val in enumerate(row_data):
             col_name = headers[ci] if ci < len(headers) else None
             col_name_str = str(col_name) if col_name is not None else ""
-            is_pct = _is_pct_col(col_name, pct_columns)
-            cell = ws.cell(row=row_num, column=start_col + ci, value=_format_cell_value(val, col_name, is_pct))
+            cell = ws.cell(row=row_num, column=start_col + ci, value=_format_cell_value(val, col_name, False))
             excel_fmt = _ppt_fmt_to_excel_fmt(number_formats.get(col_name_str, ""))
             if excel_fmt:
                 cell.number_format = excel_fmt
-            elif is_pct:
-                cell.number_format = PCT_NUMBER_FORMAT
             elif isinstance(val, (int, float)):
                 cell.number_format = inferred_fmts.get(col_name_str) or VALID_NUMBER_FORMAT
             cell.alignment = DATA_ALIGNMENT
@@ -453,13 +449,10 @@ def _write_scalar_block_at(ws, task, result, start_row, start_col, pct_columns=N
         cell_name.border = THIN_BORDER
         cell_name.fill = DIM_DATA_FILL
         # 值列
-        is_pct = _is_pct_col(key, pct_columns)
-        cell_val = ws.cell(row=row_num, column=start_col + 1, value=_format_cell_value(val, key, is_pct))
+        cell_val = ws.cell(row=row_num, column=start_col + 1, value=_format_cell_value(val, key, False))
         excel_fmt = _ppt_fmt_to_excel_fmt(number_formats.get(str(key), ""))
         if excel_fmt:
             cell_val.number_format = excel_fmt
-        elif is_pct:
-            cell_val.number_format = PCT_NUMBER_FORMAT
         elif isinstance(val, (int, float)):
             # v2.54.18+ 标量场景按单值推导
             cell_val.number_format = _infer_column_number_format([val]) or VALID_NUMBER_FORMAT
@@ -560,14 +553,12 @@ def _write_df_block(ws, df, start_row, pct_columns=None, row_dims=None, number_f
     _style_header_row(ws, start_row, len(headers), row_dims)
 
     # v2.54.18+ 预推导每列默认格式（依据原始数据小数位），替代硬编码 0.00
-    # 仅对未在 number_formats 中配置的数值列推导，百分比列由 PCT_NUMBER_FORMAT 处理
+    # v2.54.19+ 百分比列不再固定 PCT_NUMBER_FORMAT，统一走"配置格式 > 推导格式"
     inferred_fmts = {}
     for col_name in headers:
         col_name_str = str(col_name) if col_name is not None else ""
         if col_name_str in number_formats:
             continue  # 用户已配置格式，跳过推导
-        if _is_pct_col(col_name, pct_columns):
-            continue  # 百分比列固定格式，跳过推导
         inferred_fmts[col_name_str] = _infer_column_number_format(df[col_name])
 
     for ri, (idx, row_data) in enumerate(df.iterrows()):
@@ -575,17 +566,13 @@ def _write_df_block(ws, df, start_row, pct_columns=None, row_dims=None, number_f
         for ci, val in enumerate(row_data, 1):
             col_name = headers[ci - 1] if ci <= len(headers) else None
             col_name_str = str(col_name) if col_name is not None else ""
-            is_pct = _is_pct_col(col_name, pct_columns)
-            cell = ws.cell(row=row_num, column=ci, value=_format_cell_value(val, col_name, is_pct))
-            # 优先级：自定义格式（聚合方式|PPT格式）> pct 默认 > 推导格式 > 0.00 兜底
-            # number_formats 存的是 PPT 格式串（如 .2f），需转换为 Excel number_format
+            cell = ws.cell(row=row_num, column=ci, value=_format_cell_value(val, col_name, False))
+            # v2.54.19+ 优先级：自定义格式（聚合方式|PPT格式）> 推导格式 > 0.00 兜底
+            # 百分比列不再强制 PCT_NUMBER_FORMAT，用户想百分比显示需配置 pct|.1% 等
             excel_fmt = _ppt_fmt_to_excel_fmt(number_formats.get(col_name_str, ""))
             if excel_fmt:
                 cell.number_format = excel_fmt
-            elif is_pct:
-                cell.number_format = PCT_NUMBER_FORMAT
             elif isinstance(val, (int, float)):
-                # v2.54.18+ 用推导格式替代硬编码 VALID_NUMBER_FORMAT
                 cell.number_format = inferred_fmts.get(col_name_str) or VALID_NUMBER_FORMAT
 
         is_total = str(idx) == "合计" or str(idx) == "总计"
@@ -615,14 +602,11 @@ def _write_scalar_block(ws, task, result, remark, start_row, pct_columns=None, n
     for key, val in result.items():
         key_str = str(key)
         c1 = ws.cell(row=row, column=1, value=key)
-        is_pct = _is_pct_col(key, pct_columns)
-        c2 = ws.cell(row=row, column=2, value=_format_cell_value(val, key, is_pct))
-        # 优先级：自定义格式 > pct 默认 > 推导格式 > 0.00 兜底
+        c2 = ws.cell(row=row, column=2, value=_format_cell_value(val, key, False))
+        # v2.54.19+ 优先级：自定义格式 > 推导格式 > 0.00 兜底（百分比不再强制）
         excel_fmt = _ppt_fmt_to_excel_fmt(number_formats.get(key_str, ""))
         if excel_fmt:
             c2.number_format = excel_fmt
-        elif is_pct:
-            c2.number_format = PCT_NUMBER_FORMAT
         elif isinstance(val, (int, float)):
             # v2.54.18+ 标量场景按单值推导（整数→'0'，浮点→按原值小数位）
             c2.number_format = _infer_column_number_format([val]) or VALID_NUMBER_FORMAT
