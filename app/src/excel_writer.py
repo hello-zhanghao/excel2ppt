@@ -395,6 +395,15 @@ def _write_df_block_at(ws, df, start_row, start_col, pct_columns=None, row_dims=
     for ci, h in enumerate(headers):
         ws.cell(row=start_row, column=start_col + ci, value=str(h))
     _style_header_row_at(ws, start_row, start_col, len(headers), row_dims)
+    # v2.54.18+ 预推导每列默认格式（依据原始数据小数位）
+    inferred_fmts = {}
+    for col_name in headers:
+        col_name_str = str(col_name) if col_name is not None else ""
+        if col_name_str in number_formats:
+            continue
+        if _is_pct_col(col_name, pct_columns):
+            continue
+        inferred_fmts[col_name_str] = _infer_column_number_format(df[col_name])
     # 数据行
     for ri, (idx, row_data) in enumerate(df.iterrows()):
         row_num = start_row + 1 + ri
@@ -410,7 +419,7 @@ def _write_df_block_at(ws, df, start_row, start_col, pct_columns=None, row_dims=
             elif is_pct:
                 cell.number_format = PCT_NUMBER_FORMAT
             elif isinstance(val, (int, float)):
-                cell.number_format = VALID_NUMBER_FORMAT
+                cell.number_format = inferred_fmts.get(col_name_str) or VALID_NUMBER_FORMAT
             cell.alignment = DATA_ALIGNMENT
             cell.font = TOTAL_FONT if is_total else DATA_FONT
             if is_total:
@@ -452,7 +461,8 @@ def _write_scalar_block_at(ws, task, result, start_row, start_col, pct_columns=N
         elif is_pct:
             cell_val.number_format = PCT_NUMBER_FORMAT
         elif isinstance(val, (int, float)):
-            cell_val.number_format = VALID_NUMBER_FORMAT
+            # v2.54.18+ 标量场景按单值推导
+            cell_val.number_format = _infer_column_number_format([val]) or VALID_NUMBER_FORMAT
         cell_val.font = DATA_FONT
         cell_val.alignment = DATA_ALIGNMENT
         cell_val.border = THIN_BORDER
@@ -549,6 +559,17 @@ def _write_df_block(ws, df, start_row, pct_columns=None, row_dims=None, number_f
         c = ws.cell(row=start_row, column=ci, value=str(h))
     _style_header_row(ws, start_row, len(headers), row_dims)
 
+    # v2.54.18+ 预推导每列默认格式（依据原始数据小数位），替代硬编码 0.00
+    # 仅对未在 number_formats 中配置的数值列推导，百分比列由 PCT_NUMBER_FORMAT 处理
+    inferred_fmts = {}
+    for col_name in headers:
+        col_name_str = str(col_name) if col_name is not None else ""
+        if col_name_str in number_formats:
+            continue  # 用户已配置格式，跳过推导
+        if _is_pct_col(col_name, pct_columns):
+            continue  # 百分比列固定格式，跳过推导
+        inferred_fmts[col_name_str] = _infer_column_number_format(df[col_name])
+
     for ri, (idx, row_data) in enumerate(df.iterrows()):
         row_num = start_row + 1 + ri
         for ci, val in enumerate(row_data, 1):
@@ -556,7 +577,7 @@ def _write_df_block(ws, df, start_row, pct_columns=None, row_dims=None, number_f
             col_name_str = str(col_name) if col_name is not None else ""
             is_pct = _is_pct_col(col_name, pct_columns)
             cell = ws.cell(row=row_num, column=ci, value=_format_cell_value(val, col_name, is_pct))
-            # 优先级：自定义格式（聚合方式|PPT格式）> pct 默认 > 0.00 默认
+            # 优先级：自定义格式（聚合方式|PPT格式）> pct 默认 > 推导格式 > 0.00 兜底
             # number_formats 存的是 PPT 格式串（如 .2f），需转换为 Excel number_format
             excel_fmt = _ppt_fmt_to_excel_fmt(number_formats.get(col_name_str, ""))
             if excel_fmt:
@@ -564,7 +585,8 @@ def _write_df_block(ws, df, start_row, pct_columns=None, row_dims=None, number_f
             elif is_pct:
                 cell.number_format = PCT_NUMBER_FORMAT
             elif isinstance(val, (int, float)):
-                cell.number_format = VALID_NUMBER_FORMAT
+                # v2.54.18+ 用推导格式替代硬编码 VALID_NUMBER_FORMAT
+                cell.number_format = inferred_fmts.get(col_name_str) or VALID_NUMBER_FORMAT
 
         is_total = str(idx) == "合计" or str(idx) == "总计"
         for ci in range(1, len(headers) + 1):
@@ -595,14 +617,15 @@ def _write_scalar_block(ws, task, result, remark, start_row, pct_columns=None, n
         c1 = ws.cell(row=row, column=1, value=key)
         is_pct = _is_pct_col(key, pct_columns)
         c2 = ws.cell(row=row, column=2, value=_format_cell_value(val, key, is_pct))
-        # 优先级：自定义格式 > pct 默认 > 0.00 默认
+        # 优先级：自定义格式 > pct 默认 > 推导格式 > 0.00 兜底
         excel_fmt = _ppt_fmt_to_excel_fmt(number_formats.get(key_str, ""))
         if excel_fmt:
             c2.number_format = excel_fmt
         elif is_pct:
             c2.number_format = PCT_NUMBER_FORMAT
         elif isinstance(val, (int, float)):
-            c2.number_format = VALID_NUMBER_FORMAT
+            # v2.54.18+ 标量场景按单值推导（整数→'0'，浮点→按原值小数位）
+            c2.number_format = _infer_column_number_format([val]) or VALID_NUMBER_FORMAT
         c1.alignment = DATA_ALIGNMENT
         c2.alignment = DATA_ALIGNMENT
         c1.border = THIN_BORDER
@@ -663,6 +686,70 @@ def _format_cell_value(val, col_name=None, is_pct=False):
 
 VALID_NUMBER_FORMAT = '0.00'
 PCT_NUMBER_FORMAT = '0.0%'
+
+# v2.54.18+ 默认格式推导上限：避免聚合产生的浮点噪声（如 avg 65.33333333333333）导致显示位数过长
+_INFER_MAX_DECIMALS = 6
+
+
+def _infer_column_number_format(series):
+    """根据列的原始数值推导默认 Excel number_format。
+
+    v2.54.18+ 替代原来硬编码的 VALID_NUMBER_FORMAT ('0.00')，让默认显示位数
+    依据数据本身的小数位推导，避免整数也显示成 1200.00、1位小数也显示成 65.30。
+
+    推导规则：
+      - 所有非空值都是整数（含 1200.0 这种）→ '0'（整数格式）
+      - 含浮点数 → 取最大小数位 N（上限 _INFER_MAX_DECIMALS=6）→ '0.' + '0'*N
+      - 空列或全非数值 → None（不设置 number_format）
+
+    注意：百分比列不在此推导（由 _is_pct_col + PCT_NUMBER_FORMAT 单独处理）。
+
+    :param series: pandas Series 或可迭代的列数据
+    :return: Excel number_format 字符串，或 None
+    """
+    numeric_vals = []
+    for v in series:
+        if v is None:
+            continue
+        if isinstance(v, bool):
+            continue
+        # pandas NaN/NA
+        try:
+            if pd.isna(v):
+                continue
+        except (TypeError, ValueError):
+            pass
+        if isinstance(v, (int, float)):
+            numeric_vals.append(float(v))
+        else:
+            # 尝试转数值（字符串数字等）
+            try:
+                numeric_vals.append(float(v))
+            except (ValueError, TypeError):
+                continue
+    if not numeric_vals:
+        return None
+    # 所有值都是整数（含 65.0 这种）→ 整数格式
+    if all(v == int(v) for v in numeric_vals):
+        return '0'
+    # 取最大小数位（用 repr 避免 str 对某些浮点的四舍五入）
+    max_decimals = 0
+    for v in numeric_vals:
+        if v == int(v):
+            continue
+        # repr(float) 在 Python 3 给出最短可往返表示，如 65.3 → '65.3' 而非 '65.29999...'
+        s = repr(v)
+        if 'e' in s.lower() or 'E' in s:
+            # 科学计数法，跳过（罕见，通常不会出现在聚合结果中）
+            continue
+        if '.' in s:
+            decimals = len(s.split('.')[1])
+            max_decimals = max(max_decimals, decimals)
+    # 上限保护，避免浮点噪声
+    max_decimals = min(max_decimals, _INFER_MAX_DECIMALS)
+    if max_decimals == 0:
+        return '0'
+    return '0.' + '0' * max_decimals
 
 
 def _ppt_fmt_to_excel_fmt(ppt_fmt):
