@@ -186,6 +186,59 @@ def _join_unique(series, sep: str = _JOIN_DEFAULT_SEP) -> str:
     return sep.join(sorted(seen_set))
 
 
+def _split_value_field_map(raw_value_field):
+    """解析值字段与值映射的合并写法 ``值字段|值映射``。
+
+    v2.54.4+ 支持 ``值字段`` 单列承载值映射，减少配置列数：
+      - ``"销售额"``                   → ("销售额", "")            无映射
+      - ``"销售额|总销售额"``           → ("销售额", "总销售额")     整体重命名
+      - ``"销售额|总销售额,利润"``      → ("销售额,利润", "总销售额,利润")  利润无映射留空
+      - ``"销售额|总销售额,利润|净利润"`` → ("销售额,利润", "总销售额,净利润")  各自带映射
+      - ``"销售额,利润"``              → ("销售额,利润", "")       无映射
+      - ``"去重拼接|、,sum|.2f"``       → 原样返回（| 后是聚合参数/格式，不是值映射）
+
+    判定规则：``|`` 后内容必须是纯文本列名（不含已知聚合关键字、不含格式串），
+              否则 ``|`` 视为聚合方式的参数分隔符（如 ``去重拼接|、``），原样返回。
+
+    :return: (值字段字符串, 值映射字符串)。无映射时值映射为空字符串。
+    """
+    if not raw_value_field:
+        return "", ""
+    s = raw_value_field.strip()
+    if "|" not in s:
+        return s, ""
+
+    # 按逗号拆分每个字段段，独立解析各自的 | 映射
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    value_fields = []
+    value_maps = []
+    for part in parts:
+        if "|" not in part:
+            # 无 | 段，直接是字段名
+            value_fields.append(part)
+            value_maps.append("")
+            continue
+        head, tail = part.split("|", 1)
+        head = head.strip()
+        tail = tail.strip()
+        # | 后是已知数字格式 → 视为格式后缀（如 "sum|.2f"），原样返回
+        if tail in _KNOWN_FMTS:
+            return s, ""
+        # | 后为空 → | 无意义，原样返回
+        if not tail:
+            return s, ""
+        # 否则 | 后是值映射名
+        value_fields.append(head)
+        value_maps.append(tail)
+
+    # 所有段都没有值映射 → 返回原字段串，映射为空
+    if not any(value_maps):
+        return ",".join(value_fields), ""
+
+    # 至少一段有值映射 → 返回拆分后的字段串和映射串（位置对应，无映射段留空）
+    return ",".join(value_fields), ",".join(value_maps)
+
+
 def _resolve_export_cols_from_sheet(cols_str, config_path):
     """解析 ``Sheet名.列标识`` 语法，从配置文件另一个 sheet 读取列清单。
 
@@ -322,7 +375,17 @@ def read_pivot_config(config_path, sheet_name=None):
         task["sheet"] = str(item.get("Sheet", item.get("sheet", ""))).strip() if (item.get("Sheet") or item.get("sheet")) else "Sheet1"
         task["行维度"] = str(item.get("行维度", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("行维度") else ""
         task["列维度"] = str(item.get("列维度", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("列维度") else ""
-        task["值字段"] = str(item.get("值字段", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值字段") else ""
+        # v2.54.4+ 支持值字段与值映射用 | 合并写法，减少配置列数
+        #   写法1: "销售额"              → 值字段=销售额，值映射=空
+        #   写法2: "销售额|总销售额"      → 值字段=销售额，值映射=总销售额
+        #   写法3: "销售额|总销售额,利润|净利润" → 多字段各自带映射
+        # 注意：| 后内容必须是非已知聚合关键字的纯文本（否则视为原值字段的一部分）
+        _raw_value_field = str(item.get("值字段", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值字段") else ""
+        _parsed_value_field, _parsed_value_map = _split_value_field_map(_raw_value_field)
+        task["值字段"] = _parsed_value_field
+        # 显式"值映射"列优先，否则用值字段里 | 解析出的映射
+        _explicit_val_map = str(item.get("值映射", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值映射") else (str(item.get("值字段映射", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值字段映射") else "")
+        task["值映射"] = _explicit_val_map if _explicit_val_map else _parsed_value_map
         task["聚合方式"] = str(item.get("聚合方式", "sum")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("聚合方式") else "sum"
         task["结果Sheet"] = str(item.get("结果Sheet", "")).strip() if item.get("结果Sheet") else f"结果{task.get('序号','')}"
         # 区块名仅取"区块名"列的值，不 fallback 到"备注"列
@@ -345,7 +408,8 @@ def read_pivot_config(config_path, sheet_name=None):
         # ------------------------------------------------------------------
         task["行映射"] = str(item.get("行映射", "")).strip() if item.get("行映射") else (str(item.get("行维度映射", "")).strip() if item.get("行维度映射") else str(item.get("映射表", "")).strip() if item.get("映射表") else "")
         task["列映射"] = str(item.get("列映射", "")).strip() if item.get("列映射") else (str(item.get("列维度映射", "")).strip() if item.get("列维度映射") else "")
-        task["值映射"] = str(item.get("值映射", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值映射") else (str(item.get("值字段映射", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值字段映射") else "")
+        # v2.54.4+ 值映射已在 L388 处理（支持值字段|值映射合并写法 + 显式值映射列 + 值字段映射别名 fallback）
+        # 此处不再重复赋值，避免覆盖 L388 的合并写法解析结果
         task["分箱"] = str(item.get("分箱", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("分箱") else ""
         task["值计算"] = str(item.get("值计算", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值计算") else ""
         task["是否计算"] = str(item.get("是否计算", "是")).strip() if item.get("是否计算") else "是"
@@ -1174,8 +1238,10 @@ def validate_pivot_config(tasks, config_dir):
                                 })
         
         # 6. 值映射数量检查（对比实际输出列数，考虑单字段多聚合）
+        # v2.54.4+ 合并写法 "销售额|总销售额,利润" 会产生空位（利润无映射），
+        # 不过滤空字符串以保持位置对应，空位表示"不映射"
         val_map_str = task.get("值映射", "")
-        val_maps = [m.strip() for m in val_map_str.split(",") if m.strip()]
+        val_maps = [m.strip() for m in val_map_str.split(",")] if val_map_str else []
 
         # 6.1 值映射禁用字符检查（值映射文本合法含 {} 占位符和 , 分隔符，只禁 = @ \n）
         _VALMAP_FORBIDDEN = ["=", "@", "\n", "\r"]
@@ -1191,7 +1257,7 @@ def validate_pivot_config(tasks, config_dir):
                 })
 
         value_cols = [v.strip() for v in 值字段_str.split(",") if v.strip()]
-        if val_maps:
+        if any(val_maps):
             agg_funcs_val = _split_agg_funcs(聚合方式_str) if 聚合方式_str else []
             if len(value_cols) == 1 and len(agg_funcs_val) > 1:
                 expected_cols = len(agg_funcs_val)
@@ -1482,9 +1548,10 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         result = _group_aggregate(df, 行维度, 值字段, 聚合函数, task)
 
     # 聚合后应用列名映射
-    raw_val_maps = [m.strip() for m in val_map_str.split(",") if m.strip()] if val_map_str else []
-    
-    if result and raw_val_maps:
+    # v2.54.4+ 不过滤空字符串，空位表示"不映射"，保持与值字段位置对应
+    raw_val_maps = [m.strip() for m in val_map_str.split(",")] if val_map_str else []
+
+    if result and any(raw_val_maps):
         map_idx = 0
         for key, df in result.items():
             if isinstance(df, pd.DataFrame):
@@ -1495,7 +1562,8 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
                     if map_idx < len(raw_val_maps):
                         # 值映射支持 {区块.列.行值|格式} 占位符，用前面任务结果替换
                         new_name = _resolve_value_map_placeholder(raw_val_maps[map_idx], block_results)
-                        rename[c] = new_name
+                        if new_name:  # 空映射跳过，保留原列名
+                            rename[c] = new_name
                         map_idx += 1
                     else:
                         break
@@ -1837,10 +1905,11 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
                 grouped[col] = grouped[col].round(_col_round_precision(str(col)))
 
     # 检查是否有值映射配置
+    # v2.54.4+ 不过滤空字符串，空位表示"不映射"
     val_map_str = task.get("值映射", "") if task else ""
-    raw_val_maps = [m.strip() for m in val_map_str.split(",") if m.strip()] if val_map_str else []
-    has_val_map = bool(raw_val_maps)
-    
+    raw_val_maps = [m.strip() for m in val_map_str.split(",")] if val_map_str else []
+    has_val_map = any(raw_val_maps)
+
     # 如果有值映射，使用原始 key 作为列名（不加聚合后缀），后续步骤会应用映射
     # 如果没有值映射，使用 _flatten_col 添加聚合后缀
     orig_tuples = [col for col in grouped.columns.values]
@@ -1857,8 +1926,9 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
                     # 这是分组列，保留原名
                     new_columns.append(str(col[0]).strip())
                 elif val_map_idx < len(raw_val_maps):
-                    # 值列，使用值映射
-                    new_columns.append(raw_val_maps[val_map_idx])
+                    # 值列，使用值映射（空映射则用聚合后缀名）
+                    mapped = raw_val_maps[val_map_idx]
+                    new_columns.append(mapped if mapped else _agg_key_to_name(col))
                     val_map_idx += 1
                 else:
                     new_columns.append(_agg_key_to_name(col))
