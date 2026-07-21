@@ -244,6 +244,29 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.11 (2026-07-21)
+
+**🐛 修复 pandas merge suffixes 冲突导致多表 JOIN 报错**
+
+**问题根因**：[`_load_joined_dataframe`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L707-L841) 使用 `suffixes=("", "_r")` 处理左右表同名列冲突。当左表已存在 `_r` 后缀列时（典型场景：连续多表 JOIN 累积的 `_r` 列，或原表本身就有 `latitude_r` 这种列），右表的同名列加 `_r` 后会与左表已有 `_r` 列重名，pandas 直接报错：
+
+```
+pandas.errors.MergeError: passing suffixes which cause duplicate columns {latitude_r, longitude_r} is not allowed
+```
+
+**修复方案**：merge 前预先重命名右表与左表同名的非 key 列为唯一后缀（`_r` → `_r2` → `_r3`...），避开 pandas 的 suffix 机制：
+
+- 遍历右表非 join key 列，找出与左表同名的列（这些列原本会触发 suffixes）
+- 对每个冲突列，尝试 `_r` 后缀；若已在左表或右表存在，递增为 `_r2`、`_r3`... 直到不冲突
+- 重命名后这些列不再与左表同名，merge 时不会触发 suffixes 机制
+- 保留 `suffixes=("", "_r")` 作为兜底（理论上不再触发）
+
+**改动**：[`pivot_analyzer.py` L808-839](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L808-L839) 新增 ~30 行预重命名逻辑，重命名时打印 `[JOIN] 预重命名右表冲突列避免 suffix 冲突: {...}` 日志。
+
+**测试覆盖**：
+- 新增冲突场景验证（3 表连续 JOIN，A/B/C 都有 latitude/longitude 列）：第二次 JOIN 时 C 的列自动重命名为 `latitude_r2`/`longitude_r2`，结果列 `[id, latitude, longitude, latitude_r, longitude_r, extra_b, latitude_r2, longitude_r2, extra_c]` ✓
+- 防护用例全量回归 ✓（PPT 23页、Excel 32 sheet、模板填充 12页、HTML 报告均通过）
+
 ### v2.54.10 (2026-07-21)
 
 **✨ JOIN 中间表 Excel 样式优化（表头背景色 + 内容居中）**

@@ -805,6 +805,36 @@ def _load_joined_dataframe(config_dir, data_source, sheet_name, block_results=No
                 msg_parts.append(f"右表({right_name})缺少列 {missing_right}")
             raise ValueError(f"JOIN ON 列名不存在: {'; '.join(msg_parts)}")
 
+        # v2.54.11+ 修复 pandas merge suffixes 冲突
+        # 原方案 suffixes=("", "_r") 在左表已有 _r 后缀列时（如前一次 JOIN 累积的 _r 列，
+        # 或原表本身就有 latitude_r 这种列），右表同名列加 _r 后会与左表已有 _r 列冲突，
+        # pandas 报错：passing suffixes which cause duplicate columns {latitude_r, ...} is not allowed
+        # 新方案：merge 前预先重命名右表与左表同名的非 key 列为唯一后缀（_r, _r2, _r3...），
+        #         避开 merge 的 suffix 机制
+        right_key_set = set(right_keys)
+        left_col_set = set(df.columns)
+        right_col_set = set(df_right.columns)
+        rename_map = {}
+        for col in list(df_right.columns):
+            if col in right_key_set:
+                continue  # 右表 join key 列不重命名
+            if col not in left_col_set:
+                continue  # 与左表无同名列，merge 不触发 suffix
+            # col 与左表某列同名 → merge 会触发 suffix（右表加 _r），可能冲突
+            # 预先重命名为不冲突的唯一后缀
+            new_name = f"{col}_r"
+            idx = 1
+            existing = left_col_set | (right_col_set - {col})
+            while new_name in existing or new_name in rename_map.values():
+                idx += 1
+                new_name = f"{col}_r{idx}"
+            rename_map[col] = new_name
+            right_col_set.discard(col)
+            right_col_set.add(new_name)
+        if rename_map:
+            df_right = df_right.rename(columns=rename_map)
+            print(f"    [JOIN] 预重命名右表冲突列避免 suffix 冲突: {rename_map}")
+
         df = pd.merge(df, df_right, left_on=left_keys, right_on=right_keys,
                       how=jp["how"], suffixes=("", "_r"))
 
