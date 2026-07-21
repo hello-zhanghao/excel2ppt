@@ -244,6 +244,18 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.10 (2026-07-21)
+
+**✨ JOIN 中间表 Excel 样式优化（表头背景色 + 内容居中）**
+
+**改进**：JOIN 中间表 Excel（`_JOIN中间表.xlsx`）之前无任何样式，现在复用主结果 Excel 的样式：
+- 表头：Microsoft YaHei 粗体白字 + 蓝色背景 (#4472C4) + 居中对齐
+- 数据：Microsoft YaHei 10号字 + 居中对齐
+
+**改动**：[`_write_join_intermediate`](file:///f:/【1】AI探索/【3】excel2ppt/app/main.py#L474-L502) 写入表头和数据后，遍历应用 `HEADER_FONT`/`HEADER_FILL`/`HEADER_ALIGNMENT`（表头）和 `DATA_FONT`/`DATA_ALIGNMENT`（数据），样式常量从 `excel_writer` 复用，保证与主结果 Excel 视觉一致。
+
+**测试覆盖**：防护用例全量回归 ✓，JOIN 中间表样式验证通过（表头蓝色背景白字粗体居中，数据居中）。
+
 ### v2.54.9 (2026-07-21)
 
 **🐛 JOIN 中间表也应用导出列裁剪 + 自动保留 ON 键列**

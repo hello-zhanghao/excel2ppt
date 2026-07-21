@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.54.9"
+__VERSION__ = "2.54.10"
 __UPDATE_DATE__ = "2026-07-21"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -472,6 +472,7 @@ def _write_join_intermediate(output_path, join_intermediate):
     join_path = os.path.join(dirname, f"{stem}_JOIN中间表.{ext}")
 
     try:
+        from src.excel_writer import HEADER_FONT, HEADER_FILL, HEADER_ALIGNMENT, DATA_FONT, DATA_ALIGNMENT
         wb = openpyxl.Workbook()
         wb.remove(wb.active)
         for sheet_name, df in join_intermediate.items():
@@ -482,6 +483,15 @@ def _write_join_intermediate(output_path, join_intermediate):
             # 写数据行
             for _, row in df.iterrows():
                 ws.append([row[c] if not pd.isna(row[c]) else None for c in df.columns])
+            # v2.54.10+ 表头背景色 + 居中，数据居中（与主结果 Excel 样式一致）
+            for cell in ws[1]:
+                cell.font = HEADER_FONT
+                cell.fill = HEADER_FILL
+                cell.alignment = HEADER_ALIGNMENT
+            for row in ws.iter_rows(min_row=2):
+                for cell in row:
+                    cell.font = DATA_FONT
+                    cell.alignment = DATA_ALIGNMENT
             # 冻结首行 + 自动列宽
             ws.freeze_panes = "A2"
             _auto_fit_columns(ws)
