@@ -434,7 +434,13 @@ def read_pivot_config(config_path, sheet_name=None):
         task["值计算"] = str(item.get("值计算", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值计算") else ""
         task["是否计算"] = str(item.get("是否计算", "是")).strip() if item.get("是否计算") else "是"
         task["过滤条件"] = str(item.get("过滤条件", "")).strip() if item.get("过滤条件") else ""
-        task["导出列"] = str(item.get("导出列", "")).strip() if item.get("导出列") else ""
+        # v2.54.7+ 导出列支持多个别名（导出列/导出/保留列/输出列/选择列），解决用户列名写法不一致导致导出列不生效
+        _export_cols_val = ""
+        for _alias in ("导出列", "导出", "保留列", "输出列", "选择列"):
+            if item.get(_alias):
+                _export_cols_val = str(item.get(_alias)).strip()
+                break
+        task["导出列"] = _export_cols_val
         # 导出列支持 @Sheet名@列标识 语法：从配置文件另一个 sheet 读取列清单
         if task["导出列"]:
             task["导出列"] = _resolve_export_cols_from_sheet(task["导出列"], config_path)
@@ -1400,6 +1406,9 @@ def _apply_export_cols(df, task, 行维度, 序号):
     # 1. 精确匹配最终列名
     matched = [c for c in actual_cols if str(c) in keep_list or str(c) in row_dim_set]
     missing = [c for c in keep_list if c not in [str(x) for x in matched]]
+
+    # v2.54.7+ 增加调试日志，帮助用户确认导出列是否被识别和应用
+    print(f"    [导出列] 任务{序号}: 配置='{keep_cols_str}' → 期望保留{keep_list}，实际列={actual_cols}，命中={list(matched)}")
 
     # 2. 未命中的导出列，尝试用原列名匹配（去聚合后缀）
     #    场景：用户写原列名 "销售额"，但聚合后列名是 "销售额_求和"
