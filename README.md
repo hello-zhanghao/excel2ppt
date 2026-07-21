@@ -244,6 +244,30 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.16 (2026-07-21)
+
+**✨ 新增 VLOOKUP 关键字：右表按 ON 键去重取首行，避免笛卡尔积**
+
+**背景**：v2.54.15 修复了浮点精度问题，但用户反馈右表 ON 键有重复值时（即使左表唯一），标准 `pd.merge` 仍会做笛卡尔积（左1+右N→N行），与 Excel VLOOKUP 函数"取首行匹配"的语义不一致，导致 JOIN 结果出现多余行。
+
+**实现**（[`pivot_analyzer.py` `_parse_join_spec`/`_tokenize_join`/`_load_joined_dataframe`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L576-L676)）：
+- 新增 `VLOOKUP` 关键字，与 `JOIN`/`LEFT JOIN` 等并列
+- 语法：`表A.xlsx VLOOKUP 表B.xlsx ON k1=k1 AND k2=k2`
+- merge 前对右表按 `right_keys` 做 `drop_duplicates(keep='first')`，同时丢弃 ON 键为 NaN 的行
+- 实际 how 为 `left`（与 VLOOKUP 语义一致，左表全保留、右表无匹配填 NaN）
+- 支持链式：`A VLOOKUP B ON k=k JOIN C ON k=k`（VLOOKUP 段去重取首行，JOIN 段保持笛卡尔积）
+
+打印日志 `[VLOOKUP] 右表按 ON 键 [...] 去重取首行: 原 N 行 → M 行（丢弃 NaN X 行、去重 Y 行）` 便于排查。
+
+**对比示例**（左表 2 行 + 右表 3 行，右表 K1 重复 2 行）：
+
+| 模式 | 写法 | 结果行数 | K1 取值 |
+|---|---|---|---|
+| 普通 JOIN | `A JOIN B ON id=id` | 3（笛卡尔积） | R1a + R1b |
+| VLOOKUP | `A VLOOKUP B ON id=id` | 2（取首行） | R1a |
+
+**验证**：单键、多键（AND）、右表含 NaN、链式 JOIN+VLOOKUP 混合场景全部测试通过；防护用例 12 页验证项全部通过。
+
 ### v2.54.15 (2026-07-21)
 
 **🐛 修复经纬度等浮点 ON 键 JOIN 行数起爆**

@@ -575,7 +575,8 @@ def _resolve_block_reference(data_source, block_results):
 
 def _parse_join_spec(data_source):
     # 修复 P1 问题8：JOIN 检测对换行/制表符友好（Excel Alt+Enter 换行场景）
-    if not re.search(r"\bJOIN\b", data_source, re.IGNORECASE):
+    # v2.54.16+ 同时识别 VLOOKUP 关键字（右表按 ON 键去重取首行的非笛卡尔积匹配）
+    if not re.search(r"\b(JOIN|VLOOKUP)\b", data_source, re.IGNORECASE):
         return None
 
     tokens = _tokenize_join(data_source)
@@ -594,7 +595,7 @@ def _parse_join_spec(data_source):
         if i >= len(tokens):
             break
 
-        if tokens[i].upper() not in ("JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "OUTER JOIN"):
+        if tokens[i].upper() not in ("JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "OUTER JOIN", "VLOOKUP"):
             i += 1
             if i >= len(tokens):
                 break
@@ -610,7 +611,7 @@ def _parse_join_spec(data_source):
         if i + 1 <= len(tokens) and i < len(tokens) and tokens[i].upper() == "ON":
             i += 1
             on_parts = []
-            while i < len(tokens) and tokens[i].upper() not in ("JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "OUTER JOIN"):
+            while i < len(tokens) and tokens[i].upper() not in ("JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "OUTER JOIN", "VLOOKUP"):
                 on_parts.append(tokens[i])
                 i += 1
             on_expr = " ".join(on_parts)
@@ -643,12 +644,18 @@ def _parse_join_spec(data_source):
 
         how = "inner"
         jt = join_type.upper()
+        is_vlookup = False
         if "LEFT" in jt:
             how = "left"
         elif "RIGHT" in jt:
             how = "right"
         elif "OUTER" in jt:
             how = "outer"
+        elif "VLOOKUP" in jt:
+            # v2.54.16+ VLOOKUP 模式：右表按 ON 键去重取首行后做 LEFT JOIN，
+            #                       避免右表 ON 键重复导致的笛卡尔积（Excel VLOOKUP 语义）
+            how = "left"
+            is_vlookup = True
 
         left_file, left_sheet = _split_table_token(left_table)
         right_file, right_sheet = _split_table_token(right_table)
@@ -663,6 +670,7 @@ def _parse_join_spec(data_source):
             "left_keys": left_keys,
             "right_keys": right_keys,
             "how": how,
+            "is_vlookup": is_vlookup,
         })
 
     return parts
@@ -677,7 +685,8 @@ def _split_table_token(token):
 
 def _tokenize_join(data_source):
     s = data_source.strip()
-    keywords = ["INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "OUTER JOIN", "JOIN", "ON", "AND"]
+    # v2.54.16+ keywords 加入 VLOOKUP（右表按 ON 键去重取首行的非笛卡尔积匹配）
+    keywords = ["INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "OUTER JOIN", "VLOOKUP", "JOIN", "ON", "AND"]
     tokens = []
     remaining = s
     while remaining:
@@ -691,7 +700,7 @@ def _tokenize_join(data_source):
                 found = True
                 break
         if not found:
-            m = re.match(r"^\s*(.+?)(?=\s+(?:INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|OUTER\s+JOIN|JOIN|ON|AND)\b|$)", remaining, re.IGNORECASE)
+            m = re.match(r"^\s*(.+?)(?=\s+(?:INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|OUTER\s+JOIN|VLOOKUP|JOIN|ON|AND)\b|$)", remaining, re.IGNORECASE)
             if m:
                 raw = m.group(1).strip()
                 tokens.append(raw)
@@ -717,6 +726,8 @@ def _load_joined_dataframe(config_dir, data_source, sheet_name, block_results=No
       - ``表A.xlsx@Sheet1 JOIN 表B.xlsx@Sheet2 ON k1=k1 AND k2=k2``
       - ``{区块名} JOIN 表B.xlsx ON k1=k1``（左表为前序透视结果区块引用）
       - 支持 INNER/LEFT/RIGHT/OUTER JOIN（默认 INNER）
+      - v2.54.16+ ``表A.xlsx VLOOKUP 表B.xlsx ON k1=k1``：右表按 ON 键去重取首行后做 LEFT JOIN，
+        避免右表 ON 键重复导致的笛卡尔积（Excel VLOOKUP 语义，左1+右N→1行）
 
     :param block_results: 前序任务累积的结果 {区块名: DataFrame}，由 _run_pivot_mode 滚动传入
     :raises ValueError: JOIN 右表加载失败、ON 列名不存在、左右键数量不一致时抛出
@@ -853,6 +864,28 @@ def _load_joined_dataframe(config_dir, data_source, sheet_name, block_results=No
                 _round_log.append(f"右表.{rk}→{prec}位")
         if _round_log:
             print(f"    [JOIN] 浮点 ON 键自动 round: {', '.join(_round_log)}")
+
+        # v2.54.16+ VLOOKUP 模式：右表按 ON 键去重取首行，避免笛卡尔积
+        # 场景：右表 ON 键有重复值时，标准 pd.merge 会做笛卡尔积（左1+右N→N行），
+        #       VLOOKUP 语义是右表只取首个匹配行（左1+右N→1行），与 Excel VLOOKUP 一致
+        # 策略：merge 前对右表按 right_keys drop_duplicates(keep='first')，
+        #       同时丢弃 ON 键为 NaN 的行（NaN 与任何值都不匹配，保留无意义）
+        if jp.get("is_vlookup", False):
+            before_rows = len(df_right)
+            # 丢弃右表 ON 键为 NaN 的行（NaN 不会被 merge 匹配，留着只会触发 VLOOKUP 警告）
+            df_right_clean = df_right.dropna(subset=right_keys, how="any")
+            dropped_nan = before_rows - len(df_right_clean)
+            # 按右表 ON 键去重保留首行
+            after_nan = len(df_right_clean)
+            df_right_clean = df_right_clean.drop_duplicates(subset=right_keys, keep="first")
+            dropped_dup = after_nan - len(df_right_clean)
+            df_right = df_right_clean
+            if dropped_nan > 0 or dropped_dup > 0:
+                print(f"    [VLOOKUP] 右表按 ON 键 {right_keys} 去重取首行: "
+                      f"原 {before_rows} 行 → {len(df_right)} 行"
+                      f"（丢弃 NaN {dropped_nan} 行、去重 {dropped_dup} 行）")
+            else:
+                print(f"    [VLOOKUP] 右表按 ON 键 {right_keys} 去重取首行: 无重复（{len(df_right)} 行）")
 
         df = pd.merge(df, df_right, left_on=left_keys, right_on=right_keys,
                       how=jp["how"], suffixes=("", "_r"))
