@@ -612,6 +612,36 @@ def verify_excel_output(excel_path):
                 checks.append(("异名映射_华东均价≈12.31",
                                abs(float(hd[3]) - 12.31) < 0.01, str(hd[3])))
 
+        # v2.54.5+ 合并写法验证：行维度|行映射 + 值字段|值映射（半角|）
+        if "合并写法_行值映射" in actual_sheets:
+            header, data = _read_sheet_data("合并写法_行值映射")
+            # 期望列名: 区域（行维度映射）, 总销售额（值映射）
+            checks.append(("合并写法_行维度映射=区域", "区域" in header, f"header={header}"))
+            checks.append(("合并写法_值映射=总销售额", "总销售额" in header, f"header={header}"))
+            # 原列名不应出现（已被映射）
+            checks.append(("合并写法_原列名已映射", "地区" not in header and "销售额" not in header, f"header={header}"))
+            if data:
+                vals = {str(r[0]).strip(): r for r in data if r[0]}
+                hd = vals.get("华东")
+                if hd:
+                    checks.append(("合并写法_华东总销售额=4800", float(hd[1]) == 4800, str(hd[1])))
+        else:
+            checks.append(("合并写法_sheet存在", False, "合并写法_行值映射 不存在"))
+
+        # v2.54.5+ 全角｜写法验证：行维度｜行映射 + 值字段｜值映射
+        if "全角写法_行值映射" in actual_sheets:
+            header, data = _read_sheet_data("全角写法_行值映射")
+            checks.append(("全角写法_行维度映射=区域", "区域" in header, f"header={header}"))
+            checks.append(("全角写法_值映射=总销售额", "总销售额" in header, f"header={header}"))
+            checks.append(("全角写法_原列名已映射", "地区" not in header and "销售额" not in header, f"header={header}"))
+            if data:
+                vals = {str(r[0]).strip(): r for r in data if r[0]}
+                hd = vals.get("华东")
+                if hd:
+                    checks.append(("全角写法_华东总销售额=4800", float(hd[1]) == 4800, str(hd[1])))
+        else:
+            checks.append(("全角写法_sheet存在", False, "全角写法_行值映射 不存在"))
+
     wb.close()
 
     # 打印结果

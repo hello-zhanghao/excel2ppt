@@ -189,22 +189,27 @@ def _join_unique(series, sep: str = _JOIN_DEFAULT_SEP) -> str:
 def _split_value_field_map(raw_value_field):
     """解析值字段与值映射的合并写法 ``值字段|值映射``。
 
-    v2.54.4+ 支持 ``值字段`` 单列承载值映射，减少配置列数：
+    v2.54.4+ 支持 ``值字段`` 单列承载值映射，减少配置列数。
+    v2.54.5+ ``|`` 同时支持英文半角 ``|`` 和中文全角 ``｜``（避免中文输入法误输入），
+              并扩展到行维度/列维度（``行维度|行映射``、``列维度|列映射``）。
+
       - ``"销售额"``                   → ("销售额", "")            无映射
       - ``"销售额|总销售额"``           → ("销售额", "总销售额")     整体重命名
-      - ``"销售额|总销售额,利润"``      → ("销售额,利润", "总销售额,利润")  利润无映射留空
+      - ``"销售额｜总销售额"``          → ("销售额", "总销售额")     全角｜同样支持
+      - ``"销售额|总销售额,利润"``      → ("销售额,利润", "总销售额,")  利润无映射留空位
       - ``"销售额|总销售额,利润|净利润"`` → ("销售额,利润", "总销售额,净利润")  各自带映射
       - ``"销售额,利润"``              → ("销售额,利润", "")       无映射
       - ``"去重拼接|、,sum|.2f"``       → 原样返回（| 后是聚合参数/格式，不是值映射）
 
-    判定规则：``|`` 后内容必须是纯文本列名（不含已知聚合关键字、不含格式串），
+    判定规则：``|`` 后内容必须是纯文本列名（不含已知格式串），
               否则 ``|`` 视为聚合方式的参数分隔符（如 ``去重拼接|、``），原样返回。
 
-    :return: (值字段字符串, 值映射字符串)。无映射时值映射为空字符串。
+    :return: (字段字符串, 映射字符串)。无映射时映射为空字符串。空位用空字符串占位，保持位置对应。
     """
     if not raw_value_field:
         return "", ""
-    s = raw_value_field.strip()
+    # v2.54.5+ 全角｜统一替换为半角|，避免中文输入法误输入
+    s = raw_value_field.replace("｜", "|").strip()
     if "|" not in s:
         return s, ""
 
@@ -373,8 +378,17 @@ def read_pivot_config(config_path, sheet_name=None):
         task["序号"] = item.get("序号", "")
         task["数据源"] = str(item.get("数据源", "")).strip() if item.get("数据源") else ""
         task["sheet"] = str(item.get("Sheet", item.get("sheet", ""))).strip() if (item.get("Sheet") or item.get("sheet")) else "Sheet1"
-        task["行维度"] = str(item.get("行维度", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("行维度") else ""
-        task["列维度"] = str(item.get("列维度", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("列维度") else ""
+        # v2.54.5+ 行维度/列维度也支持 | 合并写法（行维度|行映射、列维度|列映射），减少配置列数
+        #   写法1: "地区"              → 行维度=地区，行映射=空
+        #   写法2: "地区|区域"          → 行维度=地区，行映射=区域
+        #   写法3: "地区|区域,产品|类别" → 多字段各自带映射
+        # 全角｜和半角| 均支持（_split_value_field_map 内部统一替换）
+        _raw_row_dim = str(item.get("行维度", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("行维度") else ""
+        _parsed_row_dim, _parsed_row_map = _split_value_field_map(_raw_row_dim)
+        task["行维度"] = _parsed_row_dim
+        _raw_col_dim = str(item.get("列维度", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("列维度") else ""
+        _parsed_col_dim, _parsed_col_map = _split_value_field_map(_raw_col_dim)
+        task["列维度"] = _parsed_col_dim
         # v2.54.4+ 支持值字段与值映射用 | 合并写法，减少配置列数
         #   写法1: "销售额"              → 值字段=销售额，值映射=空
         #   写法2: "销售额|总销售额"      → 值字段=销售额，值映射=总销售额
@@ -386,7 +400,8 @@ def read_pivot_config(config_path, sheet_name=None):
         # 显式"值映射"列优先，否则用值字段里 | 解析出的映射
         _explicit_val_map = str(item.get("值映射", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值映射") else (str(item.get("值字段映射", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("值字段映射") else "")
         task["值映射"] = _explicit_val_map if _explicit_val_map else _parsed_value_map
-        task["聚合方式"] = str(item.get("聚合方式", "sum")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("聚合方式") else "sum"
+        # v2.54.5+ 聚合方式支持全角｜（如 sum｜.2f、去重拼接｜、），统一替换为半角|
+        task["聚合方式"] = str(item.get("聚合方式", "sum")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",").replace("｜", "|") if item.get("聚合方式") else "sum"
         task["结果Sheet"] = str(item.get("结果Sheet", "")).strip() if item.get("结果Sheet") else f"结果{task.get('序号','')}"
         # 区块名仅取"区块名"列的值，不 fallback 到"备注"列
         # 原因：1) item.get("区块名", default) 当值为 None 时返回 None 而非 default，str(None)="None" 会误判为同名区块
@@ -408,6 +423,11 @@ def read_pivot_config(config_path, sheet_name=None):
         # ------------------------------------------------------------------
         task["行映射"] = str(item.get("行映射", "")).strip() if item.get("行映射") else (str(item.get("行维度映射", "")).strip() if item.get("行维度映射") else str(item.get("映射表", "")).strip() if item.get("映射表") else "")
         task["列映射"] = str(item.get("列映射", "")).strip() if item.get("列映射") else (str(item.get("列维度映射", "")).strip() if item.get("列维度映射") else "")
+        # v2.54.5+ 行映射/列映射：显式列优先，否则用行维度/列维度里 | 解析出的映射（与值映射对称）
+        if not task["行映射"] and _parsed_row_map:
+            task["行映射"] = _parsed_row_map
+        if not task["列映射"] and _parsed_col_map:
+            task["列映射"] = _parsed_col_map
         # v2.54.4+ 值映射已在 L388 处理（支持值字段|值映射合并写法 + 显式值映射列 + 值字段映射别名 fallback）
         # 此处不再重复赋值，避免覆盖 L388 的合并写法解析结果
         task["分箱"] = str(item.get("分箱", "")).strip().replace("，", ",").replace("\n", ",").replace("\r", ",") if item.get("分箱") else ""
@@ -2097,7 +2117,9 @@ def _parse_mapping(mapping_str, row_map_str, col_map_str, val_map_str, 行维度
 def _map_fields(map_str, fields, col_map):
     if not map_str or not map_str.strip():
         return col_map
-    parts = [p.strip() for p in map_str.split(",") if p.strip()]
+    # v2.54.5+ 不过滤空字符串，保持位置对应（合并写法 "地区|区域,产品" 解析出行映射="区域," 需要空位占位）
+    # 空位用 continue 跳过但不影响后续 i 对齐 fields 索引
+    parts = [p.strip() for p in map_str.split(",")]
     for i, part in enumerate(parts):
         if not part:
             continue
