@@ -1461,6 +1461,81 @@ def _apply_export_cols(df, task, 行维度, 序号):
     return df
 
 
+def _apply_export_cols_to_join(df, task, 行维度, 序号, on_keys):
+    """v2.54.9+ JOIN 中间表专用导出列裁剪：按导出列裁剪 + 自动保留 ON 键列。
+
+    与 `_apply_export_cols` 的差异：JOIN 中间表用于人工核对 JOIN 是否正确，
+    额外自动保留 ON 键列（即使用户没在导出列里写），方便核对 JOIN 匹配。
+
+    :param on_keys: JOIN 的 ON 键列名列表，自动保留这些列
+    """
+    keep_cols_str = task.get("导出列", "") if task else ""
+    if not keep_cols_str or not keep_cols_str.strip():
+        return df
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+
+    keep_list = [c.strip() for c in keep_cols_str.replace("，", ",").split(",") if c.strip()]
+    if not keep_list:
+        return df
+
+    actual_cols = list(df.columns)
+    # v2.54.9+ JOIN 中间表自动保留 ON 键列 + 行维度列
+    auto_keep_set = set(str(k) for k in (on_keys or []))
+    row_dim_set = set(str(d) for d in (行维度 or []))
+    auto_keep_set = auto_keep_set | row_dim_set
+
+    # 1. 精确匹配最终列名 + 自动保留列
+    matched = [c for c in actual_cols if str(c) in keep_list or str(c) in auto_keep_set]
+    missing = [c for c in keep_list if c not in [str(x) for x in matched]]
+
+    # 2. 未命中的导出列，JOIN 中间表是聚合前数据，列名是原列名
+    #    用户可能写聚合后名(销售额_求和)或映射后名(总销售额)，需反向匹配原列名
+    #    策略：用户写 销售额_求和 → 去 _求和 后缀得到 销售额 → 匹配 JOIN 表中的 销售额 列
+    #          用户写 销售额_X 形式且 X 是已知聚合后缀 → 去后缀匹配
+    if missing:
+        _agg_suffixes = ("_求和", "_均值", "_计数", "_最大", "_最小", "_去重计数", "_sum", "_mean",
+                         "_count", "_max", "_min", "_nunique")
+        for mc in missing[:]:
+            # 反向去后缀：用户写 销售额_求和 → 找 销售额
+            base_name = mc
+            for suf in _agg_suffixes:
+                if base_name.endswith(suf):
+                    base_name = base_name[:-len(suf)]
+                    break
+            if base_name != mc and base_name in [str(c) for c in actual_cols] and base_name not in [str(x) for x in matched]:
+                matched.append(base_name)
+                missing.remove(mc)
+                continue
+            # 正向去后缀：用户写 销售额 → 找 销售额_求和（兼容，但 JOIN 表通常没有后缀列）
+            candidates = [c for c in actual_cols
+                          if str(c).startswith(mc + "_") and str(c) not in [str(x) for x in matched]]
+            if len(candidates) == 1:
+                matched.append(candidates[0])
+                missing.remove(mc)
+
+    # 去重保序
+    seen = set()
+    final_cols = []
+    for c in matched:
+        key = str(c)
+        if key not in seen:
+            seen.add(key)
+            final_cols.append(c)
+
+    auto_added = [c for c in final_cols if str(c) in auto_keep_set and str(c) not in keep_list]
+    user_matched = [c for c in final_cols if str(c) not in auto_keep_set]
+
+    if missing:
+        avail = [str(c) for c in actual_cols]
+        print(f"    [导出列] 任务{序号} [JOIN中间表]: 配置='{keep_cols_str}' → 期望保留{keep_list}，ON键自动保留={list(auto_keep_set & set([str(c) for c in actual_cols]))}，实际列={avail}，命中={list(matched)}")
+
+    if final_cols:
+        print(f"    [导出列] 任务{序号} [JOIN中间表]: 裁剪为 {list(final_cols)}（用户导出列={user_matched}，ON键自动保留={auto_added}）")
+        return df[final_cols]
+    return df
+
+
 def run_analysis(task, config_dir, scalar_context=None, block_results=None):
     """执行单个透视任务。
 
@@ -1509,6 +1584,20 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         return None, f"[任务{序号}] 数据为空或文件不存在: {data_source}"
 
     join_happened = _parse_join_spec(str(data_source)) is not None
+    # v2.54.9+ 收集 JOIN 的 ON 键列名，供 JOIN 中间表裁剪时自动保留（方便核对 JOIN 是否正确）
+    join_on_keys = []
+    if join_happened:
+        try:
+            _join_parts = _parse_join_spec(str(data_source))
+            if _join_parts:
+                for jp in _join_parts:
+                    join_on_keys.extend(jp.get("left_keys", []) or [])
+                    join_on_keys.extend(jp.get("right_keys", []) or [])
+                # 去重保序
+                seen = set()
+                join_on_keys = [k for k in join_on_keys if not (k in seen or seen.add(k))]
+        except Exception:
+            join_on_keys = []
     # JOIN 完成后立即保存原始 JOIN 结果（未经过滤/映射/分箱/聚合），用于输出到 JOIN 中间表 Excel
     # 修复 bug：原代码 L1321 的 `for key, df in result.items()` 循环把 df 重新赋值为透视结果，
     # 导致 L1363 存入 _JOIN中间表_ 的 df 是透视后的聚合结果，而非 JOIN 后的原始明细
@@ -1634,7 +1723,9 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         # 明细模式也输出 JOIN 中间表（如果任务含 JOIN），供人工检查
         if join_happened and join_df_original is not None and not join_df_original.empty:
             结果Sheet = task.get("结果Sheet", f"结果{序号}")
-            result[f"_JOIN中间表_{结果Sheet}"] = join_df_original
+            # v2.54.9+ JOIN 中间表也应用导出列裁剪，自动保留 ON 键列方便核对
+            join_df_cropped = _apply_export_cols_to_join(join_df_original, task, 行维度, 序号, join_on_keys)
+            result[f"_JOIN中间表_{结果Sheet}"] = join_df_cropped
         return result, None
 
     for col in 值字段:
@@ -1704,9 +1795,12 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
 
     if join_happened and join_df_original is not None and not join_df_original.empty:
         结果Sheet = task.get("结果Sheet", f"结果{序号}")
-        result[f"_JOIN中间表_{结果Sheet}"] = join_df_original
+        # v2.54.9+ JOIN 中间表也应用导出列裁剪，自动保留 ON 键列方便核对
+        join_df_cropped = _apply_export_cols_to_join(join_df_original, task, 行维度, 序号, join_on_keys)
+        result[f"_JOIN中间表_{结果Sheet}"] = join_df_cropped
 
     # v2.54.6+ 导出列裁剪（聚合+映射+值计算后）：按最终列名匹配，双兼容原列名和聚合后/映射后名
+    # v2.54.9+ JOIN 中间表已在上面的 _apply_export_cols_to_join 单独裁剪，此处只裁剪正常结果
     if result:
         result = {k: (_apply_export_cols(v, task, 行维度, 序号) if isinstance(v, pd.DataFrame) and not k.startswith("_JOIN中间表_") else v)
                   for k, v in result.items()}
