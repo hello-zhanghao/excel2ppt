@@ -835,6 +835,25 @@ def _load_joined_dataframe(config_dir, data_source, sheet_name, block_results=No
             df_right = df_right.rename(columns=rename_map)
             print(f"    [JOIN] 预重命名右表冲突列避免 suffix 冲突: {rename_map}")
 
+        # v2.54.15+ JOIN 前对浮点 ON 键自动 round，避免浮点精度差异导致行数起爆
+        # 场景：经纬度等浮点列在 Excel 显示相同但底层存储有微小差异（如 116.400001 vs 116.400002），
+        #       pandas merge 做精确等值比较会匹配失败或产生笛卡尔积
+        # 策略：复用 _col_round_precision 逻辑（经纬度 6 位、其他 2 位），对左右表 ON 键列 round 后再 merge
+        # 仅对数值型列生效，字符串/日期列不受影响
+        _round_log = []
+        for lk, rk in zip(left_keys, right_keys):
+            prec = _col_round_precision(lk)
+            # 左表 ON 键 round
+            if lk in df.columns and pd.api.types.is_numeric_dtype(df[lk]):
+                df[lk] = df[lk].round(prec)
+                _round_log.append(f"左表.{lk}→{prec}位")
+            # 右表 ON 键 round
+            if rk in df_right.columns and pd.api.types.is_numeric_dtype(df_right[rk]):
+                df_right[rk] = df_right[rk].round(prec)
+                _round_log.append(f"右表.{rk}→{prec}位")
+        if _round_log:
+            print(f"    [JOIN] 浮点 ON 键自动 round: {', '.join(_round_log)}")
+
         df = pd.merge(df, df_right, left_on=left_keys, right_on=right_keys,
                       how=jp["how"], suffixes=("", "_r"))
 
