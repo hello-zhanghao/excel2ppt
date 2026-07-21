@@ -642,6 +642,34 @@ def verify_excel_output(excel_path):
         else:
             checks.append(("全角写法_sheet存在", False, "全角写法_行值映射 不存在"))
 
+        # v2.54.6+ 导出列写聚合后名（销售额_求和）应能匹配
+        if "导出列_聚合后名" in actual_sheets:
+            header, data = _read_sheet_data("导出列_聚合后名")
+            checks.append(("导出列_聚合后名_列数=2", len(header) == 2, f"header={header}"))
+            checks.append(("导出列_聚合后名_含地区", "地区" in header, f"header={header}"))
+            checks.append(("导出列_聚合后名_含销售额_求和", "销售额_求和" in header, f"header={header}"))
+            if data:
+                vals = {str(r[0]).strip(): r for r in data if r[0]}
+                hd = vals.get("华东")
+                if hd:
+                    checks.append(("导出列_聚合后名_华东=4800", float(hd[1]) == 4800, str(hd[1])))
+        else:
+            checks.append(("导出列_聚合后名_sheet存在", False, "导出列_聚合后名 不存在"))
+
+        # v2.54.6+ 导出列写映射名（总销售额）应能匹配
+        if "导出列_映射名" in actual_sheets:
+            header, data = _read_sheet_data("导出列_映射名")
+            checks.append(("导出列_映射名_列数=2", len(header) == 2, f"header={header}"))
+            checks.append(("导出列_映射名_含地区", "地区" in header, f"header={header}"))
+            checks.append(("导出列_映射名_含总销售额", "总销售额" in header, f"header={header}"))
+            if data:
+                vals = {str(r[0]).strip(): r for r in data if r[0]}
+                hd = vals.get("华东")
+                if hd:
+                    checks.append(("导出列_映射名_华东=4800", float(hd[1]) == 4800, str(hd[1])))
+        else:
+            checks.append(("导出列_映射名_sheet存在", False, "导出列_映射名 不存在"))
+
     wb.close()
 
     # 打印结果

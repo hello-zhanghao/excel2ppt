@@ -1368,6 +1368,72 @@ def print_validation_results(results):
     return error_count == 0
 
 
+def _apply_export_cols(df, task, 行维度, 序号):
+    """v2.54.6+ 导出列裁剪：在聚合+映射+值计算之后应用，按最终列名匹配。
+
+    双兼容策略（解决"导出列写了找不到"的常见痛点）：
+      1. 精确匹配最终列名（如 `销售额_求和`、映射后名 `总销售额`）
+      2. 若未命中，尝试用"原列名"匹配（去聚合后缀：`销售额_求和` → `销售额`）
+      3. 行维度列自动保留（用户无需在导出列里重复写行维度）
+
+    :param df: 结果 DataFrame（聚合+映射+值计算后的最终结果）
+    :param task: 任务配置 dict（读取 task["导出列"]）
+    :param 行维度: 行维度列表（自动保留这些列，即使用户没写）
+    :param 序号: 任务序号（用于报错信息）
+    :return: 裁剪后的 df；无导出列配置或匹配失败时原样返回
+    """
+    keep_cols_str = task.get("导出列", "") if task else ""
+    if not keep_cols_str or not keep_cols_str.strip():
+        return df
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+
+    keep_list = [c.strip() for c in keep_cols_str.replace("，", ",").split(",") if c.strip()]
+    if not keep_list:
+        return df
+
+    actual_cols = list(df.columns)
+    # 行维度列自动保留
+    row_dim_set = set(str(d) for d in (行维度 or []))
+    auto_keep = [c for c in actual_cols if str(c) in row_dim_set]
+
+    # 1. 精确匹配最终列名
+    matched = [c for c in actual_cols if str(c) in keep_list or str(c) in row_dim_set]
+    missing = [c for c in keep_list if c not in [str(x) for x in matched]]
+
+    # 2. 未命中的导出列，尝试用原列名匹配（去聚合后缀）
+    #    场景：用户写原列名 "销售额"，但聚合后列名是 "销售额_求和"
+    if missing:
+        for mc in missing[:]:
+            # 查找以 mc 开头 + "_" + 聚合后缀的列
+            candidates = [c for c in actual_cols
+                          if str(c).startswith(mc + "_") and str(c) not in [str(x) for x in matched]]
+            if len(candidates) == 1:
+                matched.append(candidates[0])
+                missing.remove(mc)
+            elif len(candidates) > 1:
+                # 多个候选（如 销售额_求和 + 销售额_均值），不自动匹配，留给报错
+                pass
+
+    # 去重保序
+    seen = set()
+    final_cols = []
+    for c in matched:
+        key = str(c)
+        if key not in seen:
+            seen.add(key)
+            final_cols.append(c)
+
+    if missing:
+        # 仍有未匹配，报错（列出可用列，帮助排查）
+        avail = [str(c) for c in actual_cols]
+        print(f"[任务{序号}] [警告] 导出列未匹配，已忽略: {missing}。可用列: {avail}")
+
+    if final_cols:
+        return df[final_cols]
+    return df
+
+
 def run_analysis(task, config_dir, scalar_context=None, block_results=None):
     """执行单个透视任务。
 
@@ -1431,15 +1497,8 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         except Exception as e:
             return None, f"[任务{序号}] 过滤条件执行失败: {str(e)}"
 
-    keep_cols = task.get("导出列", "")
-    if keep_cols:
-        keep_list = [c.strip() for c in keep_cols.replace("，", ",").split(",") if c.strip()]
-        if keep_list:
-            missing = [c for c in keep_list if c not in df.columns]
-            if missing:
-                return None, f"[任务{序号}] 导出列不存在于数据中: {missing}"
-            df = df[keep_list]
-
+    # v2.54.6+ 导出列裁剪移到聚合+映射+值计算之后（见 return 前），此处不再提前裁剪
+    # 原因：提前裁剪时列名还是原名，用户写聚合后名(销售额_求和)或映射后名(总销售额)会报错找不到
     mapping_str = task.get("映射表", "")
     row_map_str = task.get("行映射", "")
     col_map_str = task.get("列映射", "")
@@ -1541,6 +1600,8 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         else:
             # 无行维度：保留全部行
             detail_df = df.reset_index(drop=True)
+        # v2.54.6+ 导出列裁剪（明细模式）：按最终列名匹配，找不到原列名时尝试去聚合后缀匹配
+        detail_df = _apply_export_cols(detail_df, task, 行维度, 序号)
         block_name = task.get("区块名", "") or task.get("结果Sheet", f"结果{序号}")
         result = {block_name: detail_df}
         # 明细模式也输出 JOIN 中间表（如果任务含 JOIN），供人工检查
@@ -1617,6 +1678,11 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
     if join_happened and join_df_original is not None and not join_df_original.empty:
         结果Sheet = task.get("结果Sheet", f"结果{序号}")
         result[f"_JOIN中间表_{结果Sheet}"] = join_df_original
+
+    # v2.54.6+ 导出列裁剪（聚合+映射+值计算后）：按最终列名匹配，双兼容原列名和聚合后/映射后名
+    if result:
+        result = {k: (_apply_export_cols(v, task, 行维度, 序号) if isinstance(v, pd.DataFrame) and not k.startswith("_JOIN中间表_") else v)
+                  for k, v in result.items()}
 
     return result, None
 
