@@ -2663,10 +2663,13 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
     for key, df in result.items():
         if not isinstance(df, pd.DataFrame):
             continue
-        
+
         new_cols = {}
         processed_expressions = set()
-        
+        # v2.54.22+ 保存原始列值副本，多列表达式引用原始值，
+        # 不受单列运算（如 /1000）修改原列值的影响
+        original_df = df.copy()
+
         for col in df.columns:
             if not pd.api.types.is_numeric_dtype(df[col]):
                 continue
@@ -2691,7 +2694,8 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
 
                 try:
                     if has_multi_col:
-                        calc_df = df.copy()
+                        # v2.54.22+ 用原始值副本，避免单列运算（如 /1000）修改原列后影响多列计算
+                        calc_df = original_df.copy()
 
                         # 构建列名映射：从已知列名/值字段/标量中查找表达式内出现的完整标识符
                         # 不使用正则token拆分，避免括号等特殊字符破坏列名完整性
