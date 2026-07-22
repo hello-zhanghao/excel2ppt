@@ -244,6 +244,23 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.22 (2026-07-22)
+
+**🐛 修复交叉表（列维度）avg 聚合报错 + 多聚合结果覆盖**
+
+**背景**：用户反馈交叉表场景 sum 和 avg 结果差异不大。排查发现两个 bug：
+
+**Bug 1：交叉表 avg 关键字不被 pandas 识别**（[`pivot_analyzer.py`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py) `_cross_pivot`）：
+- 原代码将原始聚合关键字 `af_key`（如 "avg"）直接传给 `pd.pivot_table(aggfunc=...)`
+- pandas 的 `pivot_table` 只认 "mean" 不认 "avg"，导致该任务抛出异常失败
+- 修复：改用映射后的 `a_mapped`（"avg"→"mean"），同时 `nunique` 改用 `pd.Series.nunique` 函数对象
+
+**Bug 2：交叉表多聚合对中文值字段结果覆盖**（`_cross_pivot` key 生成）：
+- 原代码 `_is_display_name(vcol)` 对中文值字段（如"销售额"）返回 True，key 不加聚合后缀
+- 多聚合（如 sum,avg）时两次循环 key 都是 "销售额"，后面的 avg 结果覆盖前面的 sum
+- 用户看到的"sum 和 avg 差异不大"实际是 sum 被覆盖、两列都是 avg 值
+- 修复：多聚合时（`len(value_cols) * len(agg_funcs) > 1`）强制用 `{vcol}_{agg_label}` 作为 key
+
 ### v2.54.21 (2026-07-21)
 
 **✨ 行维度为空(NaN)的行保留分组**

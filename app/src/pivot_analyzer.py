@@ -1987,8 +1987,20 @@ def _cross_pivot(df, row_dims, col_dims, value_cols, agg_funcs, task):
                 # join 聚合：自定义 aggfunc，空值填充空字符串
                 actual_af = lambda s, _sep=join_sep or _JOIN_DEFAULT_SEP: _join_unique(s, _sep)
                 fill_val = ""
+            elif is_sum_pct:
+                actual_af = "sum"
+                fill_val = 0
+            elif is_count_pct:
+                actual_af = "count"
+                fill_val = 0
+            elif a_mapped == "nunique":
+                # nunique 需传函数对象，pandas pivot_table 不认识 "nunique" 字符串
+                actual_af = pd.Series.nunique
+                fill_val = 0
             else:
-                actual_af = "sum" if is_sum_pct else ("count" if is_count_pct else af_key)
+                # v2.54.22+ 修复：用 a_mapped（如 "avg"→"mean"）而非原始 af_key，
+                #              pandas pivot_table 只认 "mean" 不认 "avg"
+                actual_af = a_mapped
                 fill_val = 0
 
             pivot = pd.pivot_table(
@@ -2019,9 +2031,9 @@ def _cross_pivot(df, row_dims, col_dims, value_cols, agg_funcs, task):
             if is_join:
                 # join 结果是字符串，不计算合计行/列，不做数值转换
                 agg_label = "拼接"
-                if _is_display_name(vcol):
-                    key = vcol
-                elif len(value_cols) * len(agg_funcs) > 1:
+                # v2.54.22+ 修复：多聚合时强制加后缀，避免中文值字段（_is_display_name=True）
+                #              导致 key 相同、后面的聚合结果覆盖前面的
+                if len(value_cols) * len(agg_funcs) > 1:
                     key = f"{vcol}_{agg_label}"
                 else:
                     key = vcol
@@ -2057,9 +2069,9 @@ def _cross_pivot(df, row_dims, col_dims, value_cols, agg_funcs, task):
             pivot["合计"] = row_sums
 
             agg_label = {"sum": "求和", "mean": "均值", "avg": "均值", "count": "计数", "max": "最大值", "min": "最小值", "nunique": "去重计数", "nunique_combo": "去重计数组合", "pct": "占比", "join": "拼接"}.get(af_key, af_key)
-            if _is_display_name(vcol):
-                key = vcol
-            elif len(value_cols) * len(agg_funcs) > 1:
+            # v2.54.22+ 修复：多聚合时强制加后缀，避免中文值字段（_is_display_name=True）
+            #              导致 key 相同、后面的聚合结果覆盖前面的
+            if len(value_cols) * len(agg_funcs) > 1:
                 key = f"{vcol}_{agg_label}"
             else:
                 key = vcol
