@@ -244,6 +244,50 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.20 (2026-07-21)
+
+**✨ 新增 nunique_combo 多列组合去重计数**
+
+**背景**：之前 `nunique`（去重计数）只能对单列独立去重，值字段 `a,b` + `nunique,nunique` 得到的是 a 列去重数和 b 列去重数两个独立结果，无法表达"根据 a 列和 b 列都不同进行去重计数"（即 `df[['a','b']].drop_duplicates().shape[0]`）。
+
+**实现**（[`pivot_analyzer.py` `_group_aggregate_combo`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py#L2056-L2100)）：
+- 新增聚合关键字：`nunique_combo` / `去重计数组合` / `nunique_multi`
+- 新增专用路径 `_group_aggregate_combo`，不走标准 `agg_dict`，对多列做 `drop_duplicates().shape[0]`
+- **强制独占**：`nunique_combo` 不允许与其他聚合混用（报错）；不支持列维度（报错）
+- **输出列名规则**（方案 A）：
+  - 有值映射 → 直接用映射名，**不加后缀**
+  - 无值映射 → `col1_col2_..._去重计数组合`
+
+**配置示例**：
+
+```
+# 无映射 → 列名 a_b_去重计数组合
+值字段: a,b
+聚合方式: nunique_combo
+
+# 有映射 → 列名 组合数（不加后缀）
+值字段: a,b|组合数
+聚合方式: nunique_combo
+
+# 带格式 → 整数显示
+值字段: a,b|组合数
+聚合方式: nunique_combo|int
+
+# 按行维度分组组合去重
+值字段: a,b
+聚合方式: nunique_combo
+行维度: 地区
+```
+
+**对比示例**（数据：华北 a=[x,x,y] b=[1,2,1]，华南 a=[x,y,y] b=[1,2,2]）：
+
+| 配置 | 华北 | 华南 |
+|---|---|---|
+| `nunique,nunique`（各列独立） | a_去重=2, b_去重=2 | a_去重=2, b_去重=2 |
+| `nunique_combo`（组合去重） | 3（x1,x2,y1） | 2（x1,y2） |
+
+**验证**：单测 5 场景全通过（无/有行维度 × 无/有值映射 + 对比普通 nunique）；强制独占校验单测通过；防护用例 12 页全部通过。
+
 ### v2.54.19 (2026-07-21)
 
 **✨ 占比/率类列不再固定百分比显示，统一按配置格式转换**

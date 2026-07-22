@@ -40,6 +40,9 @@ AGG_MAP = {
     "nunique": "nunique",
     "去重计数": "nunique",
     "distinct": "nunique",
+    "nunique_combo": "nunique_combo",
+    "去重计数组合": "nunique_combo",
+    "nunique_multi": "nunique_combo",
     "pct": "pct",
     "占比": "pct",
     "percentage": "pct",
@@ -1215,7 +1218,7 @@ def validate_pivot_config(tasks, config_dir):
             a_no_fmt, _ = _parse_agg_format(a)  # 先剥离 |数字格式
             a_key, _ = _parse_join_sep(a_no_fmt)
             mapped = AGG_MAP.get(a_key, a_key)
-            valid_aggs = {"sum", "mean", "count", "max", "min", "nunique", "pct", "count_pct", "join"}
+            valid_aggs = {"sum", "mean", "count", "max", "min", "nunique", "nunique_combo", "pct", "count_pct", "join"}
             if mapped not in valid_aggs:
                 invalid_aggs.append(a)
         if invalid_aggs:
@@ -1582,7 +1585,7 @@ def _apply_export_cols_to_join(df, task, 行维度, 序号, on_keys):
     #    策略：用户写 销售额_求和 → 去 _求和 后缀得到 销售额 → 匹配 JOIN 表中的 销售额 列
     #          用户写 销售额_X 形式且 X 是已知聚合后缀 → 去后缀匹配
     if missing:
-        _agg_suffixes = ("_求和", "_均值", "_计数", "_最大", "_最小", "_去重计数", "_sum", "_mean",
+        _agg_suffixes = ("_求和", "_均值", "_计数", "_最大", "_最小", "_去重计数", "_去重计数组合", "_sum", "_mean",
                          "_count", "_max", "_min", "_nunique")
         for mc in missing[:]:
             # 反向去后缀：用户写 销售额_求和 → 找 销售额
@@ -1662,6 +1665,19 @@ def run_analysis(task, config_dir, scalar_context=None, block_results=None):
         a_no_fmt, fmt = _parse_agg_format(a)
         聚合函数.append(a_no_fmt)
         number_formats.append(fmt)
+
+    # v2.54.20+ nunique_combo 强制独占校验：不允许与其他聚合混用，不支持列维度
+    _has_combo = any(
+        AGG_MAP.get(_parse_join_sep(_parse_agg_format(a)[0])[0], "") == "nunique_combo"
+        for a in 聚合函数
+    )
+    if _has_combo:
+        if len(聚合函数) > 1:
+            return None, f"[任务{序号}] nunique_combo（组合去重计数）必须独占聚合方式，不能与其他聚合混用"
+        if 列维度 and 列维度[0]:
+            return None, f"[任务{序号}] nunique_combo（组合去重计数）不支持列维度，请改用行维度"
+        if len(值字段) < 2:
+            print(f"    [提示] [任务{序号}] nunique_combo 仅指定 1 个值字段，等同于普通 nunique；建议指定 ≥2 列做组合去重")
 
     try:
         df = _load_joined_dataframe(config_dir, data_source, sheet_name, block_results=block_results)
@@ -2025,7 +2041,7 @@ def _cross_pivot(df, row_dims, col_dims, value_cols, agg_funcs, task):
                 row_sums = row_sums + pd.to_numeric(pivot["合计"], errors="coerce").fillna(0)
             pivot["合计"] = row_sums
 
-            agg_label = {"sum": "求和", "mean": "均值", "avg": "均值", "count": "计数", "max": "最大值", "min": "最小值", "nunique": "去重计数", "pct": "占比", "join": "拼接"}.get(af_key, af_key)
+            agg_label = {"sum": "求和", "mean": "均值", "avg": "均值", "count": "计数", "max": "最大值", "min": "最小值", "nunique": "去重计数", "nunique_combo": "去重计数组合", "pct": "占比", "join": "拼接"}.get(af_key, af_key)
             if _is_display_name(vcol):
                 key = vcol
             elif len(value_cols) * len(agg_funcs) > 1:
@@ -2037,7 +2053,62 @@ def _cross_pivot(df, row_dims, col_dims, value_cols, agg_funcs, task):
     return results
 
 
+def _group_aggregate_combo(df, group_cols, value_cols, task):
+    """nunique_combo 专用路径：多列组合去重计数。
+
+    v2.54.20+ 支持。强制独占（agg_funcs 只含 nunique_combo），由调用方校验。
+
+    - 有行维度：按行维度分组，每组对 value_cols 做 drop_duplicates 计数
+    - 无行维度：整体对 value_cols 做 drop_duplicates 计数，单行结果
+    - 输出列名：
+        - 有值映射 → 用映射名，不加后缀
+        - 无值映射 → col1_col2_..._去重计数组合
+
+    :return: {"结果": DataFrame}，与 _group_aggregate 返回结构一致
+    """
+    combo_cols = [c for c in value_cols if c in df.columns]
+    if not combo_cols:
+        return {"结果": pd.DataFrame()}
+
+    # 默认列名：col1_col2_..._去重计数组合
+    default_col = "_".join(combo_cols) + "_去重计数组合"
+    # 值映射：combo 只输出 1 列，取第一个非空映射
+    val_map_str = task.get("值映射", "") if task else ""
+    raw_val_maps = [m.strip() for m in val_map_str.split(",")] if val_map_str else []
+    out_col = raw_val_maps[0] if (raw_val_maps and raw_val_maps[0]) else default_col
+
+    if group_cols:
+        # 有行维度：分组后每组 drop_duplicates 计数
+        # 用 groupby + apply，确保多列组合去重而非各列独立去重
+        if len(group_cols) == 1:
+            gc = group_cols[0]
+            cnt_series = df.groupby(gc, observed=True).apply(
+                lambda g: g[combo_cols].drop_duplicates().shape[0], include_groups=False
+            )
+            result_df = pd.DataFrame({gc: cnt_series.index, out_col: cnt_series.values})
+        else:
+            cnt_series = df.groupby(group_cols, observed=True).apply(
+                lambda g: g[combo_cols].drop_duplicates().shape[0], include_groups=False
+            )
+            result_df = cnt_series.reset_index(name=out_col)
+        result_df = result_df.sort_values(group_cols).reset_index(drop=True)
+    else:
+        # 无行维度：整体计数，单行单列
+        cnt = df[combo_cols].drop_duplicates().shape[0]
+        result_df = pd.DataFrame([{out_col: cnt}])
+
+    return {"结果": result_df}
+
+
 def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
+    # v2.54.20+ nunique_combo 组合去重计数走专用路径，不走标准 agg_dict
+    _has_combo = any(
+        AGG_MAP.get(_parse_join_sep(_parse_agg_format(a)[0])[0], "") == "nunique_combo"
+        for a in agg_funcs
+    )
+    if _has_combo:
+        return _group_aggregate_combo(df, group_cols, value_cols, task)
+
     if not group_cols:
         row_data = {}
         # 按位置 1:1 对应（与有行维度一致）；单值多聚合时全组合
@@ -2328,6 +2399,7 @@ def _get_agg_label(af):
     return {
         "sum": "求和", "mean": "均值", "avg": "均值", "count": "计数",
         "max": "最大值", "min": "最小值", "nunique": "去重计数",
+        "nunique_combo": "去重计数组合", "去重计数组合": "去重计数组合", "nunique_multi": "去重计数组合",
         "pct": "占比", "count_pct": "计数占比",
         "join": "拼接", "拼接": "拼接", "去重拼接": "拼接", "group_concat": "拼接",
     }.get(af, af)
