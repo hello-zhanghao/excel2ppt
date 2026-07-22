@@ -244,6 +244,35 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.21 (2026-07-21)
+
+**✨ 行维度为空(NaN)的行保留分组**
+
+**背景**：之前 pandas `groupby` 默认 `dropna=True`，行维度为空（NaN/None）的行在透视时被丢弃，导致结果缺少空值分组。用户要求保留。
+
+**修改**（[`pivot_analyzer.py`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/pivot_analyzer.py)）：
+- 5 处 `groupby` 调用加 `dropna=False`：
+  - `_group_aggregate_combo` 单键/多键分支
+  - `_group_aggregate` 标准 agg 和 join 聚合
+- `_cross_pivot` 的 `pd.pivot_table` 加 `dropna=False`（行维度和列维度的 NaN 都保留）
+- 新增 `_nan_to_tag` 辅助函数：join 聚合的 `map` 查找中，NaN/None 转为哨兵标记避免 `NaN != NaN` 导致匹配失败
+
+**行为对比**（数据：地区=[华北,华北,None,华南,None,""]，销售额=[100,200,50,300,70,90]）：
+
+| 修复前（dropna=True） | 修复后（dropna=False） |
+|---|---|
+| 华北 300 | 华北 300 |
+| 华南 300 | 华南 300 |
+| 空串"" 90 | 空串"" 90 |
+| ~~NaN 组被丢弃~~ | NaN 120（保留） |
+
+**注意**：
+- `None`（缺失值）和空字符串 `""` 是两个不同的分组
+- NaN 组在 Excel 输出时显示为空单元格
+- 列维度为空也会保留为独立列（交叉表）
+
+**验证**：sum/nunique_combo/cross_pivot/join 聚合 4 场景单测通过；防护用例 12 页全部通过。
+
 ### v2.54.20 (2026-07-21)
 
 **✨ 新增 nunique_combo 多列组合去重计数**

@@ -189,6 +189,20 @@ def _join_unique(series, sep: str = _JOIN_DEFAULT_SEP) -> str:
     return sep.join(sorted(seen_set))
 
 
+# v2.54.21+ NaN 安全哨兵：NaN != NaN 导致 dict 查找失败，用哨兵临时替换
+_NAN_TAG = "\x00__NAN__\x00"
+
+
+def _nan_to_tag(x):
+    """将 NaN/None 转为哨兵标记，解决 NaN != NaN 导致 dict/map 查找失败的问题。"""
+    try:
+        if pd.isna(x):
+            return _NAN_TAG
+    except (TypeError, ValueError):
+        pass
+    return x
+
+
 def _split_value_field_map(raw_value_field):
     """解析值字段与值映射的合并写法 ``值字段|值映射``。
 
@@ -1984,6 +1998,7 @@ def _cross_pivot(df, row_dims, col_dims, value_cols, agg_funcs, task):
                 columns=col_dims,
                 aggfunc=actual_af,
                 fill_value=fill_val,
+                dropna=False,  # v2.54.21+ 保留行维度/列维度为空(NaN)的分组
             )
 
             if is_sum_pct or is_count_pct:
@@ -2080,14 +2095,15 @@ def _group_aggregate_combo(df, group_cols, value_cols, task):
     if group_cols:
         # 有行维度：分组后每组 drop_duplicates 计数
         # 用 groupby + apply，确保多列组合去重而非各列独立去重
+        # v2.54.21+ dropna=False 保留行维度为空(NaN)的分组，与用户预期一致
         if len(group_cols) == 1:
             gc = group_cols[0]
-            cnt_series = df.groupby(gc, observed=True).apply(
+            cnt_series = df.groupby(gc, observed=True, dropna=False).apply(
                 lambda g: g[combo_cols].drop_duplicates().shape[0], include_groups=False
             )
             result_df = pd.DataFrame({gc: cnt_series.index, out_col: cnt_series.values})
         else:
-            cnt_series = df.groupby(group_cols, observed=True).apply(
+            cnt_series = df.groupby(group_cols, observed=True, dropna=False).apply(
                 lambda g: g[combo_cols].drop_duplicates().shape[0], include_groups=False
             )
             result_df = cnt_series.reset_index(name=out_col)
@@ -2208,9 +2224,10 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
         agg_dict[vcol] = funcs
 
     if agg_dict:
-        grouped = df.groupby(group_cols, as_index=False, observed=True).agg(agg_dict)
+        grouped = df.groupby(group_cols, as_index=False, observed=True, dropna=False).agg(agg_dict)
     else:
         # 所有聚合都是 join，无标准 agg；只获取分组键
+        # v2.54.21+ 保留行维度为空(NaN)的行（drop_duplicates 默认保留 NaN 行）
         grouped = df[group_cols].drop_duplicates().reset_index(drop=True)
 
     if has_sum_pct or has_count_pct:
@@ -2327,16 +2344,21 @@ def _group_aggregate(df, group_cols, value_cols, agg_funcs, task):
                 col_name = f"{vcol}_{agg_label}"
 
             # 用 groupby + apply 计算，转成 dict 按分组键映射，确保与 grouped 行对齐
-            join_series = df.groupby(group_cols, observed=True)[vcol].apply(
+            # v2.54.21+ dropna=False 保留行维度为空(NaN)的分组
+            join_series = df.groupby(group_cols, observed=True, dropna=False)[vcol].apply(
                 lambda s, _sep=sep: _join_unique(s, _sep)
             )
             join_map = {k: v for k, v in join_series.items()}
 
             if len(group_cols) == 1:
-                grouped[col_name] = grouped[group_cols[0]].map(join_map)
+                # v2.54.21+ NaN 安全查找：NaN != NaN 导致 map 匹配失败，用哨兵替换
+                join_map_safe = {_nan_to_tag(k): v for k, v in join_map.items()}
+                grouped[col_name] = grouped[group_cols[0]].map(lambda x: join_map_safe.get(_nan_to_tag(x), ""))
             else:
+                join_map_safe = {tuple(_nan_to_tag(x) for x in k) if isinstance(k, tuple) else _nan_to_tag(k): v
+                                 for k, v in join_map.items()}
                 grouped[col_name] = grouped.apply(
-                    lambda row: join_map.get(tuple(row[c] for c in group_cols), ""), axis=1
+                    lambda row: join_map_safe.get(tuple(_nan_to_tag(row[c]) for c in group_cols), ""), axis=1
                 )
 
     grouped = grouped.sort_values(group_cols)
