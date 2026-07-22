@@ -2676,20 +2676,24 @@ def _apply_value_calc(result, val_calc, value_cols, agg_funcs, scalar_context=No
             expr = _find_matching_calc(col, calc_map, value_cols, raw_val_maps)
             if expr:
                 expr_key = expr.split("=")[0].strip()
-                if expr_key in processed_expressions:
+                is_single_col_op = bool(re.match(r"^[+\-*/]", expr_key))
+                # v2.54.23+ 修复：单列运算（如 /1000）按 (expr, col) 去重，
+                #               多列表达式（如 销售额/销量=客单价）按 expr 去重
+                #               原来统一按 expr 去重导致两个相同的 /1000 第二个被跳过
+                dedup_key = (expr_key, col) if is_single_col_op else expr_key
+                if dedup_key in processed_expressions:
                     continue
-                processed_expressions.add(expr_key)
+                processed_expressions.add(dedup_key)
                 result_col_name = None
                 if "=" in expr:
                     expr_part, result_col_name = expr.split("=", 1)
                     expr = expr_part.strip()
                     result_col_name = result_col_name.strip()
-                
+
                 # 判断走多列分支还是单列分支：
                 # - 单列分支：表达式以运算符开头（如 *100, /标量, +10），对当前列做单值运算
                 # - 多列分支：表达式是完整算式（如 销售额/销量, 总销售额/总销量），用 eval 计算
                 #   （标量自动识别：表达式中的标识符若不在列名中但在 scalar_context 中，自动作为标量）
-                is_single_col_op = bool(re.match(r"^[+\-*/]", expr))
                 has_multi_col = not is_single_col_op
 
                 try:
