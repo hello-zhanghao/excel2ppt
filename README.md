@@ -244,6 +244,33 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.27 (2026-07-23)
+
+**✨ 支持多级分类 X 轴图表（multi-level categories）**
+
+**背景**：用户 PPT 模板中已有多级分类 X 轴图表（如"地区 > 产品"两级分类），但模板替换后多级分类被清空，降级为单级分类。
+
+**根因**：python-pptx 的 `CategoryChartData` 只支持单级分类，`chart.replace_data()` 会用单级 `strRef` 覆盖掉模板原有的 `multiLvlStrRef`，导致多级分类结构丢失。
+
+**功能**（[`template_filler.py`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py)）：
+- `_write_chart_data` 自动检测 DataFrame 前几列是否都是文本列（非数值）
+- 当有 ≥2 列文本维度时，识别为多级分类：最后一列文本作为最深层子分类，前面的列作为父分类层级
+- `replace_data` 后调用新增的 `_restore_multi_level_categories` 重建 `multiLvlStrRef` XML
+- 单级分类图表不受影响（只有 1 列文本维度时不触发多级分类）
+
+**数据结构示例**：
+```
+地区,产品,销售额,销量     → 2 列文本维度（地区+产品）
+华东,产品A,3000,30        → 多级分类：level 0=产品（子），level 1=地区（父）
+华东,产品B,1800,18
+华北,产品A,2000,20
+...
+```
+
+**验证**：
+- 多级分类模板替换后 `multiLvlStrRef=True`，2 级分类正确恢复
+- 单级分类模板替换无回归，防护用例全部通过
+
 ### v2.54.26 (2026-07-23)
 
 **🐛 修复备注区别名声明带格式串时显示缺失**

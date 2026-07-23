@@ -1174,6 +1174,56 @@ def _write_chart_data_multi(chart, block_dfs: list):
         _write_chart_data(chart, df, xy_pair=xy_pair)
 
 
+def _restore_multi_level_categories(chart, level_data: list):
+    """v2.54.27+ replace_data 后恢复多级分类 X 轴
+
+    python-pptx 的 CategoryChartData 只支持单级分类，chart.replace_data() 会用
+    单级 strRef 覆盖掉模板原有的 multiLvlStrRef。本函数手动重建多级分类 XML。
+
+    Args:
+        chart: pptx Chart 对象
+        level_data: 层级数据列表，最深层（子分类）在前，最浅层（父分类）在后
+                    例如 [[产品A,产品B,...], [华东,华东,...]] → level 0 是产品，level 1 是地区
+    """
+    from pptx.oxml.ns import qn
+    from lxml import etree
+
+    try:
+        chart_space = chart._chartSpace
+        cat_elem = chart_space.find('.//' + qn('c:cat'))
+        if cat_elem is None:
+            return
+
+        # 清除 replace_data 写入的单级 strRef
+        str_ref = cat_elem.find(qn('c:strRef'))
+        if str_ref is not None:
+            cat_elem.remove(str_ref)
+
+        # 重建 multiLvlStrRef
+        multi_lvl = etree.SubElement(cat_elem, qn('c:multiLvlStrRef'))
+
+        f_elem = etree.SubElement(multi_lvl, qn('c:f'))
+        f_elem.text = 'Sheet1!$A$1:$B$' + str(len(level_data[0]) + 1)
+
+        cache = etree.SubElement(multi_lvl, qn('c:multiLvlStrCache'))
+
+        pt_count = etree.SubElement(cache, qn('c:ptCount'))
+        pt_count.set('val', str(len(level_data[0])))
+
+        # 添加各层级（最深层在前，与 PowerPoint XML 规范一致）
+        for level_vals in level_data:
+            lvl = etree.SubElement(cache, qn('c:lvl'))
+            for i, v in enumerate(level_vals):
+                pt = etree.SubElement(lvl, qn('c:pt'))
+                pt.set('idx', str(i))
+                v_elem = etree.SubElement(pt, qn('c:v'))
+                v_elem.text = str(v)
+
+        print(f"    [OK] 多级分类 X 轴已恢复: {len(level_data)} 级, {len(level_data[0])} 个类别")
+    except Exception as e:
+        print(f"    [警告] 多级分类恢复失败: {e}")
+
+
 def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose: bool = False):
     """将 DataFrame 写入图表的内嵌 WorkBook，并同步数据标签格式
 
@@ -1230,13 +1280,31 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
         return
 
     # 第一列作为类别（X轴），其余列作为系列（Y轴）
+    # v2.54.27+ 多级分类 X 轴支持：
+    #   当 DataFrame 前 N 列都是文本列（非数值）时，识别为多级分类
+    #   最后一列文本作为最深层子分类，前面的文本列作为父分类层级
+    #   例如：地区,产品,销售额 → 地区是父级，产品是子级，销售额是数据
+    text_col_count = 0
+    for col_idx in range(len(df.columns)):
+        col = df.iloc[:, col_idx]
+        # 尝试转数值，如果全部失败说明是文本列
+        numeric_series = pd.to_numeric(col, errors="coerce")
+        if numeric_series.isna().all() or (numeric_series.isna().sum() / len(col) > 0.5 and col.astype(str).str.strip().ne("").all()):
+            text_col_count += 1
+        else:
+            break
+    # 至少 2 列文本才构成多级分类，且至少有 1 列数值作为数据
+    has_multi_level = text_col_count >= 2 and text_col_count < len(df.columns)
+
     categories = df.iloc[:, 0].astype(str).tolist()
     series_data = {}
     pct_flags = {}  # 记录每个系列是否为百分比列
     # 优先使用 load_pivot_results 读取的单元格数字格式元信息（精确）
     # 回退到列名关键词 + 值域检测（兜底）
     attr_pct_cols = df.attrs.get("pct_columns") if hasattr(df, "attrs") else None
-    for col_idx in range(1, len(df.columns)):
+    # 多级分类时，数据列从第 text_col_count 列开始（跳过前面的文本维度列）
+    data_start_col = text_col_count if has_multi_level else 1
+    for col_idx in range(data_start_col, len(df.columns)):
         col_name = df.columns[col_idx]
         values = pd.to_numeric(df.iloc[:, col_idx], errors="coerce").fillna(0).tolist()
         series_data[col_name] = values
@@ -1251,25 +1319,42 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
 
     if transpose:
         # 行列转置：列名作 X 轴类别，行维度值作系列名
-        categories_t = [str(c) for c in df.columns[1:]]
+        categories_t = [str(c) for c in df.columns[data_start_col:]]
         chart_data.categories = categories_t
         pct_flags_t = {}
         for row_idx in range(len(df)):
             series_name = str(df.iloc[row_idx, 0])
-            values = pd.to_numeric(df.iloc[row_idx, 1:], errors="coerce").fillna(0).tolist()
+            values = pd.to_numeric(df.iloc[row_idx, data_start_col:], errors="coerce").fillna(0).tolist()
             chart_data.add_series(series_name, values)
             pct_flags_t[series_name] = False
         pct_flags = pct_flags_t
         actual_series_count = len(df)
     else:
+        # 多级分类时，子分类（最深层）用最后一列文本维度
+        if has_multi_level:
+            categories = df.iloc[:, text_col_count - 1].astype(str).tolist()
         chart_data.categories = categories
         for name, values in series_data.items():
             chart_data.add_series(name, values)
         actual_series_count = len(series_data)
 
+    # v2.54.27+ 记录多级分类层级数据，replace_data 后恢复
+    multi_level_data = None
+    if has_multi_level and not transpose:
+        multi_level_data = []
+        # PowerPoint 多级分类层级：最深层（子分类）在前，最浅层（父分类）在后
+        # 例如：[产品, 地区] → level 0 是产品（子），level 1 是地区（父）
+        for i in range(text_col_count - 1, -1, -1):
+            level_vals = df.iloc[:, i].astype(str).tolist()
+            multi_level_data.append(level_vals)
+
     chart.replace_data(chart_data)
     _trim_extra_series(chart, actual_series_count)
     _ensure_vary_colors(chart)
+
+    # v2.54.27+ 恢复多级分类 X 轴（replace_data 会清空 multiLvlStrRef，需要手动重建）
+    if multi_level_data:
+        _restore_multi_level_categories(chart, multi_level_data)
 
     # 同步数据标签格式：百分比列显示 0.0%
     try:
