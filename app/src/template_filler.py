@@ -785,11 +785,24 @@ def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
                 is_missing = not bool(value)
             elif alias_map and expr in alias_map:
                 alias_expr = alias_map[expr]
+                # v2.54.26+ 别名表达式支持格式后缀（备注区声明时可能写 "区块.列|.2f"）
+                # 注意：计算占位符（计算:...）的格式串由 _resolve_calc_expr 内部处理，这里不提前分离
                 if alias_expr.startswith("计算:") or alias_expr.startswith("计算："):
                     calc_expr = alias_expr[3:].lstrip(":：").strip()
                     value = _resolve_calc_expr(calc_expr, pivot_data, default_block)
                 else:
-                    value = _resolve_text_placeholder(alias_expr, pivot_data, default_block)
+                    alias_expr_clean, alias_fmt = _split_expr_and_fmt(alias_expr)
+                    if alias_fmt:
+                        raw_value = _resolve_text_placeholder(alias_expr_clean, pivot_data, default_block, raw=True)
+                        if raw_value == "" or raw_value is None:
+                            value = ""
+                        else:
+                            try:
+                                value = _format_calc_result(float(raw_value), alias_fmt)
+                            except (ValueError, TypeError):
+                                value = str(raw_value)
+                    else:
+                        value = _resolve_text_placeholder(alias_expr, pivot_data, default_block)
                 replacement = value or ""
                 should_count = bool(value)
                 is_missing = not bool(value)
