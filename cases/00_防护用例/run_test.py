@@ -752,6 +752,15 @@ def start_preview_server(html_path):
     return start_server(html_path)
 
 
+def _col_letter(col_idx):
+    """将列序号（1-based）转为 Excel 列字母（1→A, 2→B, 27→AA）"""
+    result = ''
+    while col_idx > 0:
+        col_idx, rem = divmod(col_idx - 1, 26)
+        result = chr(65 + rem) + result
+    return result
+
+
 def verify_template_mode(pivot_excel_path, output_dir):
     """验证 PPT 模板替换模式
 
@@ -2026,6 +2035,7 @@ def _create_test_template(template_path):
     try:
         from pptx.oxml.ns import qn
         from lxml import etree
+        import io, zipfile
         chart_space = multi_chart._chartSpace
         cat_elem = chart_space.find('.//' + qn('c:cat'))
         if cat_elem is not None:
@@ -2054,6 +2064,130 @@ def _create_test_template(template_path):
                 pt.set('idx', str(i))
                 v_elem = etree.SubElement(pt, qn('c:v'))
                 v_elem.text = str(v)
+
+        # 同步修改嵌入工作簿，补齐"地区"列（3列：地区/频段/数据）
+        # python-pptx 创建图表时嵌入工作簿只有2列（类别+数据），多级分类需要3列
+        chart_part = multi_chart.part
+        embed_rel = None
+        for rel_id, rel in chart_part.rels.items():
+            if 'package' in rel.reltype:
+                embed_rel = rel
+                break
+        if embed_rel is not None:
+            embed_part = embed_rel.target_part
+            embed_blob = embed_part.blob
+            S_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+            ns_s = {'s': S_NS}
+
+            # 模板数据：3行（占位），3列（地区/频段/数据）
+            tmpl_level_data = [["n78", "n41", "n78"], ["华东", "华东", "华北"]]  # 最深层在前
+            tmpl_series_values = [1, 2, 3]
+            tmpl_headers = ["频段", "地区"]  # 最深层在前
+            n_levels = 2
+            n_rows = 3
+            total_cols = 3
+
+            with zipfile.ZipFile(io.BytesIO(embed_blob), 'r') as ez:
+                shared = []
+                if 'xl/sharedStrings.xml' in ez.namelist():
+                    ss_root = etree.fromstring(ez.read('xl/sharedStrings.xml'))
+                    for si in ss_root.findall('s:si', ns_s):
+                        texts = si.findall('.//s:t', ns_s)
+                        shared.append(''.join(t.text or '' for t in texts))
+                str_idx_map = {s: i for i, s in enumerate(shared)}
+
+                def _get_or_add(s):
+                    if s in str_idx_map:
+                        return str_idx_map[s]
+                    idx = len(shared)
+                    shared.append(s)
+                    str_idx_map[s] = idx
+                    return idx
+
+                # 构建新的 sheetData
+                rows_xml = []
+                # 表头行
+                header_cells = []
+                for col_idx in range(1, total_cols + 1):
+                    col_letter = _col_letter(col_idx)
+                    if col_idx <= n_levels:
+                        level_idx = n_levels - col_idx
+                        hdr = tmpl_headers[level_idx] if level_idx < len(tmpl_headers) else f'分类{col_idx}'
+                    else:
+                        hdr = '数据'
+                    sid = _get_or_add(hdr)
+                    header_cells.append(f'<c r="{col_letter}1" t="s"><v>{sid}</v></c>')
+                rows_xml.append(f'<row r="1">{"".join(header_cells)}</row>')
+                # 数据行
+                for row_idx in range(n_rows):
+                    row_num = row_idx + 2
+                    cells = []
+                    for col_idx in range(1, total_cols + 1):
+                        col_letter = _col_letter(col_idx)
+                        if col_idx <= n_levels:
+                            level_idx = n_levels - col_idx
+                            val = str(tmpl_level_data[level_idx][row_idx])
+                            sid = _get_or_add(val)
+                            cells.append(f'<c r="{col_letter}{row_num}" t="s"><v>{sid}</v></c>')
+                        else:
+                            val = tmpl_series_values[row_idx]
+                            cells.append(f'<c r="{col_letter}{row_num}"><v>{val}</v></c>')
+                    rows_xml.append(f'<row r="{row_num}">{"".join(cells)}</row>')
+
+                new_sheetdata_xml = '<sheetData>' + ''.join(rows_xml) + '</sheetData>'
+                last_col = _col_letter(total_cols)
+                new_dimension = f'A1:{last_col}{n_rows + 1}'
+
+                # 重建 sheet1.xml（保持 OOXML 节点顺序）
+                sheet_root = etree.fromstring(ez.read('xl/worksheets/sheet1.xml'))
+                for old_sd in sheet_root.findall('s:sheetData', ns_s):
+                    sheet_root.remove(old_sd)
+                for old_dim in sheet_root.findall('s:dimension', ns_s):
+                    sheet_root.remove(old_dim)
+                new_dim_elem = etree.Element('{%s}dimension' % S_NS)
+                new_dim_elem.set('ref', new_dimension)
+                sheet_root.insert(0, new_dim_elem)
+                new_sd_elem = etree.fromstring(new_sheetdata_xml)
+                insert_idx = len(sheet_root)
+                for i, child in enumerate(sheet_root):
+                    if etree.QName(child).localname in ('pageMargins', 'pageSetup', 'headerFooter',
+                                                         'rowBreaks', 'colBreaks', 'extLst'):
+                        insert_idx = i
+                        break
+                sheet_root.insert(insert_idx, new_sd_elem)
+                new_sheet_xml = etree.tostring(sheet_root, xml_declaration=True, encoding='UTF-8', standalone=True)
+
+                # 重建 sharedStrings.xml
+                new_ss_parts = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+                                '<sst xmlns="%s" count="%d" uniqueCount="%d">' % (S_NS, len(shared), len(shared))]
+                for s in shared:
+                    s_esc = s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    new_ss_parts.append(f'<si><t>{s_esc}</t></si>')
+                new_ss_parts.append('</sst>')
+                new_ss_xml = ''.join(new_ss_parts)
+
+            # 重建 xlsx zip 包
+            new_blob = io.BytesIO()
+            with zipfile.ZipFile(io.BytesIO(embed_blob), 'r') as ez_in:
+                with zipfile.ZipFile(new_blob, 'w', zipfile.ZIP_DEFLATED) as ez_out:
+                    for item in ez_in.infolist():
+                        if item.filename == 'xl/worksheets/sheet1.xml':
+                            ez_out.writestr(item, new_sheet_xml)
+                        elif item.filename == 'xl/sharedStrings.xml':
+                            ez_out.writestr(item, new_ss_xml)
+                        else:
+                            ez_out.writestr(item, ez_in.read(item.filename))
+            embed_part._blob = new_blob.getvalue()
+
+            # 更新 c:val 的 c:f 引用范围（数据列从 B 变为 C）
+            val_elem = chart_space.find('.//' + qn('c:val'))
+            if val_elem is not None:
+                num_ref = val_elem.find(qn('c:numRef'))
+                if num_ref is not None:
+                    f_val = num_ref.find(qn('c:f'))
+                    if f_val is not None:
+                        f_val.text = f'Sheet1!$C$2:$C${n_rows + 1}'
+
     except Exception as e:
         print(f"  [警告] 设置多级分类模板失败: {e}")
 
