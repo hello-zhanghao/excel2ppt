@@ -1053,21 +1053,28 @@ _PCT_KEYWORDS = ["占比", "pct", "百分比", "比例"]
 
 
 def _clear_embedded_chart_data(chart):
-    """v2.54.29+ 清除图表嵌入的 Excel 工作簿引用
+    """v2.54.29+ 清除图表嵌入的 Excel 工作簿引用及公式引用
 
     模板图表可能嵌入了包含多个 sheet 和分散数据的 Excel 工作簿。
     replace_data 只更新 cache（numCache/strCache），嵌入的 xlsx 仍残留原模板数据。
-    删除 c:externalData 后，PowerPoint 双击编辑数据时会基于 cache 重新生成干净的工作簿，
-    只包含当前替换的数据，不包含原模板的其他 sheet 或分散数据。
+
+    本函数做两件事：
+    1. 删除 c:externalData 元素及对应 relationship（断开与旧工作簿的链接）
+    2. 删除所有 c:f 公式引用元素（c:cat/c:strRef/c:f、c:ser/c:val/c:numRef/c:f、
+       c:ser/c:tx/c:strRef/c:f、c:cat/c:multiLvlStrRef/c:f）
+
+    只删除 c:externalData 而保留 c:f 会导致 PowerPoint 找不到工作簿 → #REF!。
+    同时删除 c:f 后，PowerPoint 只依赖 cache（numCache/strCache）显示数据，不报错。
     """
     from pptx.oxml.ns import qn
     try:
         chart_space = chart._chartSpace
+
+        # 1. 删除 c:externalData 元素及对应 relationship
         ext_data = chart_space.find(qn('c:externalData'))
         if ext_data is not None:
             rId = ext_data.get(qn('r:id'))
             chart_space.remove(ext_data)
-            # 尝试删除对应的 relationship（孤立关系不影响显示，但清理更彻底）
             if rId:
                 try:
                     chart_part = chart.part
@@ -1075,6 +1082,12 @@ def _clear_embedded_chart_data(chart):
                         del chart_part.rels[rId]
                 except Exception:
                     pass
+
+        # 2. 删除所有 c:f 公式引用（保留 cache，避免 #REF!）
+        for f_elem in chart_space.findall('.//' + qn('c:f')):
+            parent = f_elem.getparent()
+            if parent is not None:
+                parent.remove(f_elem)
     except Exception:
         pass
 
@@ -1261,11 +1274,9 @@ def _restore_multi_level_categories(chart, level_data: list):
         if str_ref is not None:
             cat_elem.remove(str_ref)
 
-        # 重建 multiLvlStrRef
+        # 重建 multiLvlStrRef（v2.54.29+ 不创建 c:f 公式引用，
+        # 因 externalData 已删除，c:f 会指向不存在的工作簿导致 #REF!）
         multi_lvl = etree.SubElement(cat_elem, qn('c:multiLvlStrRef'))
-
-        f_elem = etree.SubElement(multi_lvl, qn('c:f'))
-        f_elem.text = 'Sheet1!$A$1:$B$' + str(len(level_data[0]) + 1)
 
         cache = etree.SubElement(multi_lvl, qn('c:multiLvlStrCache'))
 
