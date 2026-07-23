@@ -244,6 +244,16 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.32 (2026-07-23)
+
+**🐛 修复多级分类X轴"选择数据"只显示2列的问题**
+
+- 根因：python-pptx 的 `CategoryChartData` 只支持单级分类，`chart.replace_data()` 会把嵌入工作簿写成2列（子分类+数据），丢弃父分类列。虽然 `_restore_multi_level_categories` 事后修复了 chart XML 的 `multiLvlStrRef` 缓存，但嵌入 Excel 工作簿本身仍是2列，PowerPoint 右键"选择数据"看到的是嵌入工作簿内容
+- 修复：`_restore_multi_level_categories` 新增 `series_values/level_headers/series_header` 参数，调用新增的 `_rebuild_embedded_workbook_for_multi_level` 直接修改嵌入 xlsx 包，把所有层级列（父分类+子分类）+ 数据列重新写入，并更新 dimension 和 sharedStrings
+- 同步更新 chart XML 的 `c:val c:f` 引用范围（数据列从 B 变为第 N+1 列），保持与嵌入工作簿一致
+- 嵌入工作簿表现头使用实际列名（如"地区/频段/平均下行速率"），而非"分类1/分类2/数据"占位符
+- 验证：嵌入工作簿现从 A1:B7（2列）→ A1:C7（3列：地区/频段/平均下行速率），6行数据完整
+
 ### v2.54.31 (2026-07-23)
 
 **🧹 防护用例输出目录化**
