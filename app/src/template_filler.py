@@ -1294,7 +1294,7 @@ def _is_pct_column(col_name: str, values: list) -> bool:
 
 
 def _safe_num_list(series) -> list:
-    """将 Series 转为安全的数值列表：NaN/inf/非数值统一替换为 0
+    """将 Series 转为安全数值列表：NaN/inf/非数值统一替换为 0
 
     避免 xlsxwriter write_number() 遇到 nan/inf 报错：
     'nan/inf not supported in write_number() without nan_inf_to_errors option'
@@ -1304,6 +1304,58 @@ def _safe_num_list(series) -> list:
     return pd.to_numeric(series, errors="coerce").replace(
         [float('inf'), float('-inf')], 0
     ).fillna(0).tolist()
+
+
+def _sanitize_chart_data(chart_data):
+    """v2.55.2+ 兜底清理 CategoryChartData/XyChartData 中的 NaN/inf
+
+    即使上游 _safe_num_list/_clean_num 已清理，仍可能因以下原因漏网：
+    - 调用点遗漏（新增图表类型分支未走清理）
+    - categories 含数值 NaN（astype(str) 前已是 float nan）
+    - 第三方库内部转换引入
+
+    本函数遍历 chart_data 的所有系列，直接修改 _data_points 中每个数据点的
+    _value（CategoryDataPoint）或 _x/_y（XyDataPoint），强制把 NaN/inf 替换为 0。
+    作为 replace_data 前的最后一道防线，确保不再触发 xlsxwriter 报错。
+    """
+    import math
+    try:
+        series_list = getattr(chart_data, '_series', None)
+        if not series_list:
+            return chart_data
+        for s in series_list:
+            data_points = getattr(s, '_data_points', None)
+            if not data_points:
+                continue
+            for dp in data_points:
+                # CategoryDataPoint: _value
+                if hasattr(dp, '_value'):
+                    v = dp._value
+                    if v is None or (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
+                        dp._value = 0
+                # XyDataPoint: _x / _y
+                if hasattr(dp, '_x'):
+                    x = dp._x
+                    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
+                        dp._x = 0
+                if hasattr(dp, '_y'):
+                    y = dp._y
+                    if y is None or (isinstance(y, float) and (math.isnan(y) or math.isinf(y))):
+                        dp._y = 0
+    except Exception:
+        pass
+    return chart_data
+
+
+def _safe_replace_data(chart, chart_data):
+    """v2.55.2+ 安全的 replace_data 调用：先兜底清理 NaN/inf，失败时打印明确错误
+
+    xlsxwriter 的 write_number() 遇到 NaN/inf 会抛：
+        'nan/inf not supported in write_number() without nan_inf_to_errors option'
+    本函数在调用前先做 _sanitize_chart_data 兜底清理，避免遗漏路径导致报错。
+    """
+    _sanitize_chart_data(chart_data)
+    chart.replace_data(chart_data)
 
 
 def _write_chart_data_multi(chart, block_dfs: list):
@@ -1350,7 +1402,7 @@ def _write_chart_data_multi(chart, block_dfs: list):
                         series.add_data_point(float(x_val), float(y_val))
                     multi_series_count += 1
 
-        chart.replace_data(chart_data)
+        _safe_replace_data(chart, chart_data)
         _trim_extra_series(chart, multi_series_count)
         try:
             plot = chart.plots[0]
@@ -1713,7 +1765,7 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
                 for x_val, y_val in zip(x_values, y_values):
                     series.add_data_point(float(x_val), float(y_val))
 
-        chart.replace_data(chart_data)
+        _safe_replace_data(chart, chart_data)
         # 散点图数据标签：默认显示数值
         try:
             plot = chart.plots[0]
@@ -1788,7 +1840,7 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
             multi_level_data.append(level_vals)
             multi_level_headers.append(str(df.columns[i]))
 
-    chart.replace_data(chart_data)
+    _safe_replace_data(chart, chart_data)
     _trim_extra_series(chart, actual_series_count)
     _ensure_vary_colors(chart)
 

@@ -244,6 +244,20 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.55.2 (2026-07-23)
+
+**🐛 新增 NaN/inf 兜底清理，彻底解决"编辑数据变空"问题**
+
+v2.55.1 的 `_safe_num_list`/`_clean_num` 只覆盖了显式写值的调用点，仍有遗漏路径导致 NaN/inf 漏网触发 xlsxwriter 报错。
+
+**根因**：python-pptx 的 `CategoryChartData` 系列数据存在 `_data_points` 列表中，每个 `CategoryDataPoint._value` / `XyDataPoint._x`/`_y` 存实际值。`values` 是只读 property（从 `_data_points` 动态计算），直接赋值 `s.values = new_vals` 无效。
+
+**修复**：
+- [template_filler.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L1309-L1347) 新增 `_sanitize_chart_data`：遍历 `chart_data._series` → `_data_points`，直接修改 `CategoryDataPoint._value` 和 `XyDataPoint._x`/`_y`，强制把 None/NaN/inf 替换为 0
+- [template_filler.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L1350-L1360) 新增 `_safe_replace_data` 包装函数：`replace_data` 前先调 `_sanitize_chart_data` 兜底
+- `template_filler.py` 3 处 `chart.replace_data(chart_data)` 全部替换为 `_safe_replace_data(chart, chart_data)`
+- 作为最后一道防线，无论上游哪个调用点遗漏清理，都能在 `replace_data` 前拦截 NaN/inf
+
 ### v2.55.1 (2026-07-23)
 
 **🐛 修复图表数据含 NaN/inf 时"编辑数据变空"问题**
