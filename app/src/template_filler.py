@@ -678,6 +678,56 @@ def _parse_slide_notes(notes_text: str) -> Dict[str, str]:
     return config
 
 
+def _update_notes_with_status(slide, status_map: Dict[str, str]):
+    """v2.54.25+ 将形状替换状态回写到备注区对应行末尾。
+
+    备注区原行格式：形状名=区块表达式
+    回写后格式：形状名=区块表达式  # 成功(5行x3列)
+    或：形状名=区块表达式  # 失败: 区块'XXX'未找到
+
+    - 只更新通过 shape_block_map 声明的形状名行（即 status_map 中的 key）
+    - 同一形状名多次出现时更新首个匹配行
+    - 原行已有 # 状态标记时先清除旧标记再写新标记
+    - 无 notes_slide 时自动创建
+    """
+    if not status_map:
+        return
+    try:
+        notes_slide = slide.notes_slide
+    except Exception:
+        return
+    tf = notes_slide.notes_text_frame
+    lines = tf.text.split("\n")
+    new_lines = []
+    updated_keys = set()
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            new_lines.append(line)
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        # 跳过已知前缀（区块/数据源/别名.）
+        if key.startswith(("区块", "数据源", "别名.")):
+            new_lines.append(line)
+            continue
+        if key in status_map and key not in updated_keys:
+            # 去除原行末尾可能存在的旧状态标记
+            base = re.sub(r"\s*#.*$", "", stripped)
+            status = status_map[key]
+            new_lines.append(f"{base}  # {status}")
+            updated_keys.add(key)
+        else:
+            new_lines.append(line)
+    # 未在备注区找到对应形状名行的状态，追加到末尾
+    for key, status in status_map.items():
+        if key not in updated_keys:
+            new_lines.append(f"{key}=?  # {status}")
+    try:
+        tf.text = "\n".join(new_lines)
+    except Exception:
+        pass
+
+
 def _replace_in_text_frame(text_frame, pivot_data: Dict[str, pd.DataFrame],
                            default_block: Optional[str],
                            image_collector: Optional[List[str]] = None,
@@ -819,13 +869,15 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                         default_block: Optional[str],
                         alias_map: Optional[Dict[str, str]] = None,
                         shape_block_map: Optional[Dict[str, str]] = None,
-                        mark_missing: bool = True) -> int:
+                        mark_missing: bool = True,
+                        status_map: Optional[Dict[str, str]] = None) -> int:
     """替换幻灯片中的图表数据，返回替换次数
 
     - 图表数据源占位符 {{图表:xxx}} 从形状名称/替代文字读取（不污染图表标题）
     - 形状名称/替代文字无占位符时，回退到 shape_block_map（备注区声明 形状名=区块名）
     - 图表标题支持文本占位符（{{区块.列}}、{{计算:...}}、别名、格式后缀等），
       与正文文本框共用替换逻辑
+    - status_map: 若非 None，按形状名记录替换状态（成功/失败原因），供备注区回写
     """
     replace_count = 0
     for shape in slide.shapes:
@@ -894,6 +946,8 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
             df = _lookup_block(pivot_data, target_block)
             if df is None:
                 print(f"    [警告] 图表数据区块 '{target_block}' 未在透视结果中找到")
+                if status_map is not None:
+                    status_map[shape.name] = f"失败: 区块'{target_block}'未找到"
                 if mark_missing:
                     try:
                         shape.name = f"{shape.name}[缺失:{target_block}]"
@@ -901,6 +955,8 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                         pass
                 continue
             if df.empty:
+                if status_map is not None:
+                    status_map[shape.name] = f"失败: 区块'{target_block}'数据为空"
                 if mark_missing:
                     try:
                         shape.name = f"{shape.name}[缺失:{target_block}]"
@@ -914,6 +970,8 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                 replace_count += 1
                 cols_info = f", 仅列: {cols}" if cols else ""
                 print(f"    [OK] 图表数据替换: {target_block} ({df.shape[0]}行 x {df.shape[1]}列{cols_info})")
+                if status_map is not None:
+                    status_map[shape.name] = f"成功({df.shape[0]}行x{df.shape[1]}列)"
                 try:
                     if shape.name and _CHART_PLACEHOLDER_RE.search(shape.name):
                         shape.name = _CHART_PLACEHOLDER_RE.sub(target_block, shape.name)
@@ -921,6 +979,8 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                     pass
             except Exception as e:
                 print(f"    [警告] 图表数据替换失败 [{target_block}]: {e}")
+                if status_map is not None:
+                    status_map[shape.name] = f"失败: {e}"
         else:
             # 多区块：散点图专属，每区块解析后形成一个独立系列
             block_dfs = []  # [(df, xy_pair, cols, block_name), ...]
@@ -938,6 +998,8 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
 
             if not block_dfs:
                 print(f"    [警告] 多区块表达式无有效数据: {target_expr}")
+                if status_map is not None:
+                    status_map[shape.name] = f"失败: 多区块无有效数据({target_expr})"
                 if mark_missing:
                     try:
                         shape.name = f"{shape.name}[缺失:{target_expr}]"
@@ -950,6 +1012,8 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                 replace_count += 1
                 blocks_info = ", ".join(f"{b[3]}({b[0].shape[0]}行)" for b in block_dfs)
                 print(f"    [OK] 图表多区块替换: {blocks_info}")
+                if status_map is not None:
+                    status_map[shape.name] = f"成功({blocks_info})"
                 # 清除形状名称中的占位符
                 try:
                     if shape.name and _CHART_PLACEHOLDER_RE.search(shape.name):
@@ -959,6 +1023,8 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                     pass
             except Exception as e:
                 print(f"    [警告] 图表多区块替换失败: {e}")
+                if status_map is not None:
+                    status_map[shape.name] = f"失败: {e}"
     return replace_count
 
 
@@ -1306,7 +1372,8 @@ def _replace_pictures(slide, pivot_data: Dict[str, pd.DataFrame],
                       text_image_exprs: Optional[List[str]] = None,
                       output_dir: Optional[str] = None,
                       shape_block_map: Optional[Dict[str, str]] = None,
-                      image_dir: Optional[str] = None) -> int:
+                      image_dir: Optional[str] = None,
+                      status_map: Optional[Dict[str, str]] = None) -> int:
     """替换幻灯片中的图片，返回替换次数。
 
     匹配优先级：
@@ -1315,6 +1382,7 @@ def _replace_pictures(slide, pivot_data: Dict[str, pd.DataFrame],
     3. 文本框中收集到的 {{图片:...}} 表达式 → 匹配同页第一张未被其他方式匹配的图片
 
     路径解析时，相对路径优先在 image_dir 查找，找不到再回退到 template_dir。
+    status_map: 若非 None，按形状名记录替换状态（成功/失败原因），供备注区回写。
     """
     if text_image_exprs is None:
         text_image_exprs = []
@@ -1352,12 +1420,16 @@ def _replace_pictures(slide, pivot_data: Dict[str, pd.DataFrame],
         image_path = _resolve_image_path(expr, pivot_data, default_block, template_dir, output_dir, image_dir)
         if not image_path:
             print(f"    [警告] 图片路径无效 [{expr}]: 文件不存在")
+            if status_map is not None:
+                status_map[shape.name] = f"失败: 图片路径无效({expr})"
             continue
 
         _do_replace_picture(slide, shape, image_path)
         matched_shape_ids.add(shape.shape_id)
         replaced += 1
         print(f"    [OK] 图片替换: {os.path.basename(image_path)}")
+        if status_map is not None:
+            status_map[shape.name] = f"成功({os.path.basename(image_path)})"
 
     # 文本关联模式：{{图片:...}} 在文本框中 → 替换同页第一张未被匹配的图片
     for expr in text_image_exprs:
@@ -1479,11 +1551,13 @@ def _set_cell_text_preserve_format(cell, text: str):
 def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
                         default_block: Optional[str],
                         shape_block_map: Optional[Dict[str, str]] = None,
-                        mark_missing: bool = True) -> int:
+                        mark_missing: bool = True,
+                        status_map: Optional[Dict[str, str]] = None) -> int:
     """替换幻灯片中的表格数据（整表替换），返回替换次数。
     通过表格形状的 name 或 alternative_text 中的 {{表格:区块名}} 匹配。
     形状名称/替代文字无占位符时，回退到 shape_block_map（备注区声明 形状名=区块名）。
     自动扩展表格行列以容纳完整数据，数据少于模板时清空多余行。
+    status_map: 若非 None，按形状名记录替换状态（成功/失败原因），供备注区回写。
     """
     replace_count = 0
     for shape in list(slide.shapes):
@@ -1515,6 +1589,8 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
         df = _lookup_block(pivot_data, target_block)
         if df is None:
             print(f"    [警告] 表格数据区块 '{target_block}' 未在透视结果中找到")
+            if status_map is not None:
+                status_map[shape.name] = f"失败: 区块'{target_block}'未找到"
             if mark_missing:
                 try:
                     _mark_missing_cell(shape.table.cell(0, 0), target_block)
@@ -1522,6 +1598,8 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
                     pass
             continue
         if df.empty:
+            if status_map is not None:
+                status_map[shape.name] = f"失败: 区块'{target_block}'数据为空"
             if mark_missing:
                 try:
                     _mark_missing_cell(shape.table.cell(0, 0), target_block)
@@ -1564,6 +1642,8 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
             replace_count += 1
             cols_info = f", 仅列: {cols}" if cols else ""
             print(f"    [OK] 表格数据替换: {target_block} ({len(headers)}列 x {len(data_rows)}行{cols_info})")
+            if status_map is not None:
+                status_map[shape.name] = f"成功({len(headers)}列x{len(data_rows)}行)"
             # 清除表格形状名称/替代文字中的占位符
             try:
                 if shape.name and _TABLE_PLACEHOLDER_RE.search(shape.name):
@@ -1572,6 +1652,8 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
                 pass
         except Exception as e:
             print(f"    [警告] 表格数据替换失败 [{target_block}]: {e}")
+            if status_map is not None:
+                status_map[shape.name] = f"失败: {e}"
     return replace_count
 
 
@@ -1634,11 +1716,16 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str, im
                 continue
             text_count += _replace_in_text_frame(shape.text_frame, pivot_data, default_block, image_collector, alias_map, mark_missing=mark_missing)
 
-        chart_count = _replace_chart_data(slide, pivot_data, default_block, alias_map, shape_block_map, mark_missing=mark_missing)
+        # v2.54.25+ 收集本页图表/图片/表格替换状态，用于回写备注区
+        page_status_map: Dict[str, str] = {}
+        chart_count = _replace_chart_data(slide, pivot_data, default_block, alias_map, shape_block_map, mark_missing=mark_missing, status_map=page_status_map)
 
-        picture_count = _replace_pictures(slide, pivot_data, default_block, template_dir, image_collector, output_dir, shape_block_map, image_dir)
+        picture_count = _replace_pictures(slide, pivot_data, default_block, template_dir, image_collector, output_dir, shape_block_map, image_dir, status_map=page_status_map)
 
-        table_count = _replace_table_data(slide, pivot_data, default_block, shape_block_map, mark_missing=mark_missing)
+        table_count = _replace_table_data(slide, pivot_data, default_block, shape_block_map, mark_missing=mark_missing, status_map=page_status_map)
+
+        # v2.54.25+ 将替换状态回写到备注区对应行末尾
+        _update_notes_with_status(slide, page_status_map)
 
         total_text += text_count
         total_chart += chart_count
