@@ -1052,6 +1052,33 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
 _PCT_KEYWORDS = ["占比", "pct", "百分比", "比例"]
 
 
+def _clear_embedded_chart_data(chart):
+    """v2.54.29+ 清除图表嵌入的 Excel 工作簿引用
+
+    模板图表可能嵌入了包含多个 sheet 和分散数据的 Excel 工作簿。
+    replace_data 只更新 cache（numCache/strCache），嵌入的 xlsx 仍残留原模板数据。
+    删除 c:externalData 后，PowerPoint 双击编辑数据时会基于 cache 重新生成干净的工作簿，
+    只包含当前替换的数据，不包含原模板的其他 sheet 或分散数据。
+    """
+    from pptx.oxml.ns import qn
+    try:
+        chart_space = chart._chartSpace
+        ext_data = chart_space.find(qn('c:externalData'))
+        if ext_data is not None:
+            rId = ext_data.get(qn('r:id'))
+            chart_space.remove(ext_data)
+            # 尝试删除对应的 relationship（孤立关系不影响显示，但清理更彻底）
+            if rId:
+                try:
+                    chart_part = chart.part
+                    if rId in chart_part.rels:
+                        del chart_part.rels[rId]
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 def _trim_extra_series(chart, expected_count: int):
     """replace_data 后剪除模板遗留的多余系列（模板6系列→数据4系列时剪掉2个空系列）"""
     from pptx.oxml.ns import qn
@@ -1167,6 +1194,7 @@ def _write_chart_data_multi(chart, block_dfs: list):
                     multi_series_count += 1
 
         chart.replace_data(chart_data)
+        _clear_embedded_chart_data(chart)
         _trim_extra_series(chart, multi_series_count)
         try:
             plot = chart.plots[0]
@@ -1302,6 +1330,7 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
                     series.add_data_point(float(x_val), float(y_val))
 
         chart.replace_data(chart_data)
+        _clear_embedded_chart_data(chart)
         # 散点图数据标签：默认显示数值
         try:
             plot = chart.plots[0]
@@ -1374,6 +1403,7 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
             multi_level_data.append(level_vals)
 
     chart.replace_data(chart_data)
+    _clear_embedded_chart_data(chart)
     _trim_extra_series(chart, actual_series_count)
     _ensure_vary_colors(chart)
 

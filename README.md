@@ -244,6 +244,21 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.29 (2026-07-23)
+
+**✨ 图表替换后清除嵌入的 Excel 工作簿残留数据**
+
+**背景**：PPT 模板图表可能嵌入了包含多个 sheet 和大量分散数据的 Excel 工作簿。`chart.replace_data()` 只更新 cache（numCache/strCache），嵌入的 xlsx 文件仍残留原模板数据。用户双击图表"编辑数据"时打开的还是原模板的工作簿，包含其他 sheet 和分散数据。
+
+**功能**（[`template_filler.py`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py)）：
+- 新增 [`_clear_embedded_chart_data`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L1055-L1079) 函数：删除图表 XML 中的 `<c:externalData>` 元素及对应的 relationship
+- 在所有 3 处 `chart.replace_data()` 调用后统一调用：普通图表、单区块散点图、多区块散点图
+- 删除 externalData 后，PowerPoint 双击编辑数据时会基于 cache 重新生成干净的工作簿，只包含当前替换的数据
+
+**效果**：替换后图表嵌入的 Excel 工作簿不再残留原模板的其他 sheet 或分散数据，只保留当前替换的数据。
+
+**验证**：防护用例 8 个图表全部成功清除嵌入数据（普通柱状图 5 个、饼图 1 个、散点图 2 个），无回归。
+
 ### v2.54.28 (2026-07-23)
 
 **✨ 多级分类 X 轴图表选列自动保留分类层级列**
