@@ -1828,10 +1828,12 @@ def _restore_multi_level_categories(chart, level_data: list, series_values: list
         # 层级数 = level_data 长度；嵌入工作簿需要 N 列分类 + 1 列数据
         n_levels = len(level_data)
         n_rows = len(level_data[0]) if level_data else 0
-        # 分类引用范围：A1:{第N列}{n_rows+1}（包含表头行）
+        # v2.56.3+ 分类引用范围从第2行开始（不含表头），与 numRef 行数一致
+        # 之前用 $A$1（含表头）导致分类比数值多1行，PowerPoint 把表头当作一个类别，
+        # 图表上多出一个表头的数据点
         last_col_letter = _col_index_to_letter(n_levels)  # N 列分类
         f_elem = etree.SubElement(multi_lvl, qn('c:f'))
-        f_elem.text = f'Sheet1!$A$1:${last_col_letter}${n_rows + 1}'
+        f_elem.text = f'Sheet1!$A$2:${last_col_letter}${n_rows + 1}'
 
         cache = etree.SubElement(multi_lvl, qn('c:multiLvlStrCache'))
 
