@@ -209,7 +209,7 @@ def verify_ppt_features(ppt_path):
     # P1: 章节页（第3页，深色背景+居中标题）
     if len(slides) >= 3:
         texts = get_texts(slides[2])
-        has_section = any("销售汇总" in t for t in texts)
+        has_section = any("基站" in t for t in texts)
         checks.append(("P1 章节页", has_section, f"文本: {texts[:2]}"))
     else:
         checks.append(("P1 章节页", False, "页数不足"))
@@ -401,9 +401,9 @@ def verify_excel_output(excel_path):
 
     # 1. 检查 Sheet 数量（期望 >=10）
     expected_sheets = [
-        "按地区汇总", "地区多维统计", "地区产品交叉", "地区占比",
-        "产品计数占比", "销售额分箱", "华东华北汇总", "产品系列汇总",
-        "地区单价分析", "block合并测试",
+        "按地区汇总", "地区多维统计", "地区频段交叉", "地区占比",
+        "频段计数占比", "速率分箱", "高PRB汇总", "频段类型汇总",
+        "地区单用户速率", "block合并测试",
     ]
     actual_sheets = wb.sheetnames
     checks.append(("Sheet数量>=10", len(actual_sheets) >= 10, f"实际{len(actual_sheets)}个"))
@@ -417,8 +417,8 @@ def verify_excel_output(excel_path):
     expected_titles = {
         "按地区汇总": "简单分组求和",
         "地区多维统计": "多字段多聚合",
-        "地区产品交叉": "交叉表",
-        "销售额分箱": "分箱统计",
+        "地区频段交叉": "交叉表",
+        "速率分箱": "分箱统计",
     }
     for sname, expected_title in expected_titles.items():
         if sname in actual_sheets:
@@ -447,29 +447,29 @@ def verify_excel_output(excel_path):
     # 3. 按地区汇总 - 验证数据值
     if "按地区汇总" in actual_sheets:
         header, data = _read_sheet_data("按地区汇总")
-        checks.append(("按地区汇总表头", "地区" in header and "总销售额" in header, str(header)))
+        checks.append(("按地区汇总表头", "地区" in header and "总下行速率" in header, str(header)))
         # 华东=4800, 华北=3300, 华南=4650
         vals = {str(r[0]).strip(): r[1] for r in data if r[0]}
-        checks.append(("华东销售额=4800", vals.get("华东") == 4800, str(vals.get("华东"))))
-        checks.append(("华北销售额=3300", vals.get("华北") == 3300, str(vals.get("华北"))))
-        checks.append(("华南销售额=4650", vals.get("华南") == 4650, str(vals.get("华南"))))
+        checks.append(("华东下行速率=4800", vals.get("华东") == 4800, str(vals.get("华东"))))
+        checks.append(("华北下行速率=3300", vals.get("华北") == 3300, str(vals.get("华北"))))
+        checks.append(("华南下行速率=4650", vals.get("华南") == 4650, str(vals.get("华南"))))
 
     # 4. 地区多维统计 - 验证多聚合字段
     if "地区多维统计" in actual_sheets:
         header, data = _read_sheet_data("地区多维统计")
-        expected_cols = ["地区", "总销售额", "平均销售额", "客户数"]
+        expected_cols = ["地区", "总下行速率", "平均下行速率", "连接用户数"]
         has_all_cols = all(c in header for c in expected_cols)
         checks.append(("地区多维统计4列", has_all_cols, str(header)))
-        # 华东: 总额4800, 均值1200, 客户数4
+        # 华东: 总额4800, 均值1200, 连接用户数4
         vals = {str(r[0]).strip(): r for r in data if r[0]}
         hd = vals.get("华东")
         if hd:
-            checks.append(("华东客户数=4", hd[3] == 4, str(hd[3])))
+            checks.append(("华东连接用户数=4", hd[3] == 4, str(hd[3])))
             checks.append(("华东均值=1200", hd[2] == 1200, str(hd[2])))
 
-    # 5. 地区产品交叉 - 验证交叉表含合计列
-    if "地区产品交叉" in actual_sheets:
-        header, data = _read_sheet_data("地区产品交叉")
+    # 5. 地区频段交叉 - 验证交叉表含合计列
+    if "地区频段交叉" in actual_sheets:
+        header, data = _read_sheet_data("地区频段交叉")
         has_total = "合计" in header
         checks.append(("交叉表含合计列", has_total, str(header)))
         # 华东合计=4800
@@ -496,31 +496,31 @@ def verify_excel_output(excel_path):
         store_ok = pct_cell.value is not None and 0 < float(pct_cell.value) <= 1
         checks.append(("占比存储值未×100", store_ok, f"存储值={pct_cell.value}"))
 
-    # 6.1 产品计数占比 - 验证 count_pct 也走 0~1 小数
-    if "产品计数占比" in actual_sheets:
-        header, data = _read_sheet_data("产品计数占比")
+    # 6.1 频段计数占比 - 验证 count_pct 也走 0~1 小数
+    if "频段计数占比" in actual_sheets:
+        header, data = _read_sheet_data("频段计数占比")
         pct_vals = [r[1] for r in data if r[0] and r[1] is not None]
         all_valid = all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in pct_vals)
         checks.append(("计数占比0~1小数", all_valid, str(pct_vals)))
 
-    # 7. 销售额分箱 - 验证分箱区间存在
-    if "销售额分箱" in actual_sheets:
-        header, data = _read_sheet_data("销售额分箱")
+    # 7. 速率分箱 - 验证分箱区间存在
+    if "速率分箱" in actual_sheets:
+        header, data = _read_sheet_data("速率分箱")
         has_bins = len(data) >= 3 and "~" in str(data[0][0])
         checks.append(("分箱区间存在", has_bins, str([r[0] for r in data[:3]])))
 
     # 8. block合并测试 - 验证多列合并
     if "block合并测试" in actual_sheets:
         header, data = _read_sheet_data("block合并测试")
-        has_multi_col = "客户数_A" in header and "客户数_B" in header
+        has_multi_col = "连接用户数_A" in header and "连接用户数_B" in header
         checks.append(("block合并双列", has_multi_col, str(header)))
 
     # 9. 无行维度汇总 - 横向一行输出（位置1:1对应）
     if "无行维度汇总" in actual_sheets:
         header, data = _read_sheet_data("无行维度汇总")
-        # 验证列名：位置1:1 → 总销售额_sum, 平均客户数_avg
-        has_col_sum = "总销售额" in header or any("销售额" in h and "求和" in h for h in header)
-        has_col_avg = "平均客户数" in header or any("客户数" in h and ("均值" in h or "avg" in h) for h in header)
+        # 验证列名：位置1:1 → 总下行速率_sum, 平均连接用户数_avg
+        has_col_sum = "总下行速率" in header or any("下行速率" in h and "求和" in h for h in header)
+        has_col_avg = "平均连接用户数" in header or any("连接用户数" in h and ("均值" in h or "avg" in h) for h in header)
         # 验证只有1行数据（横向一行）
         is_single_row = len(data) == 1
         checks.append(("无行维度→横向一行", is_single_row, f"data行数={len(data)}"))
@@ -529,8 +529,8 @@ def verify_excel_output(excel_path):
     # 10. 区块名合并：task1(按地区汇总) + task14(按地区汇总, 同名"简单分组求和") 应合并
     if "按地区汇总" in actual_sheets:
         header, data = _read_sheet_data("按地区汇总")
-        # 合并后应有 总销售额 + 总销量 两列（task1 sum销售额 + task14 sum销量，同区块名合并）
-        has_merged_cols = "总销售额" in header and "总销量" in header
+        # 合并后应有 总下行速率 + 总用户数 两列（task1 sum下行速率 + task14 sum用户数，同区块名合并）
+        has_merged_cols = "总下行速率" in header and "总用户数" in header
         checks.append(("区块名不连续合并", has_merged_cols, f"header={header}"))
         # 验证行维度列（地区）头有特殊颜色
         ws_block = wb["按地区汇总"]
@@ -544,16 +544,16 @@ def verify_excel_output(excel_path):
                                f"地区 fill={dim_fill.start_color.rgb}"))
                 break
 
-    # 11. 历史标量引用：任务15生产"总销售额"→任务16公式"销量/总销售额=销量占比"
+    # 11. 历史标量引用：任务15生产"总下行速率"→任务16公式"用户数/总下行速率=用户速率比"
     if "历史标量" in actual_sheets:
         _, data = _read_sheet_data("历史标量")
-        if data and "总销售额" in _read_sheet_data("历史标量")[0]:
-            total_sales = float(data[0][0]) if len(data) > 0 else None
+        if data and "总下行速率" in _read_sheet_data("历史标量")[0]:
+            total_rate = float(data[0][0]) if len(data) > 0 else None
         else:
-            total_sales = None
-        checks.append(("标量生产者_总销售额", total_sales is not None and total_sales > 0,
-                       f"total_sales={total_sales}"))
-        
+            total_rate = None
+        checks.append(("标量生产者_总下行速率", total_rate is not None and total_rate > 0,
+                       f"total_rate={total_rate}"))
+
         if "按地区汇总" in actual_sheets:
             # 任务16的"标量消费者"区块在第二个区块位置（行8-12），需要跳过第一个区块
             ws_block = wb["按地区汇总"]
@@ -572,14 +572,14 @@ def verify_excel_output(excel_path):
             else:
                 header2 = []
                 data2 = []
-            has_ratio_col = "销量占比" in header2
-            checks.append(("标量消费者_销量占比列", has_ratio_col, f"header={header2}"))
-            if has_ratio_col and total_sales:
+            has_ratio_col = "用户速率比" in header2
+            checks.append(("标量消费者_用户速率比列", has_ratio_col, f"header={header2}"))
+            if has_ratio_col and total_rate:
                 import pandas as pd
                 df2 = pd.DataFrame(data2, columns=header2)
                 region_idx = header2.index("地区") if "地区" in header2 else -1
-                ratio_idx = header2.index("销量占比") if "销量占比" in header2 else -1
-                expected_ratios = {"华北": 270/total_sales, "华东": 390/total_sales, "华南": 370/total_sales}
+                ratio_idx = header2.index("用户速率比") if "用户速率比" in header2 else -1
+                expected_ratios = {"华北": 270/total_rate, "华东": 390/total_rate, "华南": 370/total_rate}
                 ratio_ok = True
                 for row in data2:
                     region = str(row[region_idx]) if region_idx >= 0 else ""
@@ -588,88 +588,30 @@ def verify_excel_output(excel_path):
                         if abs(actual_ratio - expected_ratios[region]) > 0.001:
                             ratio_ok = False
                             break
-                checks.append(("标量消费者_占比正确", ratio_ok,
+                checks.append(("标量消费者_速率比正确", ratio_ok,
                                f"expected={expected_ratios}"))
 
-    # 12. 异名映射多列组合计算：任务21——值映射(金额,数量)与原始字段名(销售额,销量)完全不同
-    if "地区均价分析" in actual_sheets:
-        ws_price = wb["地区均价分析"]
+    # 12. 异名映射多列组合计算：任务21——值映射(速率,数量)与原始字段名(小区下行速率,用户数)完全不同
+    if "地区单用户速率分析" in actual_sheets:
+        ws_price = wb["地区单用户速率分析"]
         first_cell = ws_price.cell(row=1, column=1).value
         checks.append(("异名映射_区块名", first_cell == "多列组合_异名映射",
                        f"期望'多列组合_异名映射', 实际'{first_cell}'"))
 
-        header, data = _read_sheet_data("地区均价分析")
-        expected_cols = ["地区", "金额", "数量", "均价(万元/个)"]
+        header, data = _read_sheet_data("地区单用户速率分析")
+        expected_cols = ["地区", "速率", "数量", "单用户速率(Mbps/人)"]
         has_all_cols = all(c in header for c in expected_cols)
         checks.append(("异名映射_4列完整", has_all_cols, f"header={header}"))
 
         if data:
             vals = {str(r[0]).strip(): r for r in data if r[0]}
-            # 华东: 金额=4800, 数量=390, 均价=4800/390=12.3077
+            # 华东: 速率=4800, 数量=390, 单用户速率=4800/390=12.3077
             hd = vals.get("华东")
             if hd:
-                checks.append(("异名映射_华东金额=4800", float(hd[1]) == 4800, str(hd[1])))
+                checks.append(("异名映射_华东速率=4800", float(hd[1]) == 4800, str(hd[1])))
                 checks.append(("异名映射_华东数量=390", float(hd[2]) == 390, str(hd[2])))
-                checks.append(("异名映射_华东均价≈12.31",
+                checks.append(("异名映射_华东单用户速率≈12.31",
                                abs(float(hd[3]) - 12.31) < 0.01, str(hd[3])))
-
-        # v2.54.5+ 合并写法验证：行维度|行映射 + 值字段|值映射（半角|）
-        if "合并写法_行值映射" in actual_sheets:
-            header, data = _read_sheet_data("合并写法_行值映射")
-            # 期望列名: 区域（行维度映射）, 总销售额（值映射）
-            checks.append(("合并写法_行维度映射=区域", "区域" in header, f"header={header}"))
-            checks.append(("合并写法_值映射=总销售额", "总销售额" in header, f"header={header}"))
-            # 原列名不应出现（已被映射）
-            checks.append(("合并写法_原列名已映射", "地区" not in header and "销售额" not in header, f"header={header}"))
-            if data:
-                vals = {str(r[0]).strip(): r for r in data if r[0]}
-                hd = vals.get("华东")
-                if hd:
-                    checks.append(("合并写法_华东总销售额=4800", float(hd[1]) == 4800, str(hd[1])))
-        else:
-            checks.append(("合并写法_sheet存在", False, "合并写法_行值映射 不存在"))
-
-        # v2.54.5+ 全角｜写法验证：行维度｜行映射 + 值字段｜值映射
-        if "全角写法_行值映射" in actual_sheets:
-            header, data = _read_sheet_data("全角写法_行值映射")
-            checks.append(("全角写法_行维度映射=区域", "区域" in header, f"header={header}"))
-            checks.append(("全角写法_值映射=总销售额", "总销售额" in header, f"header={header}"))
-            checks.append(("全角写法_原列名已映射", "地区" not in header and "销售额" not in header, f"header={header}"))
-            if data:
-                vals = {str(r[0]).strip(): r for r in data if r[0]}
-                hd = vals.get("华东")
-                if hd:
-                    checks.append(("全角写法_华东总销售额=4800", float(hd[1]) == 4800, str(hd[1])))
-        else:
-            checks.append(("全角写法_sheet存在", False, "全角写法_行值映射 不存在"))
-
-        # v2.54.6+ 导出列写聚合后名（销售额_求和）应能匹配
-        if "导出列_聚合后名" in actual_sheets:
-            header, data = _read_sheet_data("导出列_聚合后名")
-            checks.append(("导出列_聚合后名_列数=2", len(header) == 2, f"header={header}"))
-            checks.append(("导出列_聚合后名_含地区", "地区" in header, f"header={header}"))
-            checks.append(("导出列_聚合后名_含销售额_求和", "销售额_求和" in header, f"header={header}"))
-            if data:
-                vals = {str(r[0]).strip(): r for r in data if r[0]}
-                hd = vals.get("华东")
-                if hd:
-                    checks.append(("导出列_聚合后名_华东=4800", float(hd[1]) == 4800, str(hd[1])))
-        else:
-            checks.append(("导出列_聚合后名_sheet存在", False, "导出列_聚合后名 不存在"))
-
-        # v2.54.6+ 导出列写映射名（总销售额）应能匹配
-        if "导出列_映射名" in actual_sheets:
-            header, data = _read_sheet_data("导出列_映射名")
-            checks.append(("导出列_映射名_列数=2", len(header) == 2, f"header={header}"))
-            checks.append(("导出列_映射名_含地区", "地区" in header, f"header={header}"))
-            checks.append(("导出列_映射名_含总销售额", "总销售额" in header, f"header={header}"))
-            if data:
-                vals = {str(r[0]).strip(): r for r in data if r[0]}
-                hd = vals.get("华东")
-                if hd:
-                    checks.append(("导出列_映射名_华东=4800", float(hd[1]) == 4800, str(hd[1])))
-        else:
-            checks.append(("导出列_映射名_sheet存在", False, "导出列_映射名 不存在"))
 
     wb.close()
 
@@ -810,7 +752,7 @@ def start_preview_server(html_path):
     return start_server(html_path)
 
 
-def verify_template_mode(pivot_excel_path):
+def verify_template_mode(pivot_excel_path, output_dir):
     """验证 PPT 模板替换模式
 
     测试场景：
@@ -818,6 +760,10 @@ def verify_template_mode(pivot_excel_path):
     2. 调用 template 子命令填充数据
     3. 读取生成的 PPT，验证占位符已被替换为透视数据
     4. 验证图表数据源已被替换
+
+    Args:
+        pivot_excel_path: 透视结果 Excel 路径
+        output_dir: 本次运行的输出目录（output_时间戳）
 
     Returns:
         tuple: (success: bool, output_ppt_path: str or None)
@@ -828,30 +774,9 @@ def verify_template_mode(pivot_excel_path):
         print(f"  {RED}透视结果文件不存在，跳过模板测试{RESET}")
         return False, None
 
-    # 1. 创建带占位符的 PPT 模板
-    # 模板放在防护用例目录，输出结果放到透视结果所在的结果文件夹
-    template_path = os.path.join(SCRIPT_DIR, "测试模板.pptx")
-    # 输出路径放到透视结果所在的结果文件夹（output_xxx）
-    pivot_dir = os.path.dirname(pivot_excel_path) if pivot_excel_path else SCRIPT_DIR
-    output_path = os.path.join(pivot_dir, "模板填充结果.pptx")
-
-    def _try_remove(path):
-        if os.path.exists(path):
-            try:
-                os.remove(path)
-                return True
-            except Exception:
-                return False
-        return True
-
-    # 尝试清理旧文件；若被占用则改用带时间戳的临时名
-    use_temp_name = False
-    if not _try_remove(template_path) or not _try_remove(output_path):
-        use_temp_name = True
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        template_path = os.path.join(SCRIPT_DIR, f"测试模板_{ts}.pptx")
-        output_path = os.path.join(pivot_dir, f"模板填充结果_{ts}.pptx")
-        print(f"  {YELLOW}⚠ 检测到旧模板文件被占用，改用临时名: {os.path.basename(template_path)}{RESET}")
+    # 1. 创建带占位符的 PPT 模板（模板和输出都放到本次输出目录）
+    template_path = os.path.join(output_dir, "测试模板.pptx")
+    output_path = os.path.join(output_dir, "模板填充结果.pptx")
 
     try:
         _create_test_template(template_path)
@@ -899,7 +824,7 @@ def verify_template_mode(pivot_excel_path):
             print(f"  {GREEN}✓ 页1 文本占位符全部已替换{RESET}")
 
         # 验证点2: 页1 文本替换值合理（包含期望的数值）
-        # 按地区汇总中总销售额应为 4800（华东）等
+        # 按地区汇总中总下行速率应为 4800（华东）等
         value_ok = "4800" in all_text or "4800.0" in all_text
         checks.append(("页1 文本替换值正确", value_ok))
         if value_ok:
@@ -919,7 +844,7 @@ def verify_template_mode(pivot_excel_path):
                     # 验证图表标题保留模板原样（未被占位符污染）
                     if chart.has_title and chart.chart_title.has_text_frame:
                         title = chart.chart_title.text_frame.text
-                        if "各地区销售汇总" in title and "{{" not in title:
+                        if "各地区下行速率汇总" in title and "{{" not in title:
                             chart_title_preserved = True
                     # 验证图表数据已替换
                     if chart.plots:
@@ -958,9 +883,9 @@ def verify_template_mode(pivot_excel_path):
                 if shape.has_table:
                     table_found = True
                     table = shape.table
-                    # 验证表头包含 "地区" 和 "总销售额"
+                    # 验证表头包含 "地区" 和 "总下行速率"
                     header_cells = [table.cell(0, c).text.strip() for c in range(len(table.columns))]
-                    table_header_ok = "地区" in header_cells and "总销售额" in header_cells
+                    table_header_ok = "地区" in header_cells and "总下行速率" in header_cells
                     # 验证数据行包含 "华东"
                     all_cells_text = []
                     for r in range(len(table.rows)):
@@ -981,7 +906,7 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页2 未找到表格{RESET}")
             if table_header_ok:
-                print(f"  {GREEN}✓ 页2 表头已替换（含地区/总销售额）{RESET}")
+                print(f"  {GREEN}✓ 页2 表头已替换（含地区/总下行速率）{RESET}")
             else:
                 print(f"  {RED}✗ 页2 表头未正确替换{RESET}")
             if table_data_ok:
@@ -1028,7 +953,7 @@ def verify_template_mode(pivot_excel_path):
                     slide4_text += shape.text_frame.text + "\n"
 
             # 验证默认区块占位符已替换
-            default_block_ok = "{{总销售额}}" not in slide4_text and "{{" not in slide4_text
+            default_block_ok = "{{总下行速率}}" not in slide4_text and "{{" not in slide4_text
             checks.append(("页4 默认区块占位符已替换", default_block_ok))
             if default_block_ok:
                 print(f"  {GREEN}✓ 页4 默认区块占位符已替换（省略前缀生效）{RESET}")
@@ -1047,15 +972,15 @@ def verify_template_mode(pivot_excel_path):
                         # 验证图表标题保留模板原样
                         if chart.has_title and chart.chart_title.has_text_frame:
                             title = chart.chart_title.text_frame.text
-                            if "产品销售额占比" in title and "{{" not in title:
+                            if "频段下行速率占比" in title and "{{" not in title:
                                 chart2_title_preserved = True
                         # 验证数据已替换
                         if chart.plots:
                             plot = chart.plots[0]
                             categories = list(plot.categories)
                             cat_str = [str(c) for c in categories]
-                            # 产品销售额区块包含 产品A/产品B/产品C
-                            if any("产品" in c for c in cat_str):
+                            # 环形图数据区块包含频段值 n78/n41
+                            if any("n78" in str(c) or "n41" in str(c) for c in cat_str):
                                 chart2_data_ok = True
                     except Exception:
                         pass
@@ -1069,7 +994,7 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页4 未找到第二图表{RESET}")
             if chart2_data_ok:
-                print(f"  {GREEN}✓ 页4 第二图表数据已替换（分类含产品）{RESET}")
+                print(f"  {GREEN}✓ 页4 第二图表数据已替换（分类含频段）{RESET}")
             else:
                 print(f"  {YELLOW}⚠ 页4 第二图表数据可能未替换{RESET}")
             if chart2_title_preserved:
@@ -1093,7 +1018,7 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页5 存在未替换的占位符{RESET}")
 
-            # 验证5-2: 第一个区块数据正确（简单分组求和 - 华东总销售额=4800）
+            # 验证5-2: 第一个区块数据正确（简单分组求和 - 华东总下行速率=4800）
             block1_ok = "4800" in slide5_text
             checks.append(("页5 区块1数据正确(4800)", block1_ok))
             if block1_ok:
@@ -1101,11 +1026,11 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页5 区块1数据不正确{RESET}")
 
-            # 验证5-3: 第二个区块数据正确（标量消费者 - 华东销量占比，应是小数）
-            # 标量消费者区块的"销量占比"列值应在 0~1 之间（百分比小数）
+            # 验证5-3: 第二个区块数据正确（标量消费者 - 华东用户速率比，应是小数）
+            # 标量消费者区块的"用户速率比"列值应在 0~1 之间（百分比小数）
             import re as _re
-            # 提取"区块2 销量占比(华东):" 后面的数值
-            m5 = _re.search(r"区块2 销量占比\(华东\):\s*([\d.]+)", slide5_text)
+            # 提取"区块2 用户速率比(华东):" 后面的数值
+            m5 = _re.search(r"区块2 用户速率比\(华东\):\s*([\d.]+)", slide5_text)
             block2_ok = False
             if m5:
                 try:
@@ -1116,7 +1041,7 @@ def verify_template_mode(pivot_excel_path):
                     pass
             checks.append(("页5 区块2数据正确(0~1小数)", block2_ok))
             if block2_ok:
-                print(f"  {GREEN}✓ 页5 区块2数据正确（标量消费者 华东销量占比={m5.group(1) if m5 else 'N/A'}）{RESET}")
+                print(f"  {GREEN}✓ 页5 区块2数据正确（标量消费者 华东用户速率比={m5.group(1) if m5 else 'N/A'}）{RESET}")
             else:
                 print(f"  {RED}✗ 页5 区块2数据不正确（应为0~1小数）{RESET}")
 
@@ -1128,8 +1053,8 @@ def verify_template_mode(pivot_excel_path):
                     table5_found = True
                     table = shape.table
                     header_cells = [table.cell(0, c).text.strip() for c in range(len(table.columns))]
-                    # 标量消费者区块表头: 地区/地区销量/销量占比
-                    table5_block2_ok = "销量占比" in header_cells or "地区销量" in header_cells
+                    # 标量消费者区块表头: 地区/地区用户数/用户速率比
+                    table5_block2_ok = "用户速率比" in header_cells or "地区用户数" in header_cells
                     break
             checks.append(("页5 表格存在", table5_found))
             checks.append(("页5 表格引用区块2成功", table5_block2_ok))
@@ -1138,7 +1063,7 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页5 未找到表格{RESET}")
             if table5_block2_ok:
-                print(f"  {GREEN}✓ 页5 表格引用区块2成功（表头含销量占比/地区销量）{RESET}")
+                print(f"  {GREEN}✓ 页5 表格引用区块2成功（表头含用户速率比/地区用户数）{RESET}")
             else:
                 print(f"  {RED}✗ 页5 表格引用区块2失败{RESET}")
 
@@ -1195,7 +1120,7 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页6 精确查找数据不正确{RESET}")
 
-            # 验证6-3: 表格引用成功（表头应为 简单分组求和 的列：地区/总销售额/总销量）
+            # 验证6-3: 表格引用成功（表头应为 简单分组求和 的列：地区/总下行速率/总用户数）
             table6_found = False
             table6_ok = False
             for shape in slide6.shapes:
@@ -1203,8 +1128,8 @@ def verify_template_mode(pivot_excel_path):
                     table6_found = True
                     table = shape.table
                     header_cells = [table.cell(0, c).text.strip() for c in range(len(table.columns))]
-                    # 简单分组求和区块表头: 地区/总销售额/总销量
-                    table6_ok = "总销售额" in header_cells or "总销量" in header_cells
+                    # 简单分组求和区块表头: 地区/总下行速率/总用户数
+                    table6_ok = "总下行速率" in header_cells or "总用户数" in header_cells
                     break
             checks.append(("页6 表格存在", table6_found))
             checks.append(("页6 表格精确查找成功", table6_ok))
@@ -1213,7 +1138,7 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页6 未找到表格{RESET}")
             if table6_ok:
-                print(f"  {GREEN}✓ 页6 表格精确查找成功（表头含总销售额/总销量）{RESET}")
+                print(f"  {GREEN}✓ 页6 表格精确查找成功（表头含总下行速率/总用户数）{RESET}")
             else:
                 print(f"  {RED}✗ 页6 表格精确查找失败{RESET}")
 
@@ -1257,20 +1182,20 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页7 未找到表格{RESET}")
 
-            # 验证7-2: 表格只含选定列（地区+总销售额，不含总销量）
+            # 验证7-2: 表格只含选定列（地区+总下行速率，不含总用户数）
             table7_cols_ok = False
             if table7_found:
                 for s in slide7.shapes:
                     if s.has_table:
                         t = s.table
                         headers7 = [t.cell(0, c).text_frame.text for c in range(len(t.columns))]
-                        has_total_sales = any("总销售额" in h for h in headers7)
-                        no_total_volume = all("总销量" not in h for h in headers7)
+                        has_total_sales = any("总下行速率" in h for h in headers7)
+                        no_total_volume = all("总用户数" not in h for h in headers7)
                         table7_cols_ok = has_total_sales and no_total_volume and len(headers7) == 2
                         break
             checks.append(("页7 表格只含选定列", table7_cols_ok))
             if table7_cols_ok:
-                print(f"  {GREEN}✓ 页7 表格只含选定列（地区+总销售额，排除总销量）{RESET}")
+                print(f"  {GREEN}✓ 页7 表格只含选定列（地区+总下行速率，排除总用户数）{RESET}")
             else:
                 print(f"  {RED}✗ 页7 表格选列失败{RESET}")
 
@@ -1282,7 +1207,7 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页7 未找到图表{RESET}")
 
-            # 验证7-4: 图表只有1个系列且名称含"总销量"
+            # 验证7-4: 图表只有1个系列且名称含"总用户数"
             chart7_series_ok = False
             if chart7_found:
                 for s in slide7.shapes:
@@ -1292,13 +1217,13 @@ def verify_template_mode(pivot_excel_path):
                             series_list = list(plot.series)
                             if len(series_list) == 1:
                                 name = series_list[0].name if hasattr(series_list[0], "name") else ""
-                                chart7_series_ok = "总销量" in str(name)
+                                chart7_series_ok = "总用户数" in str(name)
                         except Exception:
                             pass
                         break
             checks.append(("页7 图表只含选定系列", chart7_series_ok))
             if chart7_series_ok:
-                print(f"  {GREEN}✓ 页7 图表只含选定系列（总销量，单系列）{RESET}")
+                print(f"  {GREEN}✓ 页7 图表只含选定系列（总用户数，单系列）{RESET}")
             else:
                 print(f"  {RED}✗ 页7 图表选列失败{RESET}")
 
@@ -1318,7 +1243,7 @@ def verify_template_mode(pivot_excel_path):
             else:
                 print(f"  {RED}✗ 页8 存在未替换的计算占位符{RESET}")
 
-            # 验证8-2: 华东销售额占比 = 4800/12750 ≈ 37.65%
+            # 验证8-2: 华东下行速率占比 = 4800/12750 ≈ 37.65%
             calc8a_ok = "37.65%" in slide8_text
             checks.append(("页8 占比计算正确(37.65%)", calc8a_ok))
             if calc8a_ok:
@@ -1335,7 +1260,7 @@ def verify_template_mode(pivot_excel_path):
                 print(f"  {RED}✗ 页8 差额计算不正确{RESET}")
 
             # 验证8-4: 极差取整 = 1500
-            calc8c_ok = "销售额极差: 1500" in slide8_text
+            calc8c_ok = "下行速率极差: 1500" in slide8_text
             checks.append(("页8 极差计算正确(1500)", calc8c_ok))
             if calc8c_ok:
                 print(f"  {GREEN}✓ 页8 极差计算正确（max-min=1500，取整）{RESET}")
@@ -1346,27 +1271,27 @@ def verify_template_mode(pivot_excel_path):
             calc8d_ok = "37.86%" in slide8_text
             checks.append(("页8 默认区块运算正确(37.86%)", calc8d_ok))
             if calc8d_ok:
-                print(f"  {GREEN}✓ 页8 默认区块运算正确（华东销量 390/1030=37.86%）{RESET}")
+                print(f"  {GREEN}✓ 页8 默认区块运算正确（华东用户数 390/1030=37.86%）{RESET}")
             else:
                 print(f"  {RED}✗ 页8 默认区块运算不正确{RESET}")
 
-            # 验证8-6: 别名-文本表达式（华东销售额=4800，来自备注 别名.华东销售额=按地区汇总.总销售额.华东）
-            calc8e_ok = "别名-华东销售额: 4800" in slide8_text
+            # 验证8-6: 别名-文本表达式（华东下行速率=4800，来自备注 别名.华东下行速率=按地区汇总.总下行速率.华东）
+            calc8e_ok = "别名-华东下行速率: 4800" in slide8_text
             checks.append(("页8 别名文本表达式(4800)", calc8e_ok))
             if calc8e_ok:
-                print(f"  {GREEN}✓ 页8 别名文本表达式正确（华东销售额=4800）{RESET}")
+                print(f"  {GREEN}✓ 页8 别名文本表达式正确（华东下行速率=4800）{RESET}")
             else:
                 print(f"  {RED}✗ 页8 别名文本表达式不正确{RESET}")
 
             # 验证8-7: 别名-计算表达式（华东/合计=4800/12750≈37.65%）
-            calc8f_ok = "别名-利润率: 37.65%" in slide8_text
+            calc8f_ok = "别名-下行速率占比: 37.65%" in slide8_text
             checks.append(("页8 别名计算表达式(37.65%)", calc8f_ok))
             if calc8f_ok:
                 print(f"  {GREEN}✓ 页8 别名计算表达式正确（4800/12750=37.65%）{RESET}")
             else:
                 print(f"  {RED}✗ 页8 别名计算表达式不正确{RESET}")
 
-            # 验证8-8: 文本占位符带格式后缀（华东销售额4800 → .2f 显示 4800.00）
+            # 验证8-8: 文本占位符带格式后缀（华东下行速率4800 → .2f 显示 4800.00）
             calc8g_ok = "文本格式-2位小数: 4800.00" in slide8_text
             checks.append(("页8 文本占位符格式后缀(.2f)", calc8g_ok))
             if calc8g_ok:
@@ -1403,11 +1328,11 @@ def verify_template_mode(pivot_excel_path):
                         pass
                     break
 
-            # 验证9-1: 图表标题文本占位符已替换（华东4800万元）
-            title9a_ok = "华东销售额4800万元" in chart9_title
+            # 验证9-1: 图表标题文本占位符已替换（华东下行速率4800Mbps）
+            title9a_ok = "华东下行速率4800Mbps" in chart9_title
             checks.append(("页9 图表标题文本占位符", title9a_ok))
             if title9a_ok:
-                print(f"  {GREEN}✓ 页9 图表标题文本占位符正确（华东销售额4800万元）{RESET}")
+                print(f"  {GREEN}✓ 页9 图表标题文本占位符正确（华东下行速率4800Mbps）{RESET}")
             else:
                 print(f"  {RED}✗ 页9 图表标题文本占位符不正确: {repr(chart9_title)}{RESET}")
 
@@ -1442,15 +1367,15 @@ def verify_template_mode(pivot_excel_path):
                 if shape.has_table:
                     table = shape.table
                     try:
-                        # 验证选列：总销售额,平均销售额 → 表头应有这两列，不应有客户数
+                        # 验证选列：总下行速率,平均下行速率 → 表头应有这两列，不应有连接用户数
                         h0 = table.cell(0, 0).text
                         h1 = table.cell(0, 1).text if len(table.columns) > 1 else ""
                         h2 = table.cell(0, 2).text if len(table.columns) > 2 else ""
-                        # 地区多维统计：地区 | 总销售额 | 平均销售额
-                        table10_ok = (h0 == "地区" and "总销售额" in (h1, h2) and "平均销售额" in (h1, h2)
-                                      and "客户数" not in h0 and "客户数" not in h1 and "客户数" not in h2)
+                        # 地区多维统计：地区 | 总下行速率 | 平均下行速率
+                        table10_ok = (h0 == "地区" and "总下行速率" in (h1, h2) and "平均下行速率" in (h1, h2)
+                                      and "连接用户数" not in h0 and "连接用户数" not in h1 and "连接用户数" not in h2)
                         if table10_ok:
-                            print(f"  {GREEN}✓ 页10 表格备注区声明正确（地区+总销售额+平均销售额，已筛掉客户数）{RESET}")
+                            print(f"  {GREEN}✓ 页10 表格备注区声明正确（地区+总下行速率+平均下行速率，已筛掉连接用户数）{RESET}")
                         else:
                             print(f"  {RED}✗ 页10 表格备注区声明不正确: 表头={h0}/{h1}/{h2}{RESET}")
                     except Exception as e:
@@ -1503,6 +1428,47 @@ def verify_template_mode(pivot_excel_path):
                 print(f"  {GREEN}✓ 页12 多区块散点图替换成功（{scatter12_series}个系列={scatter12_names}）{RESET}")
             else:
                 print(f"  {RED}✗ 页12 多区块散点图未找到或替换失败{RESET}")
+
+        # ---------- 页13: 多级分类X轴图表（v2.54.27+ 核心验证） ----------
+        if len(prs.slides) >= 13:
+            slide13 = prs.slides[12]
+            multi13_found = False
+            multi13_level_ok = False
+            multi13_data_ok = False
+            for shape in slide13.shapes:
+                if shape.has_chart:
+                    multi13_found = True
+                    chart13 = shape.chart
+                    try:
+                        from pptx.oxml.ns import qn as _qn
+                        cs = chart13._chartSpace
+                        cat_elem = cs.find('.//' + _qn('c:cat'))
+                        if cat_elem is not None:
+                            multi_lvl = cat_elem.find(_qn('c:multiLvlStrRef'))
+                            if multi_lvl is not None:
+                                lvls = multi_lvl.findall('.//' + _qn('c:lvl'))
+                                multi13_level_ok = len(lvls) == 2
+                                # 验证数据已替换（cache 中应有地区+频段值）
+                                all_v = [v.text for v in multi_lvl.findall('.//' + _qn('c:v'))]
+                                has_region = any(r in all_v for r in ["华东", "华北", "华南"])
+                                has_band = any(b in all_v for b in ["n78", "n41"])
+                                multi13_data_ok = has_region and has_band
+                    except Exception as e:
+                        print(f"  {RED}✗ 页13 多级分类检查异常: {e}{RESET}")
+                    break
+
+            checks.append(("页13 多级分类图表存在", multi13_found))
+            checks.append(("页13 多级分类层级=2", multi13_level_ok))
+            checks.append(("页13 多级分类数据已替换", multi13_data_ok))
+            if multi13_found and multi13_level_ok and multi13_data_ok:
+                print(f"  {GREEN}✓ 页13 多级分类X轴恢复成功（2级: 地区>频段）{RESET}")
+            else:
+                if not multi13_found:
+                    print(f"  {RED}✗ 页13 未找到多级分类图表{RESET}")
+                elif not multi13_level_ok:
+                    print(f"  {RED}✗ 页13 多级分类层级数不正确（期望2级）{RESET}")
+                elif not multi13_data_ok:
+                    print(f"  {RED}✗ 页13 多级分类数据未正确替换{RESET}")
 
         # ---------- 整体文件检查 ----------
         # 验证点N: 输出文件大小合理（>0）
@@ -1565,18 +1531,18 @@ def _create_test_template(template_path):
 
     title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.8))
     tf = title_box.text_frame
-    tf.text = "数据报告 - {{简单分组求和.总销售额}}"
+    tf.text = "数据报告 - {{简单分组求和.总下行速率}}"
     for para in tf.paragraphs:
         for run in para.runs:
             run.font.size = Pt(28)
             run.font.bold = True
 
     placeholders = [
-        ("总销售额", "{{简单分组求和.总销售额}}"),
-        ("总销量", "{{简单分组求和.总销量}}"),
+        ("总下行速率", "{{简单分组求和.总下行速率}}"),
+        ("总用户数", "{{简单分组求和.总用户数}}"),
         ("行数", "{{简单分组求和.行数}}"),
-        ("华东销售额", "{{按地区汇总.总销售额.华东}}"),
-        ("华北销售额", "{{按地区汇总.总销售额.华北}}"),
+        ("华东下行速率", "{{按地区汇总.总下行速率.华东}}"),
+        ("华北下行速率", "{{按地区汇总.总下行速率.华北}}"),
     ]
     y_offset = Inches(1.5)
     for label, placeholder in placeholders:
@@ -1600,7 +1566,7 @@ def _create_test_template(template_path):
     # 图表标题保留模板文字（不被占位符污染）
     try:
         chart.has_title = True
-        chart.chart_title.text_frame.text = "各地区销售汇总"
+        chart.chart_title.text_frame.text = "各地区下行速率汇总"
     except Exception:
         pass
     # 占位符写在形状名称中（不污染标题）
@@ -1706,7 +1672,7 @@ def _create_test_template(template_path):
 
     # 省略前缀的占位符（依赖备注声明的默认区块）
     default_block_box = slide4.shapes.add_textbox(Inches(0.5), Inches(1.2), Inches(6), Inches(0.5))
-    default_block_box.text_frame.text = "默认区块总销售额: {{总销售额}}"
+    default_block_box.text_frame.text = "默认区块总下行速率: {{总下行速率}}"
 
     # 第二个图表（饼图），引用不同区块
     chart_data2 = CategoryChartData()
@@ -1721,16 +1687,16 @@ def _create_test_template(template_path):
     # 图表标题保留模板文字
     try:
         chart2.has_title = True
-        chart2.chart_title.text_frame.text = "产品销售额占比"
+        chart2.chart_title.text_frame.text = "频段下行速率占比"
     except Exception:
         pass
     # 占位符写在形状名称中
-    chart2_shape.name = "{{图表:产品销售额}}"
+    chart2_shape.name = "{{图表:环形图数据}}"
 
     # ========== 页5: 同 sheet 内多区块引用（核心验证 v2.18.6） ==========
     # 透视结果 sheet "按地区汇总" 内有两个区块：
-    #   - "简单分组求和"（3行3列：地区/总销售额/总销量）
-    #   - "标量消费者"（3行3列：地区/地区销量/销量占比）
+    #   - "简单分组求和"（3行3列：地区/总下行速率/总用户数）
+    #   - "标量消费者"（3行3列：地区/地区用户数/用户速率比）
     # 之前只读取第一个区块，现在两个都能独立引用
     slide5 = prs.slides.add_slide(blank_layout)
 
@@ -1743,11 +1709,11 @@ def _create_test_template(template_path):
 
     # 第一个区块：简单分组求和（第一个区块）
     block1_box = slide5.shapes.add_textbox(Inches(0.5), Inches(1.2), Inches(6), Inches(0.5))
-    block1_box.text_frame.text = "区块1 总销售额(华东): {{简单分组求和.总销售额.华东}}"
+    block1_box.text_frame.text = "区块1 总下行速率(华东): {{简单分组求和.总下行速率.华东}}"
 
     # 第二个区块：标量消费者（同 sheet 内第二个区块，之前访问不到）
     block2_box = slide5.shapes.add_textbox(Inches(0.5), Inches(1.8), Inches(6), Inches(0.5))
-    block2_box.text_frame.text = "区块2 销量占比(华东): {{标量消费者.销量占比.华东}}"
+    block2_box.text_frame.text = "区块2 用户速率比(华东): {{标量消费者.用户速率比.华东}}"
 
     # 表格引用第二个区块（验证表格也能取到正确区块）
     table_shape5 = slide5.shapes.add_table(2, 2, Inches(0.5), Inches(2.5), Inches(8), Inches(3))
@@ -1794,7 +1760,7 @@ def _create_test_template(template_path):
 
     # 文本占位符：Sheet名.区块名.列名.行值
     text6_box = slide6.shapes.add_textbox(Inches(0.5), Inches(1.2), Inches(8), Inches(0.5))
-    text6_box.text_frame.text = "精确查找 华东总销售额: {{按地区汇总.简单分组求和.总销售额.华东}}"
+    text6_box.text_frame.text = "精确查找 华东总下行速率: {{按地区汇总.简单分组求和.总下行速率.华东}}"
 
     # 表格占位符：{{表格:Sheet名.区块名}}
     table_shape6 = slide6.shapes.add_table(2, 2, Inches(0.5), Inches(2.0), Inches(8), Inches(3))
@@ -1828,7 +1794,7 @@ def _create_test_template(template_path):
         pass
 
     # ========== 页7: 选列替换（v2.18.11 核心验证） ==========
-    # 区块 "按地区汇总" 有 地区/总销售额/总销量 三列
+    # 区块 "按地区汇总" 有 地区/总下行速率/总用户数 三列
     # 用 {{表格:区块名|列1}} 只填指定列，第一列（地区）自动保留
     # 用 {{图表:区块名|列1}} 只把指定列作为系列
     slide7 = prs.slides.add_slide(blank_layout)
@@ -1840,16 +1806,16 @@ def _create_test_template(template_path):
             run.font.size = Pt(24)
             run.font.bold = True
 
-    # 表格：只选"总销售额"列，结果应是 2列（地区+总销售额），不含总销量
+    # 表格：只选"总下行速率"列，结果应是 2列（地区+总下行速率），不含总用户数
     table_shape7 = slide7.shapes.add_table(2, 2, Inches(0.5), Inches(2.0), Inches(8), Inches(3))
     table7 = table_shape7.table
     table7.cell(0, 0).text = "占位表头1"
     table7.cell(0, 1).text = "占位表头2"
     table7.cell(1, 0).text = "占位数据1"
     table7.cell(1, 1).text = "占位数据2"
-    table_shape7.name = "{{表格:按地区汇总|总销售额}}"
+    table_shape7.name = "{{表格:按地区汇总|总下行速率}}"
 
-    # 图表：只选"总销量"列，结果应只有1个系列（总销量）
+    # 图表：只选"总用户数"列，结果应只有1个系列（总用户数）
     chart_data7 = CategoryChartData()
     chart_data7.categories = ["A", "B", "C"]
     chart_data7.add_series("占位", (1, 2, 3))
@@ -1864,7 +1830,7 @@ def _create_test_template(template_path):
         chart7.chart_title.text_frame.text = "选列图表"
     except Exception:
         pass
-    chart7_shape.name = "{{图表:按地区汇总|总销量}}"
+    chart7_shape.name = "{{图表:按地区汇总|总用户数}}"
 
     try:
         slide7.notes_slide.notes_text_frame.text = "# 选列替换测试\n"
@@ -1886,38 +1852,38 @@ def _create_test_template(template_path):
 
     # 文本1：行值相除算占比（4800/12750≈37.65%）
     text8a = slide8.shapes.add_textbox(Inches(0.5), Inches(1.2), Inches(12), Inches(0.5))
-    text8a.text_frame.text = "华东销售额占比: {{计算:按地区汇总.总销售额.华东 / 按地区汇总.总销售额.sum | .2%}}"
+    text8a.text_frame.text = "华东下行速率占比: {{计算:按地区汇总.总下行速率.华东 / 按地区汇总.总下行速率.sum | .2%}}"
 
     # 文本2：两行值相减算差额（4800-3300=1500）
     text8b = slide8.shapes.add_textbox(Inches(0.5), Inches(1.8), Inches(12), Inches(0.5))
-    text8b.text_frame.text = "华东-华北差额: {{计算:按地区汇总.总销售额.华东 - 按地区汇总.总销售额.华北}}"
+    text8b.text_frame.text = "华东-华北差额: {{计算:按地区汇总.总下行速率.华东 - 按地区汇总.总下行速率.华北}}"
 
     # 文本3：聚合极差取整（max-min=1500）
     text8c = slide8.shapes.add_textbox(Inches(0.5), Inches(2.4), Inches(12), Inches(0.5))
-    text8c.text_frame.text = "销售额极差: {{计算:按地区汇总.总销售额.max - 按地区汇总.总销售额.min | .0f}}"
+    text8c.text_frame.text = "下行速率极差: {{计算:按地区汇总.总下行速率.max - 按地区汇总.总下行速率.min | .0f}}"
 
     # 文本4：使用 default_block（备注区声明 区块=按地区汇总），单段列名
     text8d = slide8.shapes.add_textbox(Inches(0.5), Inches(3.0), Inches(12), Inches(0.5))
-    text8d.text_frame.text = "华东销量占比: {{计算:总销量.华东 / 总销量.sum | .2%}}"
+    text8d.text_frame.text = "华东用户数占比: {{计算:总用户数.华东 / 总用户数.sum | .2%}}"
 
-    # 文本5：使用别名（备注区声明 别名.华东销售额=按地区汇总.总销售额.华东）
+    # 文本5：使用别名（备注区声明 别名.华东下行速率=按地区汇总.总下行速率.华东）
     text8e = slide8.shapes.add_textbox(Inches(0.5), Inches(3.6), Inches(12), Inches(0.5))
-    text8e.text_frame.text = "别名-华东销售额: {{华东销售额}}"
+    text8e.text_frame.text = "别名-华东下行速率: {{华东下行速率}}"
 
-    # 文本6：使用别名引用计算表达式（备注区声明 别名.利润率=计算:利润/销售额|.2%）
+    # 文本6：使用别名引用计算表达式（备注区声明 别名.下行速率占比=计算:总下行速率.华东/总下行速率.sum|.2%）
     text8f = slide8.shapes.add_textbox(Inches(0.5), Inches(4.2), Inches(12), Inches(0.5))
-    text8f.text_frame.text = "别名-利润率: {{利润率}}"
+    text8f.text_frame.text = "别名-下行速率占比: {{下行速率占比}}"
 
-    # 文本7：文本占位符带格式后缀（华东销售额4800 → .2f 显示 4800.00）
+    # 文本7：文本占位符带格式后缀（华东下行速率4800 → .2f 显示 4800.00）
     text8g = slide8.shapes.add_textbox(Inches(0.5), Inches(4.8), Inches(12), Inches(0.5))
-    text8g.text_frame.text = "文本格式-2位小数: {{按地区汇总.总销售额.华东|.2f}}"
+    text8g.text_frame.text = "文本格式-2位小数: {{按地区汇总.总下行速率.华东|.2f}}"
 
-    # 文本8：文本占位符带百分比格式（地区占比区块.销售额占比列.华东=0.3765 → .2% 显示 37.65%）
+    # 文本8：文本占位符带百分比格式（地区占比区块.下行速率占比列.华东=0.3765 → .2% 显示 37.65%）
     text8h = slide8.shapes.add_textbox(Inches(0.5), Inches(5.4), Inches(12), Inches(0.5))
-    text8h.text_frame.text = "文本格式-百分比: {{地区占比.销售额占比.华东|.2%}}"
+    text8h.text_frame.text = "文本格式-百分比: {{地区占比.下行速率占比.华东|.2%}}"
 
     try:
-        slide8.notes_slide.notes_text_frame.text = "# 计算占位符测试\n区块=按地区汇总\n别名.华东销售额=按地区汇总.总销售额.华东\n别名.利润率=计算:按地区汇总.总销售额.华东 / 按地区汇总.总销售额.sum | .2%\n"
+        slide8.notes_slide.notes_text_frame.text = "# 计算占位符测试\n区块=按地区汇总\n别名.华东下行速率=按地区汇总.总下行速率.华东\n别名.下行速率占比=计算:按地区汇总.总下行速率.华东 / 按地区汇总.总下行速率.sum | .2%\n"
     except Exception:
         pass
 
@@ -1940,7 +1906,7 @@ def _create_test_template(template_path):
     try:
         chart9.has_title = True
         # 标题里混用：文本占位符 + 计算占位符（带格式后缀） + 普通文字
-        chart9.chart_title.text_frame.text = "华东销售额{{按地区汇总.总销售额.华东}}万元 占比{{计算:按地区汇总.总销售额.华东 / 按地区汇总.总销售额.sum|.2%}}"
+        chart9.chart_title.text_frame.text = "华东下行速率{{按地区汇总.总下行速率.华东}}Mbps 占比{{计算:按地区汇总.总下行速率.华东 / 按地区汇总.总下行速率.sum|.2%}}"
     except Exception:
         pass
     # 数据源占位符通过备注区的方案C声明（不用形状名称写 {{图表:...}}）
@@ -1972,7 +1938,7 @@ def _create_test_template(template_path):
     table10_shape.name = "表格1"
 
     try:
-        slide10.notes_slide.notes_text_frame.text = "# 表格备注区声明测试\n表格1=地区多维统计|总销售额,平均销售额\n"
+        slide10.notes_slide.notes_text_frame.text = "# 表格备注区声明测试\n表格1=地区多维统计|总下行速率,平均下行速率\n"
     except Exception:
         pass
 
@@ -1980,7 +1946,7 @@ def _create_test_template(template_path):
     slide11 = prs.slides.add_slide(blank_layout)
 
     title11 = slide11.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
-    title11.text_frame.text = "散点图测试（城市销售额 vs 销量）"
+    title11.text_frame.text = "散点图测试（城市下行速率 vs 用户数）"
     for para in title11.text_frame.paragraphs:
         for run in para.runs:
             run.font.size = Pt(24)
@@ -1997,7 +1963,7 @@ def _create_test_template(template_path):
     scatter_shape.name = "散点图1"
 
     try:
-        slide11.notes_slide.notes_text_frame.text = "# 散点图单区块替换\n散点图1=城市散点数据|销售额,销量\n"
+        slide11.notes_slide.notes_text_frame.text = "# 散点图单区块替换\n散点图1=城市散点数据|下行速率,用户数\n"
     except Exception:
         pass
 
@@ -2021,7 +1987,78 @@ def _create_test_template(template_path):
     scatter2_shape.name = "散点图2"
 
     try:
-        slide12.notes_slide.notes_text_frame.text = "# 多区块散点图跨Sheet\n散点图2=城市散点数据|销售额,销量 ; 地区多维统计|总销售额,平均销售额\n"
+        slide12.notes_slide.notes_text_frame.text = "# 多区块散点图跨Sheet\n散点图2=城市散点数据|下行速率,用户数 ; 地区多维统计|总下行速率,平均下行速率\n"
+    except Exception:
+        pass
+
+    # ========== 页13: 多级分类X轴图表（v2.54.27+ 核心验证） ==========
+    # 模板图表本身设置 multiLvlStrRef 结构（2级分类：地区>频段）
+    # 替换后 _restore_multi_level_categories 会根据模板层级数恢复多级分类
+    slide13 = prs.slides.add_slide(blank_layout)
+
+    title13 = slide13.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
+    title13.text_frame.text = "多级分类X轴测试（地区>频段）"
+    for para in title13.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(24)
+            run.font.bold = True
+
+    # 创建柱状图，初始用单级分类
+    multi_chart_data = CategoryChartData()
+    multi_chart_data.categories = ["占位1", "占位2", "占位3"]
+    multi_chart_data.add_series("占位数据", (1, 2, 3))
+    multi_chart_shape = slide13.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED,
+        Inches(1), Inches(1.2), Inches(11), Inches(5.5),
+        multi_chart_data
+    )
+    multi_chart = multi_chart_shape.chart
+    try:
+        multi_chart.has_title = True
+        multi_chart.chart_title.text_frame.text = "地区>频段 多级分类下行速率"
+    except Exception:
+        pass
+    # 占位符写在形状名称中，引用多级分类数据区块
+    multi_chart_shape.name = "{{图表:多级分类数据}}"
+
+    # 手动设置模板图表的 multiLvlStrRef 结构（2级分类）
+    # 这样 _get_template_multi_level_count 会检测到2级，替换后恢复多级分类
+    try:
+        from pptx.oxml.ns import qn
+        from lxml import etree
+        chart_space = multi_chart._chartSpace
+        cat_elem = chart_space.find('.//' + qn('c:cat'))
+        if cat_elem is not None:
+            # 删除原有的 strRef
+            str_ref = cat_elem.find(qn('c:strRef'))
+            if str_ref is not None:
+                cat_elem.remove(str_ref)
+            # 创建 multiLvlStrRef（2级分类）
+            multi_lvl = etree.SubElement(cat_elem, qn('c:multiLvlStrRef'))
+            f_elem = etree.SubElement(multi_lvl, qn('c:f'))
+            f_elem.text = 'Sheet1!$A$1:$B$4'
+            cache = etree.SubElement(multi_lvl, qn('c:multiLvlStrCache'))
+            pt_count = etree.SubElement(cache, qn('c:ptCount'))
+            pt_count.set('val', '3')
+            # 第1级（最深层=子分类=频段）
+            lvl1 = etree.SubElement(cache, qn('c:lvl'))
+            for i, v in enumerate(["n78", "n41", "n78"]):
+                pt = etree.SubElement(lvl1, qn('c:pt'))
+                pt.set('idx', str(i))
+                v_elem = etree.SubElement(pt, qn('c:v'))
+                v_elem.text = str(v)
+            # 第2级（最浅层=父分类=地区）
+            lvl2 = etree.SubElement(cache, qn('c:lvl'))
+            for i, v in enumerate(["华东", "华东", "华北"]):
+                pt = etree.SubElement(lvl2, qn('c:pt'))
+                pt.set('idx', str(i))
+                v_elem = etree.SubElement(pt, qn('c:v'))
+                v_elem.text = str(v)
+    except Exception as e:
+        print(f"  [警告] 设置多级分类模板失败: {e}")
+
+    try:
+        slide13.notes_slide.notes_text_frame.text = "# 多级分类X轴测试\n"
     except Exception:
         pass
 
@@ -2062,9 +2099,14 @@ def main():
         print(f"  {YELLOW}数据/配置文件不存在，先运行 创建测试数据.py{RESET}")
         run_cmd(f'"{PYTHON}" "{os.path.join(SCRIPT_DIR, "创建测试数据.py")}"')
 
+    # 创建本次运行的输出目录 output_时间戳/
+    output_dir = os.path.join(SCRIPT_DIR, f"output_{time.strftime('%Y%m%d_%H%M%S')}")
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"  {CYAN}本次输出目录: {os.path.basename(output_dir)}{RESET}")
+
     # Step 1: 透视分析
     print_header("Step 1: 透视分析 (pivot)")
-    pivot_out = os.path.join(SCRIPT_DIR, "项目配置_分析.xlsx")
+    pivot_out = os.path.join(output_dir, "项目配置_分析.xlsx")
     ok = run_cmd(
         f'"{PYTHON}" "{os.path.join(PROJECT_DIR, "app", "main.py")}" pivot '
         f'-c "{config_path}" --data-dir "{SCRIPT_DIR}" -o "{pivot_out}"'
@@ -2081,7 +2123,7 @@ def main():
 
     # Step 3: 生成 PPT
     print_header("Step 2: PPT 生成 (ppt)")
-    ppt_out = os.path.join(SCRIPT_DIR, "项目配置_报告.pptx")
+    ppt_out = os.path.join(output_dir, "项目配置_报告.pptx")
     ok = run_cmd(
         f'"{PYTHON}" "{os.path.join(PROJECT_DIR, "app", "main.py")}" ppt '
         f'-c "{config_path}" --data-dir "{SCRIPT_DIR}" --pivot-file "{pivot_excel}" -o "{ppt_out}"'
@@ -2105,12 +2147,11 @@ def main():
     features_ok = verify_ppt_features(ppt_path)
     theme_ok = verify_theme_config()
 
-    # Step 5.6: 模板替换模式测试
-    template_ok, template_ppt_path = verify_template_mode(pivot_excel)
+    # Step 5.6: 模板替换模式测试（输出到本次 output 目录）
+    template_ok, template_ppt_path = verify_template_mode(pivot_excel, output_dir)
 
-    # Step 6: 生成HTML报告（手机可查看）
-    ppt_dir = os.path.dirname(ppt_path) if ppt_path else SCRIPT_DIR
-    html_path = generate_html_report(pivot_excel, ppt_path, ppt_dir)
+    # Step 6: 生成HTML报告（手机可查看，输出到本次 output 目录）
+    html_path = generate_html_report(pivot_excel, ppt_path, output_dir)
 
     # 总结
     print_header("测试总结")

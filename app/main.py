@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.54.29"
+__VERSION__ = "2.54.31"
 __UPDATE_DATE__ = "2026-07-23"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
