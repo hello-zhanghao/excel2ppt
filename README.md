@@ -244,6 +244,36 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.55.0 (2026-07-23)
+
+**✨ PPT 配置新增行筛选：过滤条件 + 行范围**
+
+**背景**：PPT 配置默认读取数据源的全部行，无法按条件圈定部分行。用户需先在透视分析里过滤再引用，步骤繁琐。
+
+**新功能**：PPT 配置新增两个列（可选）：
+- **过滤条件**：语法与透视分析一致，`列名=值`、`列名>值`、`列名包含值`，多条件用 `AND`/逗号/OR 连接
+- **行范围**：`1-5`（第1到5行）、`top5`（前5行）、`3`（仅第3行），基于过滤后的结果行号
+
+**执行顺序**：读取数据源全部行 → 过滤条件 → 行范围
+
+**变更文件**：
+- [excel_reader.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/excel_reader.py#L418-L668) `read_data`：新增 `filter_expr`/`row_range` 参数；新增 `_apply_row_filter`/`_filter_rows_by_expr`/`_apply_single_condition`/`_filter_rows_by_range` 四个内部函数实现行筛选
+- [excel_reader.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/excel_reader.py#L395-L409) `read_config`：chart_def 新增「过滤条件」「行范围」字段解析
+- [main.py](file:///f:/【1】AI探索/【3】excel2ppt/app/main.py#L315-L318) `_run_ppt_mode`：从 chart_def 取出过滤条件/行范围并传入 `read_data`
+- [guide.html](file:///f:/【1】AI探索/【3】excel2ppt/app/static/guide.html#L166-L167)：PPT 配置列说明新增「过滤条件」「行范围」两列；新增 3.5 章节「行筛选」详述语法和示例
+- main.py `__VERSION__` 2.54.37 → 2.55.0
+
+**配置示例**：
+
+```
+图表标题       X轴范围   Y轴范围      过滤条件                行范围
+TOP5频段       频段      用户数                              top5
+华东高负载     频段      用户数,PRB利用率  地区=华东,用户数>1000
+特定频段       频段      用户数        频段=n78 OR 频段=n41    1-3
+```
+
+**列名匹配规则**：条件中的列名优先匹配 Y 轴系列名，未命中则按 X 轴显示值匹配。复杂场景（按非 X/Y 轴列过滤）仍建议用透视分析预处理 + `{pivot}` 引用。
+
 ### v2.54.37 (2026-07-23)
 
 **🐛 修复组合图（柱+折线·次级坐标轴）嵌入工作簿数据异常导致"nan/inf not supported"**

@@ -1,4 +1,5 @@
 import os
+import re
 import openpyxl
 import pandas as pd
 import glob
@@ -402,6 +403,10 @@ def _group_rows_to_pages(raw_rows):
                 "颜色": str(row.get("颜色", "")).strip() if row.get("颜色") is not None else "",
                 "区块名": str(row.get("区块名", "")).strip() if row.get("区块名") is not None else "",
                 "结论模板": str(row.get("结论模板", "")).strip() if row.get("结论模板") is not None else "",
+                # v2.55.0+ 新增：行筛选（语法与透视分析「过滤条件」一致）
+                "过滤条件": str(row.get("过滤条件", "")).strip() if row.get("过滤条件") is not None else "",
+                # v2.55.0+ 新增：行范围筛选，支持 "1-5"（行号区间）、"top5"（前N行）、"3"（单行）
+                "行范围": str(row.get("行范围", "")).strip() if row.get("行范围") is not None else "",
             }
             current_page["charts"].append(chart_def)
 
@@ -411,16 +416,20 @@ def _group_rows_to_pages(raw_rows):
     return pages
 
 
-def read_data(file_path, sheet_name, x_range, y_range, block_name=None):
+def read_data(file_path, sheet_name, x_range, y_range, block_name=None, filter_expr=None, row_range=None):
     """
     读取数据用于图表生成，支持 Excel 和 CSV 文件。
-    
+
     Args:
         file_path: 数据文件路径（.xlsx, .xls, .csv）
         sheet_name: Sheet名称（CSV文件忽略此参数）
         x_range: X轴列名
         y_range: Y轴列名
         block_name: 数据区块名称
+        filter_expr: 过滤条件（v2.55.0+），语法与透视分析一致
+                     如 "地区=华东 AND 用户数>1000"，逗号分隔也按 AND 处理
+        row_range: 行范围（v2.55.0+），支持 "1-5"、"top5"、"3"
+                   先过滤条件再行范围（行范围基于过滤后的行序号）
     """
     x_col_names = [cn.strip() for cn in str(x_range).split(",") if cn.strip()] if x_range else []
     y_col_names = [cn.strip() for cn in str(y_range).split(",") if cn.strip()] if y_range else []
@@ -435,23 +444,239 @@ def read_data(file_path, sheet_name, x_range, y_range, block_name=None):
     if is_csv:
         if block_name and str(block_name).strip():
             print(f"    [警告] CSV文件不支持区块名，将读取全量数据")
-        return _read_dataframe_columns(file_path, sheet_name, x_range, y_range)
-    
-    # Excel 文件使用原有逻辑
-    if block_name and str(block_name).strip():
-        return _read_with_block_name(file_path, sheet_name, str(block_name).strip(), x_range, y_range)
-
-    if len(x_col_names) >= 2:
+        x_values, y_values = _read_dataframe_columns(file_path, sheet_name, x_range, y_range)
+    elif block_name and str(block_name).strip():
+        x_values, y_values = _read_with_block_name(file_path, sheet_name, str(block_name).strip(), x_range, y_range)
+    elif len(x_col_names) >= 2:
         result = _read_hierarchical_multi_y(file_path, sheet_name, x_col_names, y_col_names)
         if result[0] or any(v for v in result[1].values()):
-            return result
+            x_values, y_values = result
+        else:
+            x_values = _read_axis(file_path, sheet_name, x_range, is_x=True)
+            y_values = _read_axis(file_path, sheet_name, y_range, is_x=False)
+    else:
         x_values = _read_axis(file_path, sheet_name, x_range, is_x=True)
         y_values = _read_axis(file_path, sheet_name, y_range, is_x=False)
+
+    # v2.55.0+ 应用过滤条件和行范围（在读取数据后统一处理）
+    if (filter_expr and str(filter_expr).strip()) or (row_range and str(row_range).strip()):
+        x_values, y_values = _apply_row_filter(x_values, y_values, filter_expr, row_range, x_col_names, y_col_names)
+
+    return x_values, y_values
+
+
+def _apply_row_filter(x_values, y_values, filter_expr, row_range, x_col_names=None, y_col_names=None):
+    """对已读取的 x/y 数据应用过滤条件和行范围筛选。
+
+    筛选顺序：先过滤条件（基于 x_values 值匹配），再行范围（基于过滤后的行序号）。
+
+    过滤条件语法（简化版，与透视分析一致）：
+        列名=值          X轴值等于值（精确匹配）
+        列名!=值         X轴值不等于值
+        列名>值          数值大于
+        列名<值          数值小于
+        列名>=值         数值大于等于
+        列名<=值         数值小于等于
+        列名包含值       X轴值包含子串
+        多条件用 AND 或 逗号分隔（均按 AND 处理）
+
+    注意：PPT 场景下 x_values 是已读取的 X 轴显示值（可能拼接），过滤条件只能匹配 X 轴值。
+    如需按 Y 轴值过滤，建议在透视分析阶段用「过滤条件」预处理，PPT 引用透视结果。
+
+    行范围语法：
+        1-5    第1到5行（含）
+        top5   前5行
+        3      仅第3行
+    行号基于过滤后的结果，从1开始。
+    """
+    if not x_values:
         return x_values, y_values
 
-    x_values = _read_axis(file_path, sheet_name, x_range, is_x=True)
-    y_values = _read_axis(file_path, sheet_name, y_range, is_x=False)
-    return x_values, y_values
+    # 统一 y_values 为 dict 格式便于处理
+    # 单 Y 轴时 y_values 是 list，需要用 y_col_names 还原列名作为 key
+    y_is_single_list = False
+    single_y_name = None
+    if isinstance(y_values, list):
+        y_is_single_list = True
+        # 单 Y 轴时用 y_col_names 的第一个列名作为 key（便于过滤条件按列名匹配）
+        if y_col_names and len(y_col_names) >= 1:
+            single_y_name = y_col_names[0]
+            y_values_dict = {single_y_name: y_values} if y_values else {}
+        else:
+            y_values_dict = {("_single_y_",): y_values} if y_values else {}
+    elif isinstance(y_values, dict):
+        y_values_dict = y_values
+    else:
+        return x_values, y_values
+
+    n = len(x_values)
+    # 对齐 y_values 长度（防御性处理）
+    for k, v in y_values_dict.items():
+        if len(v) < n:
+            y_values_dict[k] = v + [None] * (n - len(v))
+
+    keep_idx = list(range(n))
+
+    # 1. 过滤条件
+    f_expr = str(filter_expr).strip() if filter_expr else ""
+    if f_expr:
+        keep_idx = _filter_rows_by_expr(x_values, y_values_dict, f_expr, keep_idx)
+
+    # 2. 行范围
+    r_range = str(row_range).strip() if row_range else ""
+    if r_range:
+        keep_idx = _filter_rows_by_range(keep_idx, r_range)
+
+    # 应用 keep_idx
+    new_x = [x_values[i] for i in keep_idx]
+    new_y_dict = {k: [v[i] for i in keep_idx] for k, v in y_values_dict.items()}
+
+    if y_is_single_list:
+        # 还原为原始格式（单 Y 轴返回 list）
+        if single_y_name and single_y_name in new_y_dict:
+            return new_x, new_y_dict[single_y_name]
+        return new_x, new_y_dict.get(("_single_y_",), [])
+    return new_x, new_y_dict
+
+
+def _filter_rows_by_expr(x_values, y_values_dict, expr, keep_idx):
+    """根据过滤条件筛选行索引。"""
+    # 逗号也按 AND 处理（与 PPT 配置习惯一致）
+    expr_normalized = re.sub(r"\s*,\s*", " AND ", expr)
+    # 中文 AND/OR 兼容
+    expr_normalized = expr_normalized.replace("且", " AND ").replace("并", " AND ")
+    expr_normalized = expr_normalized.replace("或", " OR ")
+
+    # 按 OR 拆分（顶层）
+    or_parts = re.split(r"\s+OR\s+", expr_normalized, flags=re.IGNORECASE)
+    if len(or_parts) > 1:
+        result_set = set()
+        for part in or_parts:
+            part = part.strip().strip("()")
+            sub_idx = _filter_rows_by_expr(x_values, y_values_dict, part, keep_idx)
+            result_set.update(sub_idx)
+        return sorted(result_set)
+
+    # 按 AND 拆分
+    and_parts = re.split(r"\s+AND\s+", expr_normalized, flags=re.IGNORECASE)
+    current_idx = keep_idx
+    for part in and_parts:
+        part = part.strip().strip("()")
+        current_idx = _apply_single_condition(x_values, y_values_dict, part, current_idx)
+        if not current_idx:
+            break
+    return current_idx
+
+
+def _apply_single_condition(x_values, y_values_dict, condition, idx_list):
+    """应用单个过滤条件到 idx_list。"""
+    condition = condition.strip()
+    if not condition:
+        return idx_list
+
+    # 支持的运算符（按长度降序避免误匹配）
+    operators = [">=", "<=", "!=", "包含", "=", ">", "<"]
+
+    for op in operators:
+        if op in condition:
+            pos = condition.index(op)
+            col = condition[:pos].strip()
+            val = condition[pos + len(op):].strip().strip("'\"")
+
+            # 去引号
+            if (val.startswith("'") and val.endswith("'")) or (val.startswith('"') and val.endswith('"')):
+                val = val[1:-1]
+
+            # 判断是匹配 X 轴还是 Y 轴
+            y_series = None
+            if col in y_values_dict:
+                y_series = y_values_dict[col]
+            # X 轴匹配：col 匹配 x_range 的列名（这里无法精确知道列名，统一按 X 轴值匹配）
+            # 约定：条件中的列名若不匹配任何 Y 系列，则按 X 轴值匹配
+
+            result = []
+            for i in idx_list:
+                if y_series is not None:
+                    cell_val = y_series[i]
+                else:
+                    cell_val = x_values[i]
+
+                cell_str = str(cell_val) if cell_val is not None else ""
+
+                if op == "=":
+                    if cell_str == val:
+                        result.append(i)
+                elif op == "!=":
+                    if cell_str != val:
+                        result.append(i)
+                elif op == "包含":
+                    if val in cell_str:
+                        result.append(i)
+                else:
+                    # 数值比较
+                    try:
+                        cell_num = float(cell_val) if cell_val is not None else None
+                        val_num = float(val)
+                        if cell_num is None:
+                            continue
+                        if op == ">" and cell_num > val_num:
+                            result.append(i)
+                        elif op == "<" and cell_num < val_num:
+                            result.append(i)
+                        elif op == ">=" and cell_num >= val_num:
+                            result.append(i)
+                        elif op == "<=" and cell_num <= val_num:
+                            result.append(i)
+                    except (ValueError, TypeError):
+                        continue
+            return result
+
+    # 无法解析的条件，保持原样不过滤
+    print(f"    [警告] 无法解析的过滤条件: {condition}，已跳过")
+    return idx_list
+
+
+def _filter_rows_by_range(idx_list, range_expr):
+    """根据行范围筛选行索引。
+
+    支持：
+        1-5    第1到5行（含）
+        top5   前5行
+        3      仅第3行
+    行号基于 idx_list（过滤后的结果），从1开始。
+    """
+    range_expr = range_expr.strip()
+    if not range_expr:
+        return idx_list
+
+    total = len(idx_list)
+
+    # top5 / top 5
+    m = re.match(r"^top\s*(\d+)$", range_expr, re.IGNORECASE)
+    if m:
+        n = int(m.group(1))
+        return idx_list[:n]
+
+    # 1-5
+    m = re.match(r"^(\d+)\s*-\s*(\d+)$", range_expr)
+    if m:
+        start = int(m.group(1))
+        end = int(m.group(2))
+        # 转为 0-based 索引并裁剪到有效范围
+        start_idx = max(0, start - 1)
+        end_idx = min(total, end)
+        return idx_list[start_idx:end_idx]
+
+    # 单行 3
+    m = re.match(r"^(\d+)$", range_expr)
+    if m:
+        row_num = int(m.group(1))
+        if 1 <= row_num <= total:
+            return [idx_list[row_num - 1]]
+        return []
+
+    print(f"    [警告] 无法解析的行范围: {range_expr}，已跳过")
+    return idx_list
 
 
 def _read_dataframe_columns(file_path, sheet_name, x_range, y_range):

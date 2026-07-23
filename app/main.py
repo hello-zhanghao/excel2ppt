@@ -20,7 +20,7 @@ import glob
 from datetime import datetime
 
 # 版本信息
-__VERSION__ = "2.54.37"
+__VERSION__ = "2.55.0"
 __UPDATE_DATE__ = "2026-07-23"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -313,6 +313,9 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_
             x_range = chart_def.get("X轴范围", "")
             y_range = chart_def.get("Y轴范围", "")
             block_name = chart_def.get("区块名", "")
+            # v2.55.0+ 新增：行筛选参数
+            filter_expr = chart_def.get("过滤条件", "")
+            row_range = chart_def.get("行范围", "")
 
             # 查找数据文件：根据图表指定的数据源或全局默认
             if data_source:
@@ -352,7 +355,7 @@ def _run_ppt_mode(config_path, output_path=None, pivot_data_file=None, validate_
                         print(f"    - [{page_title}] {chart_title} (无地理数据)")
                     continue
 
-                x_values, y_values = read_data(file_path, data_sheet, x_range, y_range, block_name)
+                x_values, y_values = read_data(file_path, data_sheet, x_range, y_range, block_name, filter_expr, row_range)
                 if x_values and y_values:
                     chart_def["_categories"] = x_values
                     chart_def["_values"] = y_values
