@@ -1052,6 +1052,177 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
 _PCT_KEYWORDS = ["占比", "pct", "百分比", "比例"]
 
 
+def _fix_embedded_workbook_for_combo(chart, categories: list, series_data: dict):
+    """v2.54.37+ 修复组合图（barChart+lineChart 等多 chart 类型共存）嵌入工作簿
+
+    python-pptx 的 replace_data 在组合图上行为异常：
+    - 嵌入工作簿表头行（第1行）写入的是数字索引（3/4）而非系列名
+    - 分类列（A列）写入的是数字 0/1/2 而非文本类别
+    - A1 单元格为空
+    导致 PowerPoint 检测到 c:tx 引用（$B$1=3）与缓存（系列名）不匹配，报"链接不可用"或"nan/inf not supported"。
+
+    本函数直接修改嵌入 xlsx 包，重写 sheet1.xml：
+    - A1=空或"类别"，A2:A{n}=文本类别
+    - B1/C1/...=系列名，B2:B{n}/C2:C{n}/...=数值
+
+    Args:
+        chart: pptx Chart 对象
+        categories: X 轴类别列表（文本）
+        series_data: {系列名: [数值列表]} 有序字典
+    """
+    import io
+    import zipfile
+    from pptx.oxml.ns import qn
+    from lxml import etree
+
+    try:
+        chart_space = chart._chartSpace
+        # 检测是否为组合图（plotArea 下有多个不同类型的 chart 子节点）
+        plot_area = chart_space.find('.//' + qn('c:plotArea'))
+        if plot_area is None:
+            return
+        chart_types = []
+        for child in plot_area:
+            tag = etree.QName(child).localname
+            if tag.endswith('Chart') and tag != 'plotArea':
+                chart_types.append(tag)
+        # 只有1种图表类型时不需要修复
+        if len(set(chart_types)) <= 1:
+            return
+
+        # 找到嵌入工作簿
+        ns_r = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+        ext_data = chart_space.find('.//' + qn('c:externalData'))
+        if ext_data is None:
+            return
+        rid = ext_data.get('{%s}id' % ns_r)
+        if not rid:
+            return
+
+        # 通过 part 获取嵌入工作簿
+        chart_part = chart.part
+        embed_part = chart_part.related_part(rid)
+        if embed_part is None:
+            return
+
+        embed_bytes = embed_part.blob
+        ns_s = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+
+        with zipfile.ZipFile(io.BytesIO(embed_bytes), 'r') as zin:
+            file_data = {n: zin.read(n) for n in zin.namelist()}
+
+        # 读取 sharedStrings（如果有）
+        shared_strings = []
+        if 'xl/sharedStrings.xml' in file_data:
+            ss_root = etree.fromstring(file_data['xl/sharedStrings.xml'])
+            for si in ss_root.findall('{%s}si' % ns_s):
+                # 合并所有 t 节点文本
+                texts = [t.text or '' for t in si.findall('.//{%s}t' % ns_s)]
+                shared_strings.append(''.join(texts))
+
+        # 重写 sheet1.xml
+        sheet_root = etree.fromstring(file_data['xl/worksheets/sheet1.xml'])
+        # 删除原有 sheetData
+        old_sd = sheet_root.find('{%s}sheetData' % ns_s)
+        if old_sd is not None:
+            sheet_root.remove(old_sd)
+
+        # 构建新 sheetData
+        new_sd = etree.SubElement(sheet_root, '{%s}sheetData' % ns_s)
+        n_rows = len(categories)
+        n_series = len(series_data)
+
+        # 准备字符串写入 sharedStrings（追加）
+        new_strings = []
+        str_idx_map = {}
+        def get_str_idx(s):
+            if s in str_idx_map:
+                return str_idx_map[s]
+            idx = len(shared_strings) + len(new_strings)
+            new_strings.append(s)
+            str_idx_map[s] = idx
+            return idx
+
+        # 第1行：A1=空，B1/C1/...=系列名
+        row1 = etree.SubElement(new_sd, '{%s}row' % ns_s, r='1')
+        # A1 留空（或写"类别"）
+        # B1, C1, ... 系列名
+        for i, sname in enumerate(series_data.keys()):
+            col_letter = _col_index_to_letter(i + 2)  # B, C, D...
+            c = etree.SubElement(row1, '{%s}c' % ns_s, r='%s1' % col_letter, t='s')
+            v = etree.SubElement(c, '{%s}v' % ns_s)
+            v.text = str(get_str_idx(sname))
+
+        # 数据行
+        for row_idx in range(n_rows):
+            r = row_idx + 2
+            row = etree.SubElement(new_sd, '{%s}row' % ns_s, r=str(r))
+            # A列=类别（文本）
+            cat_val = str(categories[row_idx])
+            c_a = etree.SubElement(row, '{%s}c' % ns_s, r='A%d' % r, t='s')
+            v_a = etree.SubElement(c_a, '{%s}v' % ns_s)
+            v_a.text = str(get_str_idx(cat_val))
+            # B, C, ... 数值
+            for i, (sname, vals) in enumerate(series_data.items()):
+                col_letter = _col_index_to_letter(i + 2)
+                c = etree.SubElement(row, '{%s}c' % ns_s, r='%s%d' % (col_letter, r))
+                v = etree.SubElement(c, '{%s}v' % ns_s)
+                val = vals[row_idx] if row_idx < len(vals) else 0
+                v.text = str(val)
+
+        # 更新 dimension
+        dim = sheet_root.find('{%s}dimension' % ns_s)
+        max_col = _col_index_to_letter(n_series + 1)
+        dim_ref = 'A1:%s%d' % (max_col, n_rows + 1)
+        if dim is not None:
+            dim.set('ref', dim_ref)
+        else:
+            dim = etree.Element('{%s}dimension' % ns_s, ref=dim_ref)
+            sheet_root.insert(0, dim)
+
+        # 更新 sharedStrings
+        if new_strings:
+            if 'xl/sharedStrings.xml' in file_data:
+                ss_root = etree.fromstring(file_data['xl/sharedStrings.xml'])
+            else:
+                ss_root = etree.Element('{%s}sst' % ns_s,
+                                        xmlns=ns_s,
+                                        count=str(len(new_strings)),
+                                        uniqueCount=str(len(new_strings)))
+            # 更新 count/uniqueCount
+            total_count = len(shared_strings) + len(new_strings)
+            ss_root.set('count', str(total_count))
+            ss_root.set('uniqueCount', str(total_count))
+            for s in new_strings:
+                si = etree.SubElement(ss_root, '{%s}si' % ns_s)
+                t = etree.SubElement(si, '{%s}t' % ns_s)
+                t.text = s
+            file_data['xl/sharedStrings.xml'] = etree.tostring(ss_root, xml_declaration=True,
+                                                               encoding='UTF-8', standalone=True)
+
+        # 序列化 sheet1.xml
+        file_data['xl/worksheets/sheet1.xml'] = etree.tostring(sheet_root, xml_declaration=True,
+                                                                encoding='UTF-8', standalone=True)
+
+        # 重写嵌入工作簿 zip
+        out_buf = io.BytesIO()
+        with zipfile.ZipFile(out_buf, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for name, data in file_data.items():
+                zout.writestr(name, data)
+
+        # 写回 part
+        embed_part._blob = out_buf.getvalue()
+        # 同时更新 rels 缓存
+        try:
+            embed_part.blob = out_buf.getvalue()
+        except Exception:
+            pass
+
+        print(f"    [OK] 组合图嵌入工作簿已修复: {n_series}系列, {n_rows}行类别")
+    except Exception as e:
+        print(f"    [警告] 组合图嵌入工作簿修复失败: {e}")
+
+
 def _trim_extra_series(chart, expected_count: int):
     """replace_data 后剪除模板遗留的多余系列（模板6系列→数据4系列时剪掉2个空系列）"""
     from pptx.oxml.ns import qn
@@ -1607,6 +1778,11 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
     chart.replace_data(chart_data)
     _trim_extra_series(chart, actual_series_count)
     _ensure_vary_colors(chart)
+
+    # v2.54.37+ 修复组合图（多 chart 类型共存）嵌入工作簿
+    # replace_data 在组合图上会把表头写成数字索引、分类列写成数字，导致 PowerPoint 报错
+    if not transpose and not multi_level_data:
+        _fix_embedded_workbook_for_combo(chart, categories, series_data)
 
     # v2.54.27+ 恢复多级分类 X 轴（replace_data 会清空 multiLvlStrRef，需要手动重建）
     # v2.54.32+ 同步重建嵌入工作簿，补齐父分类列，修复"选择数据"只显示2列的问题

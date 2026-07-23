@@ -244,6 +244,22 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.37 (2026-07-23)
+
+**🐛 修复组合图（柱+折线·次级坐标轴）嵌入工作簿数据异常导致"nan/inf not supported"**
+
+- 根因：python-pptx 的 `replace_data` 在组合图（barChart+lineChart 多 chart 类型共存）上行为异常：
+  - 嵌入工作簿表头行（第1行）写入数字索引（3/4）而非系列名
+  - 分类列（A列）写入数字 0/1/2 而非文本类别
+  - A1 单元格为空
+  导致 PowerPoint 检测到 c:tx 引用（$B$1=3）与缓存（系列名）不匹配，报"链接不可用"或"nan/inf not supported"
+- 修复：新增 `_fix_embedded_workbook_for_combo` 函数，在 `replace_data` 之后检测组合图（plotArea 下多种 chart 类型共存），直接重写嵌入 xlsx 的 sheet1.xml：
+  - A2:A{n}=文本类别（写入 sharedStrings）
+  - B1/C1/...=系列名（字符串类型）
+  - B2:B{n}/C2:C{n}/...=数值
+  - 同步更新 dimension 和 sharedStrings
+- 验证：chart10 组合图嵌入工作簿从 `B1=3,C1=4,A2=0/1/2` 修复为 `B1=总下行速率,C1=总用户数,A2=华东/华北/华南`，数据完整
+
 ### v2.54.36 (2026-07-23)
 
 **✅ 新增组合图（柱+折线·次级坐标轴）模板替换验证用例**
