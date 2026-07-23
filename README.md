@@ -253,12 +253,12 @@ excel2ppt/
 **根因**：python-pptx 的 `CategoryChartData` 只支持单级分类，`chart.replace_data()` 会用单级 `strRef` 覆盖掉模板原有的 `multiLvlStrRef`，导致多级分类结构丢失。
 
 **功能**（[`template_filler.py`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py)）：
-- `_write_chart_data` 自动检测 DataFrame 前几列是否都是文本列（非数值）
-- 当有 ≥2 列文本维度时，识别为多级分类：最后一列文本作为最深层子分类，前面的列作为父分类层级
+- 新增 `_get_template_multi_level_count`：根据模板图表自身的 XML 结构（`c:cat` 下是否有 `c:multiLvlStrRef`）判断是否为多级分类，返回层级数
+- `_write_chart_data` 根据模板层级数从 DataFrame 前 N 列文本维度读取层级数据
 - `replace_data` 后调用新增的 `_restore_multi_level_categories` 重建 `multiLvlStrRef` XML
-- 单级分类图表不受影响（只有 1 列文本维度时不触发多级分类）
+- **识别依据是模板图表自身结构**，非根据数据列类型自动猜测；单级分类模板不受影响
 
-**数据结构示例**：
+**数据结构示例**（模板有多级分类时，DataFrame 需提供对应数量的前置文本维度列）：
 ```
 地区,产品,销售额,销量     → 2 列文本维度（地区+产品）
 华东,产品A,3000,30        → 多级分类：level 0=产品（子），level 1=地区（父）
