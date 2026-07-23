@@ -2068,6 +2068,65 @@ def _rebuild_embedded_workbook_for_multi_level(chart, level_data: list, series_v
         print(f"    [警告] 重建嵌入工作簿失败: {e}")
 
 
+def _filter_invalid_xaxis_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """v2.56.2+ 过滤 X 轴类别无效的行（空/NaN/inf 直接丢弃，不进入图表数据）
+
+    仅处理普通图/多级分类（散点图、转置模式在调用前已跳过）。
+    X 轴类别列（前 N 列，N=连续非数值列数）中任一层级为
+    空字符串/None/NaN/inf 的行丢弃。
+
+    返回过滤后的 DataFrame；无有效行时返回空 DataFrame（下游会走空数据路径）。
+    """
+    import math
+    if len(df) == 0:
+        return df
+
+    def _is_invalid_category(v):
+        """类别值是否无效：None/空字符串/NaN/inf"""
+        if v is None:
+            return True
+        if isinstance(v, str):
+            s = v.strip().lower()
+            return s == "" or s == "nan" or s == "inf" or s == "-inf" or s == "+inf"
+        if isinstance(v, float):
+            return math.isnan(v) or math.isinf(v)
+        if isinstance(v, int):
+            return False
+        # numpy 标量
+        if hasattr(v, 'item'):
+            try:
+                v = v.item()
+                if isinstance(v, float):
+                    return math.isnan(v) or math.isinf(v)
+                if isinstance(v, str):
+                    s = v.strip().lower()
+                    return s == "" or s == "nan" or s == "inf" or s == "-inf"
+            except Exception:
+                return True
+        return False
+
+    # 确定类别列数：连续的非数值列（数值列如年份含 NaN 时 to_numeric 部分失败，也算类别列）
+    cat_col_count = 0
+    for ci in range(len(df.columns)):
+        col = df.iloc[:, ci]
+        numeric = pd.to_numeric(col, errors="coerce")
+        if numeric.notna().all():
+            break
+        cat_col_count = ci + 1
+    if cat_col_count == 0:
+        cat_col_count = 1  # 兜底：至少检查第1列
+
+    mask = None
+    for ci in range(min(cat_col_count, len(df.columns))):
+        col_invalid = df.iloc[:, ci].apply(_is_invalid_category)
+        mask = col_invalid if mask is None else (mask | col_invalid)
+    if mask is not None and mask.any():
+        df = df[~mask].reset_index(drop=True)
+        print(f"    [信息] 图表过滤无效 X 轴类别行: {int(mask.sum())} 行已丢弃")
+
+    return df
+
+
 def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose: bool = False):
     """将 DataFrame 写入图表的内嵌 WorkBook，并同步数据标签格式
 
@@ -2085,6 +2144,13 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
         is_scatter = chart.chart_type == XL_CHART_TYPE.XY_SCATTER
     except Exception:
         is_scatter = False
+
+    # v2.56.2+ 过滤 X 轴类别无效的行（空/NaN/inf 不进入图表数据）
+    # 转置模式 X 轴是列名（不会有 NaN），跳过
+    # 散点图 X 轴是数值，非数值已在 _safe_num_list 转 0，不在此过滤
+    # （避免把文本类别列的行误判为无效而全量丢弃）
+    if not transpose and not is_scatter and len(df) > 0:
+        df = _filter_invalid_xaxis_rows(df)
 
     if is_scatter:
         chart_data = XyChartData()

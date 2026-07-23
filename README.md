@@ -244,6 +244,20 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.56.2 (2026-07-23)
+
+**🔧 X 轴类别无效行过滤：空/NaN/inf 不进入图表数据**
+
+用户反馈 X 轴含空/NaN/inf 的行不应进入 PPT 图表，需在传参时直接丢弃。
+
+**修复**：
+- 新增 [_filter_invalid_xaxis_rows](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L2071)：在 `_write_chart_data` 入口过滤 X 轴类别无效的行
+  - 类别为空字符串/None/NaN/inf（含 `"nan"`/`"inf"` 字符串）的行丢弃
+  - 多级分类时任一层级无效即丢弃该行
+  - 类别列数自动识别（连续非数值列）
+- 跳过散点图（X 轴是数值，非数值已在 `_safe_num_list` 转 0）和转置模式（X 轴是列名）
+- 正常文本不受影响（如 "nan_str" 不被误伤，仅精确匹配 "nan"/"inf"）
+
 ### v2.56.1 (2026-07-23)
 
 **🔧 从根源修复 NaN/inf 报错：monkey-patch xlsxwriter 启用 nan_inf_to_errors**
