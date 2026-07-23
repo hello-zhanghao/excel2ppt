@@ -1242,7 +1242,9 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                 except Exception:
                     pass
             except Exception as e:
+                import traceback
                 print(f"    [警告] 图表数据替换失败 [{target_block}]: {e}")
+                traceback.print_exc()
                 if status_map is not None:
                     status_map[shape.name] = f"失败: {e}"
         else:
@@ -1289,7 +1291,9 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                 except Exception:
                     pass
             except Exception as e:
+                import traceback
                 print(f"    [警告] 图表多区块替换失败: {e}")
+                traceback.print_exc()
                 if status_map is not None:
                     status_map[shape.name] = f"失败: {e}"
     return replace_count
