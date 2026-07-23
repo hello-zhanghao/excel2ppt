@@ -98,6 +98,7 @@ from typing import Dict, Optional, Tuple, List
 
 import openpyxl
 import pandas as pd
+import src._pptx_patch  # noqa: F401 — 启用 xlsxwriter nan_inf_to_errors，从根源消除 NaN/inf 报错
 from pptx import Presentation
 from pptx.util import Pt
 from pptx.dml.color import RGBColor
@@ -1404,27 +1405,53 @@ def _fix_embedded_workbook_for_combo(chart, categories: list, series_data: dict)
             v = etree.SubElement(c, '{%s}v' % ns_s)
             v.text = str(get_str_idx(sname))
 
+        # v2.56.1+ 健壮数值清理：覆盖 numpy 标量/字符串数字/NaN/inf/None
+        # 此函数直接写 XML（绕过 xlsxwriter），任何异常值都会原样写入工作簿，
+        # 导致 PowerPoint 打开图表"编辑数据"时触发 write_number() 报错。
+        def _to_safe_num(v):
+            if v is None:
+                return 0
+            # numpy 标量 → Python 标量（np.float64('nan') 等）
+            if hasattr(v, 'item'):
+                try:
+                    v = v.item()
+                except Exception:
+                    return 0
+            if isinstance(v, bool):
+                return 0
+            if isinstance(v, (int, float)):
+                if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                    return 0
+                return v
+            # 字符串尝试转数值（"1230" → 1230, "nan" → 0）
+            try:
+                f = float(v)
+                if math.isnan(f) or math.isinf(f):
+                    return 0
+                return f
+            except (ValueError, TypeError):
+                return 0
+
         # 数据行
         for row_idx in range(n_rows):
             r = row_idx + 2
             row = etree.SubElement(new_sd, '{%s}row' % ns_s, r=str(r))
-            # A列=类别（文本）
-            cat_val = str(categories[row_idx])
+            # A列=类别（文本）— NaN/None 转空字符串，避免写入 "nan" 污染工作簿
+            raw_cat = categories[row_idx] if row_idx < len(categories) else ""
+            if raw_cat is None or (isinstance(raw_cat, float) and (math.isnan(raw_cat) or math.isinf(raw_cat))):
+                cat_val = ""
+            else:
+                cat_val = str(raw_cat)
             c_a = etree.SubElement(row, '{%s}c' % ns_s, r='A%d' % r, t='s')
             v_a = etree.SubElement(c_a, '{%s}v' % ns_s)
             v_a.text = str(get_str_idx(cat_val))
-            # B, C, ... 数值
+            # B, C, ... 数值（健壮清理，确保不写入 NaN/inf/非数值字符串）
             for i, (sname, vals) in enumerate(series_data.items()):
                 col_letter = _col_index_to_letter(i + 2)
                 c = etree.SubElement(row, '{%s}c' % ns_s, r='%s%d' % (col_letter, r))
                 v = etree.SubElement(c, '{%s}v' % ns_s)
                 val = vals[row_idx] if row_idx < len(vals) else 0
-                # v2.55.3+ NaN/inf/None → 0，避免写字符串 "nan"/"inf" 导致 PowerPoint 报错
-                if val is None:
-                    val = 0
-                elif isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
-                    val = 0
-                v.text = str(val)
+                v.text = str(_to_safe_num(val))
 
         # 更新 dimension
         dim = sheet_root.find('{%s}dimension' % ns_s)
@@ -1610,8 +1637,10 @@ def _safe_replace_data(chart, chart_data):
         'nan/inf not supported in write_number() without nan_inf_to_errors option'
     本函数在调用前先做 _sanitize_chart_data 兜底清理，避免遗漏路径导致报错。
     v2.55.3+ 替换后再次校验，若仍含 NaN/inf 则打印详细诊断信息。
+    v2.55.5+ 报错时写入诊断日志文件 _nan_error.log，含完整堆栈和数据快照。
     """
     import math
+    import traceback
     _sanitize_chart_data(chart_data)
     # 替换前最终校验：打印所有系列的值，便于定位问题
     try:
@@ -1637,7 +1666,42 @@ def _safe_replace_data(chart, chart_data):
                         dp._value = 0
     except Exception:
         pass
-    chart.replace_data(chart_data)
+    try:
+        chart.replace_data(chart_data)
+    except Exception as e:
+        # 写入诊断日志，含完整堆栈、categories、所有系列数据
+        import os
+        log_path = os.path.join(os.getcwd(), "_nan_error.log")
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(f"=== _safe_replace_data 报错 ===\n")
+            f.write(f"错误: {e}\n\n")
+            f.write(f"=== 完整 Traceback ===\n")
+            traceback.print_exc(file=f)
+            f.write(f"\n=== 数据快照 ===\n")
+            try:
+                cats = getattr(chart_data, '_categories', None)
+                f.write(f"categories: {cats}\n")
+                series_list = getattr(chart_data, '_series', None) or []
+                for si, s in enumerate(series_list):
+                    vals = []
+                    dps = getattr(s, '_data_points', None) or []
+                    for dp in dps:
+                        v = getattr(dp, '_value', None)
+                        vals.append(v)
+                    f.write(f"系列[{si}] name={s.name}, values={vals}\n")
+                    # 检查每个值的类型
+                    for vi, v in enumerate(vals):
+                        if v is None:
+                            f.write(f"  值[{vi}] = None (问题!)\n")
+                        elif isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                            f.write(f"  值[{vi}] = {v} (NaN/inf! 问题!)\n")
+                        elif not isinstance(v, (int, float, str)):
+                            f.write(f"  值[{vi}] = {v} type={type(v).__name__} (非常规类型!)\n")
+            except Exception as e2:
+                f.write(f"数据快照获取失败: {e2}\n")
+        print(f"    [错误] replace_data 失败: {e}")
+        print(f"    [诊断] 详细信息已写入: {log_path}")
+        raise
 
 
 def _write_chart_data_multi(chart, block_dfs: list):

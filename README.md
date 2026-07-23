@@ -244,6 +244,22 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.56.1 (2026-07-23)
+
+**🔧 从根源修复 NaN/inf 报错：monkey-patch xlsxwriter 启用 nan_inf_to_errors**
+
+v2.55.x 系列在应用层逐个清理 NaN/inf（`_safe_num_list`/`_clean_num`/`_sanitize_chart_data`），但用户反馈"简单柱状图仍报 nan/inf 错误"，说明仍有遗漏路径。
+
+**根因定位**：python-pptx 的 `pptx/chart/xlsx.py` 第34行创建 xlsxwriter Workbook 时只设了 `{"in_memory": True}`，未启用 `nan_inf_to_errors` 选项。所有 `chart.replace_data()` 和 `shapes.add_chart()` 内部用 xlsxwriter 写入嵌入工作簿时，遇到 NaN/inf 即抛 `NAN/INF not supported in write_number()`，导致嵌入工作簿写入失败、PowerPoint 打开后图表变空。
+
+**修复**：
+- 新增 [_pptx_patch.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/_pptx_patch.py)：monkey-patch `_BaseWorkbookWriter._open_worksheet`，在创建 Workbook 时加上 `nan_inf_to_errors: True`，从 xlsxwriter 层面自动将 NaN/inf 转为错误值，不再报错
+- [template_filler.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py) 和 [ppt_builder.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/ppt_builder.py) 顶部导入 `_pptx_patch`，确保两条路径（模板替换 + 从零创建）都生效
+- `_fix_embedded_workbook_for_combo` 数据清理加强：新增 `_to_safe_num` 函数覆盖 numpy 标量/字符串数字/NaN/inf/None，categories 中的 NaN/None 转空字符串
+- 应用层清理（`_safe_num_list`/`_clean_num`/`_sanitize_chart_data`）保留作为双重保险，NaN/inf 会被替换为 0（显示更合理）
+
+**复现验证**：构造含 NaN/inf 的数据测试 `replace_data`/`add_chart`，patch 前场景 A/B/C 全部报错，patch 后全部通过。防护用例 55+ 项无回归。
+
 ### v2.55.3 (2026-07-23)
 
 **🐛 模板替换路径 NaN/inf 彻底兜底 + 诊断增强**

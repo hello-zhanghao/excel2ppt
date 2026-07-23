@@ -1,5 +1,6 @@
 import os
 import math
+import src._pptx_patch  # noqa: F401 — 启用 xlsxwriter nan_inf_to_errors，从根源消除 NaN/inf 报错
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.chart.data import CategoryChartData, XyChartData
