@@ -1479,6 +1479,47 @@ def verify_template_mode(pivot_excel_path, output_dir):
                 elif not multi13_data_ok:
                     print(f"  {RED}✗ 页13 多级分类数据未正确替换{RESET}")
 
+        # ---------- 页14: 组合图（柱+折线·次级坐标轴）验证 ----------
+        if len(prs.slides) >= 14:
+            slide14 = prs.slides[13]
+            combo14_found = False
+            combo14_has_bar = False
+            combo14_has_line = False
+            combo14_has_secondary = False
+            combo14_data_ok = False
+            for shape in slide14.shapes:
+                if shape.has_chart:
+                    combo14_found = True
+                    cs = shape.chart._chartSpace
+                    try:
+                        from pptx.oxml.ns import qn as _qn
+                        plot_area = cs.find('.//' + _qn('c:plotArea'))
+                        if plot_area is not None:
+                            # 检查 barChart 和 lineChart 共存
+                            bar_charts = plot_area.findall(_qn('c:barChart'))
+                            line_charts = plot_area.findall(_qn('c:lineChart'))
+                            combo14_has_bar = len(bar_charts) > 0
+                            combo14_has_line = len(line_charts) > 0
+                            # 检查次级坐标轴（2个 valAx）
+                            val_axes = plot_area.findall(_qn('c:valAx'))
+                            combo14_has_secondary = len(val_axes) >= 2
+                            # 验证数据已替换（值应为基站数据：4800/3300/4650 等）
+                            all_vals = [v.text for v in cs.findall('.//' + _qn('c:v'))]
+                            has_4800 = any("4800" in v for v in all_vals)
+                            combo14_data_ok = has_4800
+                    except Exception as e:
+                        print(f"  {RED}✗ 页14 组合图检查异常: {e}{RESET}")
+                    break
+            checks.append(("页14 组合图存在", combo14_found))
+            checks.append(("页14 含barChart", combo14_has_bar))
+            checks.append(("页14 含lineChart", combo14_has_line))
+            checks.append(("页14 次级坐标轴(2个valAx)", combo14_has_secondary))
+            checks.append(("页14 数据已替换", combo14_data_ok))
+            if combo14_found and combo14_has_bar and combo14_has_line and combo14_has_secondary:
+                print(f"  {GREEN}✓ 页14 组合图(柱+折线·次轴)结构保持成功{RESET}")
+            else:
+                print(f"  {RED}✗ 页14 组合图结构异常: bar={combo14_has_bar} line={combo14_has_line} 次轴={combo14_has_secondary}{RESET}")
+
         # ---------- 整体文件检查 ----------
         # 验证点N: 输出文件大小合理（>0）
         file_size = os.path.getsize(output_path)
@@ -2202,6 +2243,96 @@ def _create_test_template(template_path):
 
     try:
         slide13.notes_slide.notes_text_frame.text = "# 多级分类X轴测试\n"
+    except Exception:
+        pass
+
+    # ========== 页14: 组合图（柱+折线，多列Y轴，次级坐标轴）==========
+    # 验证模板替换模式下多列Y轴+次级坐标轴组合图的数据替换
+    # 模板结构：2个系列，系列1=柱状图(主Y轴)，系列2=折线图(次Y轴)
+    slide14 = prs.slides.add_slide(blank_layout)
+    title14 = slide14.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.6))
+    title14.text_frame.text = "组合图测试（柱+折线·次级坐标轴）"
+    for para in title14.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(24)
+            run.font.bold = True
+
+    # 创建柱状图（2个系列，后续手动把第2个系列改为折线+次级坐标轴）
+    combo_chart_data = CategoryChartData()
+    combo_chart_data.categories = ["占位A", "占位B", "占位C"]
+    combo_chart_data.add_series("占位柱状", (10, 20, 30))
+    combo_chart_data.add_series("占位折线", (100, 200, 300))
+    combo_chart_shape = slide14.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED,
+        Inches(1), Inches(1.2), Inches(11), Inches(5.5),
+        combo_chart_data
+    )
+    combo_chart = combo_chart_shape.chart
+    try:
+        combo_chart.has_title = True
+        combo_chart.chart_title.text_frame.text = "下行速率(柱) + 用户数(折线·次轴)"
+    except Exception:
+        pass
+    # 占位符引用组合图数据区块（2列Y轴：总下行速率 + 总用户数）
+    combo_chart_shape.name = "{{图表:组合图数据}}"
+
+    # 手动重构为组合图：系列2改为折线图+次级坐标轴
+    try:
+        from pptx.oxml.ns import qn
+        from lxml import etree
+        chart_cs = combo_chart._chartSpace
+        chart_el = chart_cs.find(qn('c:chart'))
+        plot_area = chart_el.find(qn('c:plotArea'))
+        bar_chart = plot_area.find(qn('c:barChart'))
+        sers = bar_chart.findall(qn('c:ser'))
+        if len(sers) >= 2:
+            # 把第2个系列移到新的 lineChart
+            line_ser = sers[1]
+            bar_chart.remove(line_ser)
+            # 获取坐标轴ID
+            cat_ax = plot_area.find(qn('c:catAx'))
+            left_val_ax = plot_area.find(qn('c:valAx'))
+            cat_axid = cat_ax.find(qn('c:axId')).get('val') if cat_ax is not None else None
+            left_val_axid = left_val_ax.find(qn('c:axId')).get('val') if left_val_ax is not None else None
+
+            # 创建 lineChart
+            line_chart = etree.SubElement(plot_area, qn('c:lineChart'))
+            grouping = etree.SubElement(line_chart, qn('c:grouping'))
+            grouping.set('val', 'standard')
+            etree.SubElement(line_chart, qn('c:varyColors')).set('val', 'false')
+            line_chart.append(line_ser)
+            # lineChart 引用分类轴 + 新的次级值轴
+            if cat_axid and left_val_axid:
+                new_val_axid = str(int(left_val_axid) + 1)
+                axid_cat = etree.SubElement(line_chart, qn('c:axId'))
+                axid_cat.set('val', cat_axid)
+                axid_val = etree.SubElement(line_chart, qn('c:axId'))
+                axid_val.set('val', new_val_axid)
+                # 创建次级值轴
+                right_val_ax = etree.SubElement(plot_area, qn('c:valAx'))
+                etree.SubElement(right_val_ax, qn('c:axId')).set('val', new_val_axid)
+                scaling = etree.SubElement(right_val_ax, qn('c:scaling'))
+                etree.SubElement(scaling, qn('c:orientation')).set('val', 'minMax')
+                etree.SubElement(right_val_ax, qn('c:delete')).set('val', '0')
+                etree.SubElement(right_val_ax, qn('c:axPos')).set('val', 'r')
+                etree.SubElement(right_val_ax, qn('c:crossAx')).set('val', cat_axid)
+                etree.SubElement(right_val_ax, qn('c:crosses')).set('val', 'max')
+                # 折线图标记样式
+                from pptx.enum.chart import XL_MARKER_STYLE
+        # 折线图数据标签位置 CENTER（v2.54 约束）
+        try:
+            for plot in combo_chart.plots:
+                if len(plot.series) > 1:
+                    series2 = plot.series[1]
+                    # python-pptx 不直接支持设置 marker，通过 XML
+                    ser2_elem = line_chart.find(qn('c:ser')) if line_chart is not None else None
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"  [警告] 设置组合图模板失败: {e}")
+
+    try:
+        slide14.notes_slide.notes_text_frame.text = "# 组合图(柱+折线·次轴)测试\n"
     except Exception:
         pass
 
