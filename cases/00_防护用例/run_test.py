@@ -2188,6 +2188,15 @@ def _create_test_template(template_path):
                     if f_val is not None:
                         f_val.text = f'Sheet1!$C$2:$C${n_rows + 1}'
 
+            # 更新 c:tx 的 c:f 引用范围（系列名从 B1 变为 C1）
+            tx_elem = chart_space.find('.//' + qn('c:ser') + '/' + qn('c:tx'))
+            if tx_elem is not None:
+                tx_str_ref = tx_elem.find(qn('c:strRef'))
+                if tx_str_ref is not None:
+                    tx_f = tx_str_ref.find(qn('c:f'))
+                    if tx_f is not None:
+                        tx_f.text = 'Sheet1!$C$1'
+
     except Exception as e:
         print(f"  [警告] 设置多级分类模板失败: {e}")
 

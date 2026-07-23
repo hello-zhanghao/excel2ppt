@@ -1281,6 +1281,18 @@ def _restore_multi_level_categories(chart, level_data: list, series_values: list
                     if f_val is not None:
                         f_val.text = f'Sheet1!${data_col_letter}$2:${data_col_letter}${n_rows + 1}'
 
+        # v2.54.35+ 更新 c:tx 的 c:f 引用范围（系列名从 B1 变为第 N+1 列第1行）
+        # replace_data 把系列名写入 B1，但补齐父分类列后系列名实际在第 N+1 列
+        # 不更新会导致 PowerPoint 检查 c:tx 引用（B1=频段）与缓存（平均下行速率）不匹配，报"链接不可用"
+        tx_elem = chart_space.find('.//' + qn('c:ser') + '/' + qn('c:tx'))
+        if tx_elem is not None:
+            tx_str_ref = tx_elem.find(qn('c:strRef'))
+            if tx_str_ref is not None:
+                tx_f = tx_str_ref.find(qn('c:f'))
+                if tx_f is not None and series_header is not None:
+                    data_col_letter = _col_index_to_letter(n_levels + 1)
+                    tx_f.text = f'Sheet1!${data_col_letter}$1'
+
         print(f"    [OK] 多级分类 X 轴已恢复: {n_levels} 级, {n_rows} 个类别")
     except Exception as e:
         print(f"    [警告] 多级分类恢复失败: {e}")
