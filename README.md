@@ -246,21 +246,20 @@ excel2ppt/
 
 ### v2.54.29 (2026-07-23)
 
-**✨ 图表替换后清除嵌入的 Excel 工作簿残留数据**
+**✨ 图表替换后彻底清除嵌入的 Excel 工作簿**
 
-**背景**：PPT 模板图表可能嵌入了包含多个 sheet 和大量分散数据的 Excel 工作簿。`chart.replace_data()` 只更新 cache（numCache/strCache），嵌入的 xlsx 文件仍残留原模板数据。用户双击图表"编辑数据"时打开的还是原模板的工作簿，包含其他 sheet 和分散数据。
+**背景**：PPT 模板图表嵌入了包含多个 sheet 和分散数据的 Excel 工作簿。`chart.replace_data()` 只更新 cache（numCache/strCache），嵌入的 xlsx 文件仍残留原模板数据。用户双击图表"编辑数据"时打开的还是原模板的工作簿，包含其他 sheet 和分散数据。
 
-**功能**（[`template_filler.py`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py)）：
-- 新增 [`_clear_embedded_chart_data`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L1055-L1092) 函数，在所有 3 处 `chart.replace_data()` 后统一调用（普通图表、单区块散点图、多区块散点图），做两件事：
-  1. 删除 `<c:externalData>` 元素及对应 relationship（断开与旧工作簿的链接）
-  2. 删除所有 `<c:f>` 公式引用元素（保留 cache，避免 PowerPoint 找不到工作簿导致 #REF!）
-- [`_restore_multi_level_categories`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L1277-L1279) 同步调整：重建多级分类 XML 时不创建 `c:f` 公式引用
+**三层清理方案**（[`template_filler.py`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py)）：
+1. [`_clear_embedded_chart_data`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L1055-L1077)：在每处 `replace_data()` 后调用，删除图表 XML 中的 `<c:externalData>` 和所有 `<c:f>` 公式引用（保留 cache 避免 #REF!）
+2. [`_restore_multi_level_categories`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L1313-L1315)：重建多级分类 XML 时不创建 `c:f` 公式引用
+3. [`_strip_embedded_workbooks`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L1080-L1125)：`prs.save()` 后后处理重新打包 PPT，删除 `ppt/embeddings/*.xlsx` 文件和 `chart rels` 中指向 embeddings 的关系
 
-**根因修复**：v2.54.29 初版只删除 `c:externalData` 而保留 `c:f`，导致 PowerPoint 打开时找不到工作簿 → 第一列显示 `#REF!`。修正后同时删除 `c:f`，PowerPoint 只依赖 cache（numCache/strCache）显示数据，不报错。
+**根因**：python-pptx 的 `_Relationships` 不支持删除（`del`/`pop` 均报错），`prs.save()` 仍会把嵌入的 xlsx 和 chart rels 写入包内。PowerPoint 通过 rels 找到嵌入工作簿并打开，导致"编辑数据"时仍看到模板原数据。必须用 zipfile 后处理才能彻底清除。
 
-**效果**：替换后图表只显示当前替换的数据，原模板的其他 sheet 和分散数据不再残留。
+**效果**：替换后图表嵌入的 Excel 工作簿只包含当前替换的数据，原模板的其他 sheet 和分散数据彻底清除。
 
-**验证**：防护用例 8 个图表全部成功清除嵌入数据和公式引用，cache 数据完整（分类轴 + 数据点均正常），无回归。
+**验证**：防护用例 8 个图表全部成功清除（8 个 xlsx 文件 + 8 个 chart rels），cache 数据完整，PPT 可正常打开，无回归。
 
 ### v2.54.28 (2026-07-23)
 

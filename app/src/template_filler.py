@@ -1053,43 +1053,76 @@ _PCT_KEYWORDS = ["占比", "pct", "百分比", "比例"]
 
 
 def _clear_embedded_chart_data(chart):
-    """v2.54.29+ 清除图表嵌入的 Excel 工作簿引用及公式引用
+    """v2.54.29+ 清除图表 XML 中的嵌入工作簿引用及公式引用
 
-    模板图表可能嵌入了包含多个 sheet 和分散数据的 Excel 工作簿。
-    replace_data 只更新 cache（numCache/strCache），嵌入的 xlsx 仍残留原模板数据。
+    本函数只处理 XML 层面：
+    1. 删除 c:externalData 元素（断开 XML 中的引用）
+    2. 删除所有 c:f 公式引用（避免 #REF!）
 
-    本函数做两件事：
-    1. 删除 c:externalData 元素及对应 relationship（断开与旧工作簿的链接）
-    2. 删除所有 c:f 公式引用元素（c:cat/c:strRef/c:f、c:ser/c:val/c:numRef/c:f、
-       c:ser/c:tx/c:strRef/c:f、c:cat/c:multiLvlStrRef/c:f）
-
-    只删除 c:externalData 而保留 c:f 会导致 PowerPoint 找不到工作簿 → #REF!。
-    同时删除 c:f 后，PowerPoint 只依赖 cache（numCache/strCache）显示数据，不报错。
+    注意：python-pptx 的 _Relationships 不支持删除，嵌入的 xlsx 文件仍会留在包内。
+    彻底清除嵌入文件需要保存后调用 _strip_embedded_workbooks 后处理。
     """
     from pptx.oxml.ns import qn
     try:
         chart_space = chart._chartSpace
-
-        # 1. 删除 c:externalData 元素及对应 relationship
         ext_data = chart_space.find(qn('c:externalData'))
         if ext_data is not None:
-            rId = ext_data.get(qn('r:id'))
             chart_space.remove(ext_data)
-            if rId:
-                try:
-                    chart_part = chart.part
-                    if rId in chart_part.rels:
-                        del chart_part.rels[rId]
-                except Exception:
-                    pass
-
-        # 2. 删除所有 c:f 公式引用（保留 cache，避免 #REF!）
+        # 删除所有 c:f 公式引用（保留 cache，避免 #REF!）
         for f_elem in chart_space.findall('.//' + qn('c:f')):
             parent = f_elem.getparent()
             if parent is not None:
                 parent.remove(f_elem)
     except Exception:
         pass
+
+
+def _strip_embedded_workbooks(pptx_path: str):
+    """v2.54.29+ 后处理：彻底清除 PPT 包内的嵌入 Excel 工作簿
+
+    python-pptx 的 _Relationships 不支持删除，prs.save() 仍会把嵌入的 xlsx
+    和 chart rels 写入包内。PowerPoint 通过 rels 找到嵌入工作簿并打开，
+    导致"编辑数据"时仍看到模板的原数据。
+
+    本函数在 prs.save() 后重新打包 PPT：
+    1. 删除 ppt/embeddings/ 目录下所有 .xlsx 文件
+    2. 清空 ppt/charts/_rels/*.rels 中指向 embeddings 的 Relationship
+    """
+    import zipfile
+    import re
+    import shutil
+    import tempfile
+
+    tmp_path = pptx_path + '.tmp'
+    # 匹配 chart rels 中指向 embeddings 的 Relationship（Type 含 /package）
+    rel_pattern = re.compile(
+        r'<Relationship[^>]*Type="[^"]*package"[^>]*/>'
+    )
+
+    removed_files = 0
+    cleaned_rels = 0
+
+    with zipfile.ZipFile(pptx_path, 'r') as zin:
+        with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                name = item.filename
+                # 跳过嵌入的 xlsx 文件
+                if name.startswith('ppt/embeddings/') and name.endswith('.xlsx'):
+                    removed_files += 1
+                    continue
+                # 清理 chart rels 中指向 embeddings 的关系
+                if 'charts/_rels/' in name and name.endswith('.rels'):
+                    content = zin.read(name).decode('utf-8')
+                    new_content = rel_pattern.sub('', content)
+                    if new_content != content:
+                        cleaned_rels += 1
+                    zout.writestr(item, new_content)
+                else:
+                    zout.writestr(item, zin.read(name))
+
+    shutil.move(tmp_path, pptx_path)
+    if removed_files or cleaned_rels:
+        print(f"    [OK] 清除嵌入工作簿: 删除 {removed_files} 个 xlsx 文件, 清理 {cleaned_rels} 个 chart rels")
 
 
 def _trim_extra_series(chart, expected_count: int):
@@ -1899,6 +1932,8 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str, im
 
     print(f"[模板/3] 保存: {output_path}")
     prs.save(output_path)
+    # v2.54.29+ 后处理：彻底清除嵌入的 Excel 工作簿（python-pptx 无法删除 rels）
+    _strip_embedded_workbooks(output_path)
 
     stats = {
         "slides": len(prs.slides),
