@@ -1415,6 +1415,8 @@ def _rebuild_embedded_workbook_for_multi_level(chart, level_data: list, series_v
             new_dimension = f'A1:{last_col_letter}{n_rows + 1}'
 
             # 重建 sheet1.xml
+            # OOXML worksheet 子节点顺序规范：
+            # dimension → sheetViews → sheetFormatPr → cols → sheetData → ... → pageMargins
             sheet_xml = ez.read('xl/worksheets/sheet1.xml')
             sheet_root = etree.fromstring(sheet_xml)
             # 移除旧 sheetData 和 dimension
@@ -1422,12 +1424,26 @@ def _rebuild_embedded_workbook_for_multi_level(chart, level_data: list, series_v
                 sheet_root.remove(old_sd)
             for old_dim in sheet_root.findall('s:dimension', ns):
                 sheet_root.remove(old_dim)
-            # 插入新 dimension（必须在 sheetData 前）
-            new_dim_elem = etree.SubElement(sheet_root, '{%s}dimension' % S_NS)
+
+            # 按规范顺序插入：dimension 在最前面（index 0）
+            new_dim_elem = etree.Element('{%s}dimension' % S_NS)
             new_dim_elem.set('ref', new_dimension)
-            # 插入新 sheetData
+            sheet_root.insert(0, new_dim_elem)
+
+            # sheetData 应在 cols 之后、pageMargins 之前
+            # 找到 pageMargins（或其后第一个节点）的位置，在其前面插入 sheetData
             new_sd_elem = etree.fromstring(new_sheetdata_xml)
-            sheet_root.append(new_sd_elem)
+            insert_idx = len(sheet_root)  # 默认末尾
+            for i, child in enumerate(sheet_root):
+                child_tag = etree.QName(child).localname
+                if child_tag in ('pageMargins', 'pageSetup', 'headerFooter',
+                                 'rowBreaks', 'colBreaks', 'customProperties',
+                                 'cellWatches', 'ignoredErrors', 'smartTags',
+                                 'drawing', 'legacyDrawing', 'extLst'):
+                    insert_idx = i
+                    break
+            sheet_root.insert(insert_idx, new_sd_elem)
+
             # 重新序列化（带 XML 声明）
             new_sheet_xml = etree.tostring(sheet_root, xml_declaration=True, encoding='UTF-8', standalone=True)
 

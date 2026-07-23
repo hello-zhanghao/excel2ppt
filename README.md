@@ -244,6 +244,14 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.54.33 (2026-07-23)
+
+**🐛 修复多级分类图表嵌入工作簿XML节点顺序错误导致"链接不可用"**
+
+- 根因：v2.54.32 重建嵌入工作簿 sheet1.xml 时，`dimension` 和 `sheetData` 被追加到末尾，违反 OOXML 规范的节点顺序（dimension → sheetViews → sheetFormatPr → cols → sheetData → pageMargins），导致 PowerPoint 无法正确解析嵌入工作簿，弹出"链接的数据源不可用"提示
+- 修复：`dimension` 用 `insert(0, ...)` 插入到最前面；`sheetData` 用 `insert(insert_idx, ...)` 插入到 pageMargins 之前，严格遵守 OOXML 节点顺序规范
+- 验证：chart9（多级分类）的嵌入工作簿节点顺序与 chart8（正常图表）一致
+
 ### v2.54.32 (2026-07-23)
 
 **🐛 修复多级分类X轴"选择数据"只显示2列的问题**
