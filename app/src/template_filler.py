@@ -1791,7 +1791,8 @@ def _get_template_multi_level_count(chart) -> int:
 
 
 def _restore_multi_level_categories(chart, level_data: list, series_values: list = None,
-                                     level_headers: list = None, series_header: str = None):
+                                     level_headers: list = None, series_header: str = None,
+                                     data_start_row: int = None):
     """v2.54.27+ replace_data 后恢复多级分类 X 轴
 
     python-pptx 的 CategoryChartData 只支持单级分类，chart.replace_data() 会用
@@ -1807,6 +1808,8 @@ def _restore_multi_level_categories(chart, level_data: list, series_values: list
         level_headers: 各层级列表头名称（顺序同 level_data，最深层在前），
                        若为 None 则用"分类1/分类2/..."占位
         series_header: 数据系列列表头名称，若为 None 则用"数据"占位
+        data_start_row: v2.56.5+ 模板原始数据起始行号（2=有表头数据从row2，1=无表头数据从row1），
+                        None 时默认 2（有表头，兼容旧行为）
     """
     from pptx.oxml.ns import qn
     from lxml import etree
@@ -1828,12 +1831,19 @@ def _restore_multi_level_categories(chart, level_data: list, series_values: list
         # 层级数 = level_data 长度；嵌入工作簿需要 N 列分类 + 1 列数据
         n_levels = len(level_data)
         n_rows = len(level_data[0]) if level_data else 0
-        # v2.56.4+ 保留模板原始引用风格：c:f 从 $A$1 开始（含表头行），
-        # ptCount 标注实际数据点数（不含表头），与模板设计语义一致。
-        # 之前自作主张改成 $A$2（不含表头）偏离了模板语义。
+        # v2.56.5+ 引用范围与模板一致：
+        #   data_start_row=2 → 有表头，分类 c:f 从 $A$1（含表头行），数据/numRef 从 $2
+        #   data_start_row=1 → 无表头，分类 c:f 从 $A$1（row1 就是数据），数据/numRef 从 $1
+        if data_start_row is None:
+            data_start_row = 2  # 默认有表头
+        has_header = data_start_row == 2
+        data_end_row = data_start_row + n_rows - 1
+        # 分类引用：有表头时含表头行（从 $A$1），无表头时从 $A$1（row1 是数据）
+        cat_start_row = 1
+        cat_end_row = data_end_row  # 分类与数据结束行一致
         last_col_letter = _col_index_to_letter(n_levels)  # N 列分类
         f_elem = etree.SubElement(multi_lvl, qn('c:f'))
-        f_elem.text = f'Sheet1!$A$1:${last_col_letter}${n_rows + 1}'
+        f_elem.text = f'Sheet1!$A${cat_start_row}:${last_col_letter}${cat_end_row}'
 
         cache = etree.SubElement(multi_lvl, qn('c:multiLvlStrCache'))
 
@@ -1850,9 +1860,9 @@ def _restore_multi_level_categories(chart, level_data: list, series_values: list
                 v_elem.text = str(v)
 
         # v2.54.32+ 同步把所有层级列写入嵌入工作簿
-        # replace_data 只写了单级分类（最深层），父分类列缺失，导致"选择数据"只看到2列
         _rebuild_embedded_workbook_for_multi_level(chart, level_data, series_values,
-                                                    level_headers, series_header)
+                                                    level_headers, series_header,
+                                                    has_header)
 
         # v2.54.32+ 更新 c:val 的 c:f 引用范围（数据列从 B 变为第 N+1 列）
         if series_values is not None:
@@ -1863,11 +1873,11 @@ def _restore_multi_level_categories(chart, level_data: list, series_values: list
                     data_col_letter = _col_index_to_letter(n_levels + 1)  # 数据列 = N+1
                     f_val = num_ref.find(qn('c:f'))
                     if f_val is not None:
-                        f_val.text = f'Sheet1!${data_col_letter}$2:${data_col_letter}${n_rows + 1}'
+                        # v2.56.5+ 数据列引用范围与模板 numRef 一致
+                        f_val.text = f'Sheet1!${data_col_letter}${data_start_row}:${data_col_letter}${data_end_row}'
 
         # v2.54.35+ 更新 c:tx 的 c:f 引用范围（系列名从 B1 变为第 N+1 列第1行）
-        # replace_data 把系列名写入 B1，但补齐父分类列后系列名实际在第 N+1 列
-        # 不更新会导致 PowerPoint 检查 c:tx 引用（B1=频段）与缓存（平均下行速率）不匹配，报"链接不可用"
+        # v2.56.5+ 系列名引用行：有表头时 row1 是表头/系列名，无表头时 row1 是数据，系列名引用保持模板原样
         tx_elem = chart_space.find('.//' + qn('c:ser') + '/' + qn('c:tx'))
         if tx_elem is not None:
             tx_str_ref = tx_elem.find(qn('c:strRef'))
@@ -1877,7 +1887,7 @@ def _restore_multi_level_categories(chart, level_data: list, series_values: list
                     data_col_letter = _col_index_to_letter(n_levels + 1)
                     tx_f.text = f'Sheet1!${data_col_letter}$1'
 
-        print(f"    [OK] 多级分类 X 轴已恢复: {n_levels} 级, {n_rows} 个类别")
+        print(f"    [OK] 多级分类 X 轴已恢复: {n_levels} 级, {n_rows} 个类别, 数据起始行={data_start_row}")
     except Exception as e:
         print(f"    [警告] 多级分类恢复失败: {e}")
 
@@ -1892,7 +1902,8 @@ def _col_index_to_letter(col_idx: int) -> str:
 
 
 def _rebuild_embedded_workbook_for_multi_level(chart, level_data: list, series_values: list = None,
-                                                level_headers: list = None, series_header: str = None):
+                                                level_headers: list = None, series_header: str = None,
+                                                has_header: bool = True):
     """v2.54.32+ 重建图表嵌入工作簿，补齐多级分类的父层级列
 
     python-pptx replace_data 只写单级分类列（最深层子分类），父分类列缺失。
@@ -1905,6 +1916,7 @@ def _rebuild_embedded_workbook_for_multi_level(chart, level_data: list, series_v
         level_headers: 各层级列表头名称（顺序同 level_data，最深层在前），
                        None 则用"分类1/分类2/..."占位
         series_header: 数据系列列表头名称，None 则用"数据"占位
+        has_header: v2.56.5+ 是否含表头行（True=含表头数据从row2，False=无表头数据从row1）
     """
     import io
     import zipfile
@@ -1932,6 +1944,8 @@ def _rebuild_embedded_workbook_for_multi_level(chart, level_data: list, series_v
         # 即 level_data[-1] 是最浅层（父）写入 A 列，level_data[0] 是最深层（子）写入第 N 列
         # 数据列写入第 N+1 列
         total_cols = n_levels + (1 if series_values is not None else 0)
+        # v2.56.5+ 无表头时数据从 row1 开始（总行数=n_rows），含表头时从 row2 开始（总行数=n_rows+1）
+        total_rows = n_rows + 1 if has_header else n_rows
 
         # 解析嵌入 xlsx
         with zipfile.ZipFile(io.BytesIO(embed_blob), 'r') as ez:
@@ -1958,37 +1972,38 @@ def _rebuild_embedded_workbook_for_multi_level(chart, level_data: list, series_v
                 return idx
 
             # 构建新的 sheetData
-            # 表头行：第1列=父分类名...第N列=子分类名，第N+1列=数据列名
-            # 由于无法轻易获取原始列名，用通用占位符（PowerPoint 显示数据时不依赖表头名）
-            # 实际从 chart XML 的 numCache/strCache 读取数据，表头只占位
+            # v2.56.5+ 表头风格由 has_header 决定（保留模板原始风格）
             ns = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
             S_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 
             rows_xml = []
-            # 表头行（row 1）：各列占位
-            # 列写入顺序：父分类（level_data[-1]）在 A 列，子分类（level_data[0]）在第 N 列
-            # level_headers 顺序同 level_data（最深层在前），需倒序对应列序号
-            header_cells = []
-            for col_idx in range(1, total_cols + 1):
-                col_letter = _col_index_to_letter(col_idx)
-                if col_idx <= n_levels:
-                    # 分类列表头：列 col_idx 对应 level_data[n_levels - col_idx]
-                    level_idx = n_levels - col_idx
-                    if level_headers and level_idx < len(level_headers):
-                        header_name = str(level_headers[level_idx])
+            # v2.56.5+ 含表头时 row1 是表头、数据从 row2；无表头时数据从 row1
+            if has_header:
+                # 表头行（row 1）：各列占位
+                # 列写入顺序：父分类（level_data[-1]）在 A 列，子分类（level_data[0]）在第 N 列
+                # level_headers 顺序同 level_data（最深层在前），需倒序对应列序号
+                header_cells = []
+                for col_idx in range(1, total_cols + 1):
+                    col_letter = _col_index_to_letter(col_idx)
+                    if col_idx <= n_levels:
+                        # 分类列表头：列 col_idx 对应 level_data[n_levels - col_idx]
+                        level_idx = n_levels - col_idx
+                        if level_headers and level_idx < len(level_headers):
+                            header_name = str(level_headers[level_idx])
+                        else:
+                            header_name = f'分类{col_idx}'
+                        str_idx = get_or_add_str(header_name)
                     else:
-                        header_name = f'分类{col_idx}'
-                    str_idx = get_or_add_str(header_name)
-                else:
-                    # 数据列表头
-                    header_name = str(series_header) if series_header else '数据'
-                    str_idx = get_or_add_str(header_name)
-                header_cells.append(f'<c r="{col_letter}1" t="s"><v>{str_idx}</v></c>')
-            rows_xml.append(f'<row r="1">{"".join(header_cells)}</row>')
+                        # 数据列表头
+                        header_name = str(series_header) if series_header else '数据'
+                        str_idx = get_or_add_str(header_name)
+                    header_cells.append(f'<c r="{col_letter}1" t="s"><v>{str_idx}</v></c>')
+                rows_xml.append(f'<row r="1">{"".join(header_cells)}</row>')
 
-            # 数据行（row 2 ~ n_rows+1）
+            # 数据行：含表头从 row2 开始，无表头从 row1 开始
+            data_start = 2 if has_header else 1
             for row_idx in range(n_rows):
-                row_num = row_idx + 2
+                row_num = row_idx + data_start
                 cells = []
                 for col_idx in range(1, total_cols + 1):
                     col_letter = _col_index_to_letter(col_idx)
@@ -2008,7 +2023,8 @@ def _rebuild_embedded_workbook_for_multi_level(chart, level_data: list, series_v
 
             new_sheetdata_xml = '<sheetData>' + ''.join(rows_xml) + '</sheetData>'
             last_col_letter = _col_index_to_letter(total_cols)
-            new_dimension = f'A1:{last_col_letter}{n_rows + 1}'
+            # v2.56.5+ dimension 范围与表头风格一致
+            new_dimension = f'A1:{last_col_letter}{total_rows}'
 
             # 重建 sheet1.xml
             # OOXML worksheet 子节点顺序规范：
@@ -2244,7 +2260,21 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
     # 仅当模板本身有多级分类时才恢复，且 DataFrame 提供足够的前置文本维度列
     multi_level_data = None
     multi_level_headers = None  # v2.54.32+ 各层级列表头名（最深层在前）
+    # v2.56.5+ 读取模板原始 numRef 起始行（数据起始行），replace_data 后引用范围需与模板一致
+    # 模板无表头时 numRef 从 $1 开始（数据在 row1），有表头时从 $2 开始（数据在 row2）
+    template_data_start_row = None
     if template_level_count > 0 and not transpose and len(df.columns) >= template_level_count:
+        try:
+            _orig_num_f = chart._chartSpace.find('.//' + qn('c:val') + '/' +
+                                                  qn('c:numRef') + '/' + qn('c:f'))
+            if _orig_num_f is not None and _orig_num_f.text:
+                import re as _re
+                _m = _re.search(r'\$[A-Z]+\$(\d+):', _orig_num_f.text)
+                if _m:
+                    template_data_start_row = int(_m.group(1))  # 1=无表头, 2=有表头
+        except Exception:
+            pass
+
         multi_level_data = []
         multi_level_headers = []
         # PowerPoint 多级分类层级：最深层（子分类）在前，最浅层（父分类）在后
@@ -2265,6 +2295,7 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
 
     # v2.54.27+ 恢复多级分类 X 轴（replace_data 会清空 multiLvlStrRef，需要手动重建）
     # v2.54.32+ 同步重建嵌入工作簿，补齐父分类列，修复"选择数据"只显示2列的问题
+    # v2.56.5+ 传入 template_data_start_row 保留模板原始引用范围（是否有表头）
     if multi_level_data:
         # 取第一个数据系列的值和名称（用于补写嵌入工作簿的数据列和表头）
         first_series_values = None
@@ -2274,7 +2305,8 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
             first_series_values = series_data[first_name]
             first_series_header = first_name
         _restore_multi_level_categories(chart, multi_level_data, first_series_values,
-                                         multi_level_headers, first_series_header)
+                                         multi_level_headers, first_series_header,
+                                         template_data_start_row)
 
     # 同步数据标签格式：百分比列显示 0.0%
     try:
