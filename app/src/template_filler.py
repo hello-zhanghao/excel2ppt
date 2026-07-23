@@ -1052,79 +1052,6 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
 _PCT_KEYWORDS = ["占比", "pct", "百分比", "比例"]
 
 
-def _clear_embedded_chart_data(chart):
-    """v2.54.29+ 清除图表 XML 中的嵌入工作簿引用及公式引用
-
-    本函数只处理 XML 层面：
-    1. 删除 c:externalData 元素（断开 XML 中的引用）
-    2. 删除所有 c:f 公式引用（避免 #REF!）
-
-    注意：python-pptx 的 _Relationships 不支持删除，嵌入的 xlsx 文件仍会留在包内。
-    彻底清除嵌入文件需要保存后调用 _strip_embedded_workbooks 后处理。
-    """
-    from pptx.oxml.ns import qn
-    try:
-        chart_space = chart._chartSpace
-        ext_data = chart_space.find(qn('c:externalData'))
-        if ext_data is not None:
-            chart_space.remove(ext_data)
-        # 删除所有 c:f 公式引用（保留 cache，避免 #REF!）
-        for f_elem in chart_space.findall('.//' + qn('c:f')):
-            parent = f_elem.getparent()
-            if parent is not None:
-                parent.remove(f_elem)
-    except Exception:
-        pass
-
-
-def _strip_embedded_workbooks(pptx_path: str):
-    """v2.54.29+ 后处理：彻底清除 PPT 包内的嵌入 Excel 工作簿
-
-    python-pptx 的 _Relationships 不支持删除，prs.save() 仍会把嵌入的 xlsx
-    和 chart rels 写入包内。PowerPoint 通过 rels 找到嵌入工作簿并打开，
-    导致"编辑数据"时仍看到模板的原数据。
-
-    本函数在 prs.save() 后重新打包 PPT：
-    1. 删除 ppt/embeddings/ 目录下所有 .xlsx 文件
-    2. 清空 ppt/charts/_rels/*.rels 中指向 embeddings 的 Relationship
-    """
-    import zipfile
-    import re
-    import shutil
-    import tempfile
-
-    tmp_path = pptx_path + '.tmp'
-    # 匹配 chart rels 中指向 embeddings 的 Relationship（Type 含 /package）
-    rel_pattern = re.compile(
-        r'<Relationship[^>]*Type="[^"]*package"[^>]*/>'
-    )
-
-    removed_files = 0
-    cleaned_rels = 0
-
-    with zipfile.ZipFile(pptx_path, 'r') as zin:
-        with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                name = item.filename
-                # 跳过嵌入的 xlsx 文件
-                if name.startswith('ppt/embeddings/') and name.endswith('.xlsx'):
-                    removed_files += 1
-                    continue
-                # 清理 chart rels 中指向 embeddings 的关系
-                if 'charts/_rels/' in name and name.endswith('.rels'):
-                    content = zin.read(name).decode('utf-8')
-                    new_content = rel_pattern.sub('', content)
-                    if new_content != content:
-                        cleaned_rels += 1
-                    zout.writestr(item, new_content)
-                else:
-                    zout.writestr(item, zin.read(name))
-
-    shutil.move(tmp_path, pptx_path)
-    if removed_files or cleaned_rels:
-        print(f"    [OK] 清除嵌入工作簿: 删除 {removed_files} 个 xlsx 文件, 清理 {cleaned_rels} 个 chart rels")
-
-
 def _trim_extra_series(chart, expected_count: int):
     """replace_data 后剪除模板遗留的多余系列（模板6系列→数据4系列时剪掉2个空系列）"""
     from pptx.oxml.ns import qn
@@ -1240,7 +1167,6 @@ def _write_chart_data_multi(chart, block_dfs: list):
                     multi_series_count += 1
 
         chart.replace_data(chart_data)
-        _clear_embedded_chart_data(chart)
         _trim_extra_series(chart, multi_series_count)
         try:
             plot = chart.plots[0]
@@ -1307,9 +1233,11 @@ def _restore_multi_level_categories(chart, level_data: list):
         if str_ref is not None:
             cat_elem.remove(str_ref)
 
-        # 重建 multiLvlStrRef（v2.54.29+ 不创建 c:f 公式引用，
-        # 因 externalData 已删除，c:f 会指向不存在的工作簿导致 #REF!）
+        # 重建 multiLvlStrRef
         multi_lvl = etree.SubElement(cat_elem, qn('c:multiLvlStrRef'))
+
+        f_elem = etree.SubElement(multi_lvl, qn('c:f'))
+        f_elem.text = 'Sheet1!$A$1:$B$' + str(len(level_data[0]) + 1)
 
         cache = etree.SubElement(multi_lvl, qn('c:multiLvlStrCache'))
 
@@ -1374,7 +1302,6 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
                     series.add_data_point(float(x_val), float(y_val))
 
         chart.replace_data(chart_data)
-        _clear_embedded_chart_data(chart)
         # 散点图数据标签：默认显示数值
         try:
             plot = chart.plots[0]
@@ -1447,7 +1374,6 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
             multi_level_data.append(level_vals)
 
     chart.replace_data(chart_data)
-    _clear_embedded_chart_data(chart)
     _trim_extra_series(chart, actual_series_count)
     _ensure_vary_colors(chart)
 
@@ -1932,8 +1858,6 @@ def fill_template(template_path: str, pivot_data_path: str, output_path: str, im
 
     print(f"[模板/3] 保存: {output_path}")
     prs.save(output_path)
-    # v2.54.29+ 后处理：彻底清除嵌入的 Excel 工作簿（python-pptx 无法删除 rels）
-    _strip_embedded_workbooks(output_path)
 
     stats = {
         "slides": len(prs.slides),

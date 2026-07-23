@@ -246,20 +246,25 @@ excel2ppt/
 
 ### v2.54.29 (2026-07-23)
 
-**✨ 图表替换后彻底清除嵌入的 Excel 工作簿**
+**⚠️ 回退：图表替换后清除嵌入 Excel 工作簿功能（功能取消）**
 
-**背景**：PPT 模板图表嵌入了包含多个 sheet 和分散数据的 Excel 工作簿。`chart.replace_data()` 只更新 cache（numCache/strCache），嵌入的 xlsx 文件仍残留原模板数据。用户双击图表"编辑数据"时打开的还是原模板的工作簿，包含其他 sheet 和分散数据。
+**背景**：尝试实现"替换后只保留替换数据，清除模板嵌入的 Excel 工作簿"，但发现无法在不破坏 PPT 文件的前提下完成。
 
-**三层清理方案**（[`template_filler.py`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py)）：
-1. [`_clear_embedded_chart_data`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L1055-L1077)：在每处 `replace_data()` 后调用，删除图表 XML 中的 `<c:externalData>` 和所有 `<c:f>` 公式引用（保留 cache 避免 #REF!）
-2. [`_restore_multi_level_categories`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L1313-L1315)：重建多级分类 XML 时不创建 `c:f` 公式引用
-3. [`_strip_embedded_workbooks`](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L1080-L1125)：`prs.save()` 后后处理重新打包 PPT，删除 `ppt/embeddings/*.xlsx` 文件和 `chart rels` 中指向 embeddings 的关系
+**尝试过的方案及失败原因**：
+1. **只删 XML 层**（`c:externalData` + `c:f`）：PowerPoint 打开时找不到工作簿 → 第一列显示 `#REF!`
+2. **后处理删 xlsx 文件 + chart rels**：漏改 `[Content_Types].xml` → PPT 文件损坏 → 图表全部被删，PPT 无法正常打开
 
-**根因**：python-pptx 的 `_Relationships` 不支持删除（`del`/`pop` 均报错），`prs.save()` 仍会把嵌入的 xlsx 和 chart rels 写入包内。PowerPoint 通过 rels 找到嵌入工作簿并打开，导致"编辑数据"时仍看到模板原数据。必须用 zipfile 后处理才能彻底清除。
+**根因**：python-pptx 的 `_Relationships` 不支持删除（`del`/`pop` 均报错），而 PowerPoint 严格校验以下四层耦合，缺一不可：
+- `c:externalData` XML 元素
+- `c:f` 公式引用
+- chart rels 关系 + 嵌入 xlsx 文件
+- `[Content_Types].xml` 的 xlsx 声明
 
-**效果**：替换后图表嵌入的 Excel 工作簿只包含当前替换的数据，原模板的其他 sheet 和分散数据彻底清除。
+**结论**："编辑数据时仍看到模板数据"是 PowerPoint 的设计行为——双击编辑数据时它打开嵌入的 xlsx 工作簿，即使图表显示用 cache，编辑器仍读 xlsx。这是 python-pptx 的限制，无法在不破坏文件的前提下彻底清除。
 
-**验证**：防护用例 8 个图表全部成功清除（8 个 xlsx 文件 + 8 个 chart rels），cache 数据完整，PPT 可正常打开，无回归。
+**回退操作**：移除 `_clear_embedded_chart_data`、`_strip_embedded_workbooks` 函数及所有调用点，恢复 `_restore_multi_level_categories` 的 `c:f` 创建，代码回到 v2.54.28 稳定状态。
+
+**验证**：防护用例 12 页图表全部正常显示，PPT 可正常打开。
 
 ### v2.54.28 (2026-07-23)
 
