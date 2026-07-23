@@ -353,21 +353,26 @@ def _extract_transpose_flag(expr: str) -> Tuple[str, bool]:
     return expr, False
 
 
-def _filter_df_columns(df: pd.DataFrame, cols: Optional[List[str]]) -> pd.DataFrame:
-    """按指定列筛选 DataFrame，保留第一列（行维度）+ 指定列。
+def _filter_df_columns(df: pd.DataFrame, cols: Optional[List[str]], min_keep_cols: int = 1) -> pd.DataFrame:
+    """按指定列筛选 DataFrame，至少保留前 min_keep_cols 列 + 指定列。
 
     无 cols 或 cols 为 None 时返回原 df。
-    指定列不存在时跳过，至少保留第一列。
+    指定列不存在时跳过。
+    min_keep_cols 用于多级分类 X 轴场景：模板有 N 级分类时，前 N 列为分类层级列，
+    必须保留即使用户只写了数据列；用户显式写了分类列时自动去重不重复添加。
     保留原 df 的 attrs（含 pct_columns 等元信息）。
     """
     if cols is None or df.empty:
         return df
-    # 第一列是行维度，必须保留
-    first_col = df.columns[0]
-    keep = [first_col]
+    # 至少保留前 min_keep_cols 列（分类层级列），用于多级分类 X 轴
+    n = max(1, min_keep_cols)
+    n = min(n, len(df.columns))
+    keep = list(df.columns[:n])
+    keep_set = set(keep)
     for c in cols:
-        if c in df.columns and c != first_col:
+        if c in df.columns and c not in keep_set:
             keep.append(c)
+            keep_set.add(c)
     if not keep:
         return df
     filtered = df[keep]
@@ -976,7 +981,10 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                     except Exception:
                         pass
                 continue
-            df = _filter_df_columns(df, cols)
+            # v2.54.28+ 多级分类 X 轴：自动保留前 N 列分类层级列（N=模板层级数）
+            # 用户 | 后只写数据列即可；若显式写了分类列则去重不重复添加
+            template_level_count = _get_template_multi_level_count(chart)
+            df = _filter_df_columns(df, cols, min_keep_cols=template_level_count if template_level_count > 0 else 1)
 
             try:
                 _write_chart_data(chart, df, xy_pair=xy_pair, transpose=transpose)
