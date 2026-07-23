@@ -244,6 +244,24 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.55.1 (2026-07-23)
+
+**🐛 修复图表数据含 NaN/inf 时"编辑数据变空"问题**
+
+**根因**：python-pptx 的 `replace_data` 内部用 xlsxwriter 写入嵌入工作簿，当数据值含 `NaN`/`inf` 时，xlsxwriter 的 `write_number()` 抛异常：
+```
+nan/inf not supported in write_number() without 'nan_inf_to_errors' workbook() option
+```
+导致嵌入工作簿写入失败，PowerPoint 打开后右键"编辑数据"显示空白，图表随之变空。
+
+原代码 `pd.to_numeric(...).fillna(0)` 只处理了 NaN，未处理 inf（inf 是有效浮点数，fillna 不会替换）。
+
+**修复**：
+- [template_filler.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L1296-L1306) 新增 `_safe_num_list` 辅助函数：`pd.to_numeric` + `replace([inf,-inf],0)` + `fillna(0)`，统一处理 NaN/inf/非数值 → 0
+- [template_filler.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py) `_write_chart_data`/`_write_chart_data_multi` 中 10 处 `pd.to_numeric(...).fillna(0).tolist()` 全部替换为 `_safe_num_list()`
+- [ppt_builder.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/ppt_builder.py#L13-L30) 新增 `_clean_num` 辅助函数处理单值 NaN/inf → 0，应用到所有 `add_series`/`add_data_point` 调用点
+- main.py `__VERSION__` 2.55.0 → 2.55.1
+
 ### v2.55.0 (2026-07-23)
 
 **✨ PPT 配置新增行筛选：过滤条件 + 行范围**

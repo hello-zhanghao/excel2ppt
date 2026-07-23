@@ -1,4 +1,5 @@
 import os
+import math
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.chart.data import CategoryChartData, XyChartData
@@ -7,6 +8,26 @@ from pptx.oxml.ns import qn
 from lxml import etree
 
 from src.ppt_theme import PptTheme, LAYOUT_POSITIONS
+
+
+def _clean_num(v):
+    """将单个值转为安全数值：None/NaN/inf → 0
+
+    避免 xlsxwriter write_number() 遇到 nan/inf 报错导致图表数据写入失败。
+    """
+    if v is None:
+        return 0
+    if isinstance(v, (int, float)):
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return 0
+        return v
+    try:
+        f = float(v)
+        if math.isnan(f) or math.isinf(f):
+            return 0
+        return f
+    except (ValueError, TypeError):
+        return 0
 
 
 def build_ppt(config, chart_map, output_path):
@@ -224,8 +245,8 @@ def _add_native_chart(slide, chart_info, theme, left, top, width, height, color_
             series = chart_data.add_series(s_name)
             for i in range(min(len(categories), len(s_vals))):
                 try:
-                    x_val = float(categories[i])
-                    y_val = float(s_vals[i])
+                    x_val = _clean_num(categories[i])
+                    y_val = _clean_num(s_vals[i])
                     series.add_data_point(x_val, y_val)
                 except (ValueError, TypeError):
                     continue
@@ -233,7 +254,7 @@ def _add_native_chart(slide, chart_info, theme, left, top, width, height, color_
         chart_data = CategoryChartData()
         chart_data.categories = [str(c) for c in categories]
         for s_name, s_vals in plot_values:
-            chart_data.add_series(s_name, s_vals)
+            chart_data.add_series(s_name, [_clean_num(v) for v in s_vals])
 
     chart_shape = slide.shapes.add_chart(
         xl_type, left, top, width, height, chart_data
@@ -317,7 +338,7 @@ def _add_combo_chart(slide, chart_info, chart_type, title, categories, values, c
     else:
         chart_data.categories = [str(c) for c in categories]
     for s_name, s_vals in series_list:
-        chart_data.add_series(s_name, s_vals)
+        chart_data.add_series(s_name, [_clean_num(v) for v in s_vals])
 
     chart_shape = slide.shapes.add_chart(
         XL_CHART_TYPE.COLUMN_CLUSTERED, left, top, width, height, chart_data
@@ -494,10 +515,10 @@ def _add_hierarchical_chart(slide, chart_type, title, categories, values, color,
 
     if isinstance(values, dict):
         for series_name, series_vals in values.items():
-            clean = [v if v is not None else 0 for v in series_vals]
+            clean = [_clean_num(v) for v in series_vals]
             chart_data.add_series(str(series_name), clean)
     else:
-        chart_data.add_series(title or "数据", values)
+        chart_data.add_series(title or "数据", [_clean_num(v) for v in values])
 
     chart_shape = slide.shapes.add_chart(
         xl_type, left, top, width, height, chart_data

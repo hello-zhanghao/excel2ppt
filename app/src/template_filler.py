@@ -1293,6 +1293,19 @@ def _is_pct_column(col_name: str, values: list) -> bool:
     return all(0 <= v <= 1 for v in nums)
 
 
+def _safe_num_list(series) -> list:
+    """将 Series 转为安全的数值列表：NaN/inf/非数值统一替换为 0
+
+    避免 xlsxwriter write_number() 遇到 nan/inf 报错：
+    'nan/inf not supported in write_number() without nan_inf_to_errors option'
+    该错误会导致 chart.replace_data() 抛异常，嵌入工作簿写入失败，
+    PowerPoint 打开后"编辑数据"显示空白、图表变空。
+    """
+    return pd.to_numeric(series, errors="coerce").replace(
+        [float('inf'), float('-inf')], 0
+    ).fillna(0).tolist()
+
+
 def _write_chart_data_multi(chart, block_dfs: list):
     """多区块写入图表（散点图专属，每区块形成一个独立系列）
 
@@ -1320,18 +1333,18 @@ def _write_chart_data_multi(chart, block_dfs: list):
                 # xy 对模式：列按 (X1,Y1,X2,Y2,...) 配对
                 for i in range(0, len(df.columns), 2):
                     y_col = df.columns[i + 1]
-                    x_vals = pd.to_numeric(df.iloc[:, i], errors="coerce").fillna(0).tolist()
-                    y_vals = pd.to_numeric(df.iloc[:, i + 1], errors="coerce").fillna(0).tolist()
+                    x_vals = _safe_num_list(df.iloc[:, i])
+                    y_vals = _safe_num_list(df.iloc[:, i + 1])
                     series = chart_data.add_series(f"{block_name}.{y_col}")
                     for x_val, y_val in zip(x_vals, y_vals):
                         series.add_data_point(float(x_val), float(y_val))
                     multi_series_count += 1
             else:
                 # 共享 X 模式：第一列作 X，其余列各成一个系列
-                x_values = pd.to_numeric(df.iloc[:, 0], errors="coerce").fillna(0).tolist()
+                x_values = _safe_num_list(df.iloc[:, 0])
                 for col_idx in range(1, len(df.columns)):
                     col_name = df.columns[col_idx]
-                    y_values = pd.to_numeric(df.iloc[:, col_idx], errors="coerce").fillna(0).tolist()
+                    y_values = _safe_num_list(df.iloc[:, col_idx])
                     series = chart_data.add_series(f"{block_name}.{col_name}")
                     for x_val, y_val in zip(x_values, y_values):
                         series.add_data_point(float(x_val), float(y_val))
@@ -1682,8 +1695,8 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
                 for i in range(0, len(df.columns), 2):
                     x_col = df.columns[i]
                     y_col = df.columns[i + 1]
-                    x_vals = pd.to_numeric(df.iloc[:, i], errors="coerce").fillna(0).tolist()
-                    y_vals = pd.to_numeric(df.iloc[:, i + 1], errors="coerce").fillna(0).tolist()
+                    x_vals = _safe_num_list(df.iloc[:, i])
+                    y_vals = _safe_num_list(df.iloc[:, i + 1])
                     series = chart_data.add_series(f"{y_col}")
                     for x_val, y_val in zip(x_vals, y_vals):
                         series.add_data_point(float(x_val), float(y_val))
@@ -1692,10 +1705,10 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
                 xy_pair = False
 
         if not xy_pair:
-            x_values = pd.to_numeric(df.iloc[:, 0], errors="coerce").fillna(0).tolist()
+            x_values = _safe_num_list(df.iloc[:, 0])
             for col_idx in range(1, len(df.columns)):
                 col_name = df.columns[col_idx]
-                y_values = pd.to_numeric(df.iloc[:, col_idx], errors="coerce").fillna(0).tolist()
+                y_values = _safe_num_list(df.iloc[:, col_idx])
                 series = chart_data.add_series(col_name)
                 for x_val, y_val in zip(x_values, y_values):
                     series.add_data_point(float(x_val), float(y_val))
@@ -1729,7 +1742,7 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
     data_start_col = template_level_count if template_level_count > 0 else 1
     for col_idx in range(data_start_col, len(df.columns)):
         col_name = df.columns[col_idx]
-        values = pd.to_numeric(df.iloc[:, col_idx], errors="coerce").fillna(0).tolist()
+        values = _safe_num_list(df.iloc[:, col_idx])
         series_data[col_name] = values
         if attr_pct_cols is not None:
             # 有元信息时以元信息为准
@@ -1747,7 +1760,7 @@ def _write_chart_data(chart, df: pd.DataFrame, xy_pair: bool = False, transpose:
         pct_flags_t = {}
         for row_idx in range(len(df)):
             series_name = str(df.iloc[row_idx, 0])
-            values = pd.to_numeric(df.iloc[row_idx, data_start_col:], errors="coerce").fillna(0).tolist()
+            values = _safe_num_list(df.iloc[row_idx, data_start_col:])
             chart_data.add_series(series_name, values)
             pct_flags_t[series_name] = False
         pct_flags = pct_flags_t
