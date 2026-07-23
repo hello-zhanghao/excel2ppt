@@ -32,6 +32,12 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
         {{图表:区块名|列1,列2}}      只使用指定列（第一列自动作为X轴类别）
         {{图表:区块名|xy}}           散点图独立 xy 对模式：列按 (X1,Y1,X2,Y2,...) 配对
         {{图表:区块名|xy|列1,列2}}   xy 对模式 + 指定列（列数必须为偶数）
+        # v2.55.0+ 行筛选标志（可组合，用 | 分隔）：
+        {{图表:区块名|where:条件}}   过滤条件，如 |where:地区=华东 AND 用户数>1000
+        {{图表:区块名|topN}}         前 N 行，如 |top5
+        {{图表:区块名|rows:N-M}}     第 N 到 M 行（含），如 |rows:1-5
+        {{图表:区块名|row:N}}        仅第 N 行，如 |row:3
+        # 行筛选可与列筛选组合：{{图表:区块名|列1,列2|where:地区=华东|top5}}
 
     图表标题（chart title）：
         标题文本框支持所有文本占位符语法（{{区块.列}}、{{计算:...}}、别名、格式后缀等）
@@ -48,6 +54,12 @@ PPT 模板填充器 — 基于已有 PPT 模板和透视结果进行数据替换
         {{表格:区块名}}              用该区块数据整表替换（保留模板表格样式）
         {{表格:Sheet名.区块名}}      精确指定 sheet 内区块
         {{表格:区块名|列1,列2}}      只填指定列（第一列自动保留）
+        # v2.55.0+ 行筛选（语法同图表占位符）：
+        {{表格:区块名|where:条件}}   过滤条件
+        {{表格:区块名|topN}}         前 N 行
+        {{表格:区块名|rows:N-M}}     第 N 到 M 行
+        {{表格:区块名|row:N}}        仅第 N 行
+        # 组合：{{表格:区块名|列1,列2|where:地区=华东|top5}}
 
     聚合后缀（可选）：
         {{区块名.列名.sum}}          求和（默认）
@@ -351,6 +363,230 @@ def _extract_transpose_flag(expr: str) -> Tuple[str, bool]:
             cleaned = expr.replace(sep, "").replace("||", "|").strip(" |｜")
             return cleaned, True
     return expr, False
+
+
+# v2.55.0+ 行筛选标志正则：
+#   |where:条件          过滤条件（支持 AND/OR/逗号，与 PPT 配置「过滤条件」一致）
+#   |topN                前 N 行（N 为数字）
+#   |rows:N-M            第 N 到 M 行（含）
+#   |row:N               仅第 N 行
+_ROW_FILTER_WHERE_RE = re.compile(r"\|where:(.+?)(?=\||$)", re.IGNORECASE)
+_ROW_FILTER_TOP_RE = re.compile(r"\|top(\d+)(?=\||$)", re.IGNORECASE)
+_ROW_FILTER_ROWS_RE = re.compile(r"\|rows:(\d+)\s*-\s*(\d+)(?=\||$)", re.IGNORECASE)
+_ROW_FILTER_ROW_RE = re.compile(r"\|row:(\d+)(?=\||$)", re.IGNORECASE)
+
+
+def _extract_row_filter_flag(expr: str) -> Tuple[str, Optional[str], Optional[str]]:
+    """从图表/表格表达式中提取行筛选标志，返回 (清理后表达式, 过滤条件, 行范围)。
+
+    支持的标志（可组合，用 | 分隔）：
+        |where:条件          过滤条件，如 |where:地区=华东 AND 用户数>1000
+        |topN                前 N 行，如 |top5
+        |rows:N-M            第 N 到 M 行（含），如 |rows:1-5
+        |row:N               仅第 N 行，如 |row:3
+
+    行范围语法与 PPT 配置「行范围」一致，基于过滤后的结果从 1 开始。
+    过滤条件语法与 PPT 配置「过滤条件」一致（列名=值、列名>值、AND/OR/逗号）。
+
+    示例：
+        区块名|where:用户数>1000|top5     → 过滤后取前5行
+        区块名|列1,列2|where:地区=华东    → 选列 + 过滤
+        区块名|rows:1-3                   → 仅取第1到3行
+    """
+    expr = expr.strip()
+    filter_expr = None
+    row_range = None
+
+    # 提取 |where:条件
+    m = _ROW_FILTER_WHERE_RE.search(expr)
+    if m:
+        filter_expr = m.group(1).strip()
+        expr = expr[:m.start()] + expr[m.end():]
+
+    # 提取 |rows:N-M（优先于 |row:N）
+    m = _ROW_FILTER_ROWS_RE.search(expr)
+    if m:
+        row_range = f"{m.group(1)}-{m.group(2)}"
+        expr = expr[:m.start()] + expr[m.end():]
+    else:
+        # 提取 |row:N
+        m = _ROW_FILTER_ROW_RE.search(expr)
+        if m:
+            row_range = m.group(1)
+            expr = expr[:m.start()] + expr[m.end():]
+
+    # 提取 |topN
+    m = _ROW_FILTER_TOP_RE.search(expr)
+    if m:
+        row_range = f"top{m.group(1)}"
+        expr = expr[:m.start()] + expr[m.end():]
+
+    # 清理多余的 | 和空格
+    expr = expr.replace("||", "|").strip(" |｜")
+    if not filter_expr:
+        filter_expr = None
+    if not row_range:
+        row_range = None
+    return expr, filter_expr, row_range
+
+
+def _apply_df_row_filter(df: pd.DataFrame, filter_expr: Optional[str], row_range: Optional[str]) -> pd.DataFrame:
+    """对 DataFrame 应用过滤条件和行范围筛选（模板替换模式专用）。
+
+    语法与 PPT 配置行筛选一致：
+        过滤条件：列名=值、列名>值、列名包含值，AND/OR/逗号连接
+        行范围：1-5、top5、3
+
+    筛选顺序：先过滤条件，再行范围（行号基于过滤后结果，从1开始）。
+    保留原 df 的 attrs（含 pct_columns 等元信息）。
+    """
+    if df.empty:
+        return df
+    if not filter_expr and not row_range:
+        return df
+
+    result = df
+    # 1. 过滤条件
+    if filter_expr and filter_expr.strip():
+        result = _filter_df_by_expr(result, filter_expr.strip())
+
+    # 2. 行范围
+    if row_range and row_range.strip():
+        result = _filter_df_by_range(result, row_range.strip())
+
+    # 保留 attrs
+    try:
+        result.attrs = dict(df.attrs)
+    except Exception:
+        pass
+    return result
+
+
+def _filter_df_by_expr(df: pd.DataFrame, expr: str) -> pd.DataFrame:
+    """根据过滤条件筛选 DataFrame 行（模板替换模式专用）。
+
+    语法与 PPT 配置「过滤条件」一致，但直接操作 DataFrame（可匹配任意列，不限 X/Y 轴）。
+    """
+    if df.empty:
+        return df
+
+    # 逗号也按 AND 处理
+    expr_normalized = re.sub(r"\s*,\s*", " AND ", expr)
+    # 中文 AND/OR 兼容
+    expr_normalized = expr_normalized.replace("且", " AND ").replace("并", " AND ")
+    expr_normalized = expr_normalized.replace("或", " OR ")
+
+    # 按 OR 拆分
+    or_parts = re.split(r"\s+OR\s+", expr_normalized, flags=re.IGNORECASE)
+    if len(or_parts) > 1:
+        result = None
+        for part in or_parts:
+            part = part.strip().strip("()")
+            sub = _filter_df_by_expr(df, part)
+            if result is None:
+                result = sub
+            else:
+                result = pd.concat([result, sub])
+                result = result[~result.index.duplicated(keep="first")]
+        return result if result is not None else df
+
+    # 按 AND 拆分
+    and_parts = re.split(r"\s+AND\s+", expr_normalized, flags=re.IGNORECASE)
+    result = df
+    for part in and_parts:
+        part = part.strip().strip("()")
+        result = _apply_df_single_condition(result, part)
+        if result.empty:
+            break
+    return result
+
+
+def _apply_df_single_condition(df: pd.DataFrame, condition: str) -> pd.DataFrame:
+    """应用单个过滤条件到 DataFrame（模板替换模式专用）。"""
+    condition = condition.strip()
+    if not condition:
+        return df
+
+    # 支持的运算符（按长度降序避免误匹配）
+    operators = [">=", "<=", "!=", "包含", "=", ">", "<"]
+
+    for op in operators:
+        if op in condition:
+            pos = condition.index(op)
+            col = condition[:pos].strip()
+            val = condition[pos + len(op):].strip().strip("'\"")
+
+            # 去引号
+            if (val.startswith("'") and val.endswith("'")) or (val.startswith('"') and val.endswith('"')):
+                val = val[1:-1]
+
+            if col not in df.columns:
+                print(f"    [警告] 过滤条件列不存在: {col}，已跳过该条件")
+                return df
+
+            if op == "=":
+                return df[df[col].astype(str) == str(val)]
+            elif op == "!=":
+                return df[df[col].astype(str) != str(val)]
+            elif op == "包含":
+                return df[df[col].astype(str).str.contains(val, na=False)]
+            else:
+                # 数值比较
+                try:
+                    num_series = pd.to_numeric(df[col], errors="coerce")
+                    val_num = float(val)
+                    if op == ">":
+                        return df[num_series > val_num]
+                    elif op == "<":
+                        return df[num_series < val_num]
+                    elif op == ">=":
+                        return df[num_series >= val_num]
+                    elif op == "<=":
+                        return df[num_series <= val_num]
+                except (ValueError, TypeError):
+                    print(f"    [警告] 数值比较失败: {condition}，已跳过")
+                    return df
+
+    print(f"    [警告] 无法解析的过滤条件: {condition}，已跳过")
+    return df
+
+
+def _filter_df_by_range(df: pd.DataFrame, range_expr: str) -> pd.DataFrame:
+    """根据行范围筛选 DataFrame（模板替换模式专用）。
+
+    支持：1-5、top5、3，行号从1开始。
+    """
+    range_expr = range_expr.strip()
+    if not range_expr or df.empty:
+        return df
+
+    total = len(df)
+
+    # top5
+    m = re.match(r"^top\s*(\d+)$", range_expr, re.IGNORECASE)
+    if m:
+        n = int(m.group(1))
+        return df.head(n)
+
+    # 1-5
+    m = re.match(r"^(\d+)\s*-\s*(\d+)$", range_expr)
+    if m:
+        start = int(m.group(1))
+        end = int(m.group(2))
+        start_idx = max(0, start - 1)
+        end_idx = min(total, end)
+        return df.iloc[start_idx:end_idx]
+
+    # 单行 3
+    m = re.match(r"^(\d+)$", range_expr)
+    if m:
+        row_num = int(m.group(1))
+        if 1 <= row_num <= total:
+            return df.iloc[[row_num - 1]]
+        return df.iloc[0:0]
+
+    print(f"    [警告] 无法解析的行范围: {range_expr}，已跳过")
+    return df
 
 
 def _filter_df_columns(df: pd.DataFrame, cols: Optional[List[str]], min_keep_cols: int = 1) -> pd.DataFrame:
@@ -960,6 +1196,8 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
             sub_expr = sub_exprs[0] if sub_exprs else target_expr
             sub_expr, transpose = _extract_transpose_flag(sub_expr)
             sub_expr, xy_pair = _extract_xy_pair_flag(sub_expr)
+            # v2.55.0+ 提取行筛选标志（|where:条件、|topN、|rows:N-M、|row:N）
+            sub_expr, row_filter_expr, row_range = _extract_row_filter_flag(sub_expr)
             target_block, cols = _parse_block_and_cols(sub_expr)
             df = _lookup_block(pivot_data, target_block)
             if df is None:
@@ -985,12 +1223,17 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
             # 用户 | 后只写数据列即可；若显式写了分类列则去重不重复添加
             template_level_count = _get_template_multi_level_count(chart)
             df = _filter_df_columns(df, cols, min_keep_cols=template_level_count if template_level_count > 0 else 1)
+            # v2.55.0+ 应用行筛选（过滤条件 + 行范围，在列筛选之后）
+            df = _apply_df_row_filter(df, row_filter_expr, row_range)
 
             try:
                 _write_chart_data(chart, df, xy_pair=xy_pair, transpose=transpose)
                 replace_count += 1
                 cols_info = f", 仅列: {cols}" if cols else ""
-                print(f"    [OK] 图表数据替换: {target_block} ({df.shape[0]}行 x {df.shape[1]}列{cols_info})")
+                row_info = ""
+                if row_filter_expr or row_range:
+                    row_info = f", 行筛选: {row_filter_expr or ''}{(',' + row_range) if (row_filter_expr and row_range) else (row_range or '')}"
+                print(f"    [OK] 图表数据替换: {target_block} ({df.shape[0]}行 x {df.shape[1]}列{cols_info}{row_info})")
                 if status_map is not None:
                     status_map[shape.name] = f"成功({df.shape[0]}行x{df.shape[1]}列)"
                 try:
@@ -1007,6 +1250,8 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
             block_dfs = []  # [(df, xy_pair, cols, block_name), ...]
             for sub_expr in sub_exprs:
                 sub_expr_clean, xy_pair = _extract_xy_pair_flag(sub_expr)
+                # v2.55.0+ 多区块也支持行筛选
+                sub_expr_clean, row_filter_expr, row_range = _extract_row_filter_flag(sub_expr_clean)
                 target_block, cols = _parse_block_and_cols(sub_expr_clean)
                 df = _lookup_block(pivot_data, target_block)
                 if df is None:
@@ -1015,6 +1260,7 @@ def _replace_chart_data(slide, pivot_data: Dict[str, pd.DataFrame],
                 if df.empty:
                     continue
                 df = _filter_df_columns(df, cols)
+                df = _apply_df_row_filter(df, row_filter_expr, row_range)
                 block_dfs.append((df, xy_pair, cols, target_block))
 
             if not block_dfs:
@@ -1071,6 +1317,7 @@ def _fix_embedded_workbook_for_combo(chart, categories: list, series_data: dict)
         series_data: {系列名: [数值列表]} 有序字典
     """
     import io
+    import math
     import zipfile
     from pptx.oxml.ns import qn
     from lxml import etree
@@ -1168,6 +1415,11 @@ def _fix_embedded_workbook_for_combo(chart, categories: list, series_data: dict)
                 c = etree.SubElement(row, '{%s}c' % ns_s, r='%s%d' % (col_letter, r))
                 v = etree.SubElement(c, '{%s}v' % ns_s)
                 val = vals[row_idx] if row_idx < len(vals) else 0
+                # v2.55.3+ NaN/inf/None → 0，避免写字符串 "nan"/"inf" 导致 PowerPoint 报错
+                if val is None:
+                    val = 0
+                elif isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                    val = 0
                 v.text = str(val)
 
         # 更新 dimension
@@ -1353,8 +1605,34 @@ def _safe_replace_data(chart, chart_data):
     xlsxwriter 的 write_number() 遇到 NaN/inf 会抛：
         'nan/inf not supported in write_number() without nan_inf_to_errors option'
     本函数在调用前先做 _sanitize_chart_data 兜底清理，避免遗漏路径导致报错。
+    v2.55.3+ 替换后再次校验，若仍含 NaN/inf 则打印详细诊断信息。
     """
+    import math
     _sanitize_chart_data(chart_data)
+    # 替换前最终校验：打印所有系列的值，便于定位问题
+    try:
+        series_list = getattr(chart_data, '_series', None) or []
+        for si, s in enumerate(series_list):
+            vals = []
+            dps = getattr(s, '_data_points', None) or []
+            for dp in dps:
+                v = getattr(dp, '_value', None)
+                if v is None:
+                    vals.append(None)
+                elif isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                    vals.append(f"<NaN/inf:{v}>")
+                else:
+                    vals.append(v)
+            # 检查是否还有问题值
+            bad = [v for v in vals if isinstance(v, str) and v.startswith("<NaN/inf")]
+            if bad:
+                print(f"    [警告] 系列[{s.name}] 仍含 NaN/inf: {bad}，强制替换为0")
+                for dp in dps:
+                    v = getattr(dp, '_value', None)
+                    if v is None or (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
+                        dp._value = 0
+    except Exception:
+        pass
     chart.replace_data(chart_data)
 
 
@@ -2188,8 +2466,10 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
         if not target_expr:
             continue
 
+        # v2.55.0+ 提取行筛选标志（在解析列之前，避免 |where: 等被误判为列名）
+        target_expr_clean, row_filter_expr, row_range = _extract_row_filter_flag(target_expr)
         # 解析 "区块名|列1,列2" 语法
-        target_block, cols = _parse_block_and_cols(target_expr)
+        target_block, cols = _parse_block_and_cols(target_expr_clean)
         df = _lookup_block(pivot_data, target_block)
         if df is None:
             print(f"    [警告] 表格数据区块 '{target_block}' 未在透视结果中找到")
@@ -2212,6 +2492,8 @@ def _replace_table_data(slide, pivot_data: Dict[str, pd.DataFrame],
             continue
         # 按指定列筛选
         df = _filter_df_columns(df, cols)
+        # v2.55.0+ 应用行筛选（过滤条件 + 行范围）
+        df = _apply_df_row_filter(df, row_filter_expr, row_range)
 
         table = shape.table
         headers = list(df.columns)

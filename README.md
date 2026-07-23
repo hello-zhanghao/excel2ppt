@@ -244,6 +244,16 @@ excel2ppt/
 
 ## 版本变更
 
+### v2.55.3 (2026-07-23)
+
+**🐛 模板替换路径 NaN/inf 彻底兜底 + 诊断增强**
+
+用户反馈"简单柱状图仍报 nan/inf 错误"，确认问题在模板替换路径（`template_filler.py`）。
+
+**修复**：
+- `_safe_replace_data` 增加**替换前最终校验**：遍历 `_data_points` 检查是否仍含 NaN/inf，若有则打印 `[警告] 系列[xxx] 仍含 NaN/inf: [...]` 并强制替换为 0
+- `_fix_embedded_workbook_for_combo` 手动写 XML 的 `str(val)` 处增加 NaN/inf/None → 0 清理，避免把 `"nan"`/`"inf"` 字符串写入数值单元格
+
 ### v2.55.2 (2026-07-23)
 
 **🐛 新增 NaN/inf 兜底清理，彻底解决"编辑数据变空"问题**
@@ -276,7 +286,50 @@ nan/inf not supported in write_number() without 'nan_inf_to_errors' workbook() o
 - [ppt_builder.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/ppt_builder.py#L13-L30) 新增 `_clean_num` 辅助函数处理单值 NaN/inf → 0，应用到所有 `add_series`/`add_data_point` 调用点
 - main.py `__VERSION__` 2.55.0 → 2.55.1
 
-### v2.55.0 (2026-07-23)
+### v2.56.0 (2026-07-23)
+
+**✨ 模板替换模式新增行筛选：图表/表格占位符支持过滤条件 + 行范围**
+
+**背景**：v2.55.0 为 PPT 配置模式（`python main.py ppt`）新增了行筛选，但模板替换模式（`python main.py template`）下图表/表格占位符仍只能整表替换或按列筛选，无法按条件圈定部分行。
+
+**新功能**：模板替换模式的 `{{图表:...}}` 和 `{{表格:...}}` 占位符新增行筛选标志（可组合，用 `|` 分隔）：
+
+| 标志 | 含义 | 示例 |
+|---|---|---|
+| `\|where:条件` | 过滤条件（列名=值、列名>值、AND/OR/逗号） | `\|where:地区=华东 AND 用户数>1000` |
+| `\|topN` | 前 N 行 | `\|top5` |
+| `\|rows:N-M` | 第 N 到 M 行（含） | `\|rows:1-5` |
+| `\|row:N` | 仅第 N 行 | `\|row:3` |
+
+**与列筛选组合**：`{{图表:区块名|列1,列2|where:地区=华东|top5}}`（先选列再过滤再取前N行）
+
+**执行顺序**：查找区块 → 列筛选 → 过滤条件 → 行范围（行号基于过滤后结果，从1开始）
+
+**变更文件**：
+- [template_filler.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L356-L577) 新增 5 个内部函数：
+  - `_extract_row_filter_flag`：解析 `\|where:`/`\|topN`/`\|rows:N-M`/`\|row:N` 标志
+  - `_apply_df_row_filter`：对 DataFrame 应用过滤+行范围
+  - `_filter_df_by_expr`：过滤条件解析（AND/OR/逗号）
+  - `_apply_df_single_condition`：单条件执行（=、!=、>、<、>=、<=、包含）
+  - `_filter_df_by_range`：行范围切片（topN/N-M/N）
+- [template_filler.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L1188-L1224) 图表替换（单区块）：提取行筛选标志 + 应用行筛选
+- [template_filler.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L1242-L1251) 图表替换（多区块/散点图）：每区块独立行筛选
+- [template_filler.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L2426-L2452) 表格替换：提取行筛选标志 + 应用行筛选
+- [template_filler.py](file:///f:/【1】AI探索/【3】excel2ppt/app/src/template_filler.py#L29-L62) 占位符语法文档更新
+- main.py `__VERSION__` 2.55.0 → 2.56.0
+
+**配置示例**：
+
+```
+{{图表:按地区汇总|top5}}                              取前5行填充图表
+{{图表:按地区汇总|用户数,速率|where:用户数>1000}}      选列+过滤
+{{表格:按地区汇总|where:地区=华东 OR 地区=华南}}       OR 条件过滤
+{{图表:按地区汇总|where:用户数>500|rows:1-3}}         过滤后取第1到3行
+```
+
+**测试结果**：9 项语法解析测试 + 10 项行筛选测试全过；32 项保护用例无回归。
+
+### v2.55.2 (2026-07-23)
 
 **✨ PPT 配置新增行筛选：过滤条件 + 行范围**
 
